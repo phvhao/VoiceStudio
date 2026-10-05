@@ -1,7 +1,11 @@
 import {
   DEFAULT_OVERRIDES,
   overridesToRequest,
+  restoreVoiceGains,
+  voiceGainKey,
+  voiceGainsToRequest,
   type Overrides,
+  type VoiceGains,
 } from '@shared/utils/longformOverrides';
 import { castVoice } from './cast-map';
 import { parseCastNames } from '@shared/utils/audiobookScript';
@@ -57,6 +61,8 @@ export interface Draft extends BookOptions {
   projectId: string | null;
   overrides: Overrides;
   voiceCast: Record<string, string>;
+  /** Volume per voice in dB, on top of the leveling: cast name → gain, '' = default voice. */
+  voiceGains: VoiceGains;
   script: string;
   lines: Line[];
   title: string;
@@ -90,6 +96,7 @@ export const blankLongformDraft = (): Draft => ({
   ...restoreBookOptions(null),
   overrides: { ...DEFAULT_OVERRIDES },
   voiceCast: {},
+  voiceGains: {},
   script: '',
   lines: [],
   title: '',
@@ -131,6 +138,7 @@ try {
             typeof value === 'string' ? [[key, value]] : [],
           ),
         ),
+        voiceGains: restoreVoiceGains(s.voiceGains),
         script: s.script,
         lines: s.lines.filter(
           (line: Line) => line && typeof line.id === 'string' && typeof line.text === 'string',
@@ -219,8 +227,15 @@ export function renderBody(mode: Mode, draft: Draft) {
       .filter((name) => castVoice(draft.voiceCast, name))
       .map((name) => [name, castVoice(draft.voiceCast, name)]),
   );
+  // Like the cast, only the voices this script uses: a volume left on a
+  // removed name must not move the cache key.
+  const voice_gains = voiceGainsToRequest(draft.voiceGains, [
+    '',
+    ...names.map((name) => voiceGainKey(name, draft.voiceCast)),
+  ]);
   const common = {
     ...overridesToRequest(draft.overrides, draft.language),
+    ...(voice_gains ? { voice_gains } : {}),
     default_voice: draft.voice,
     voice_map,
     format: draft.format,
@@ -383,6 +398,7 @@ export function chapterPreviewBody(draft: Draft, chapter_index: number) {
   const body = renderBody('audiobook', draft);
   return {
     ...overridesToRequest(draft.overrides, draft.language),
+    ...(body.voice_gains ? { voice_gains: body.voice_gains } : {}),
     text: draft.script,
     chapter_index,
     default_voice: body.default_voice,

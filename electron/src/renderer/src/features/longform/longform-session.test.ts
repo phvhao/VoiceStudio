@@ -186,6 +186,36 @@ it('seamless-join gaps reach preview and full render only once touched', () => {
   }
 });
 
+it('evens out the voices of preview and full render alike unless turned off', () => {
+  const base = longformSession.state.drafts.audiobook;
+  for (const body of [renderBody('audiobook', base), chapterPreviewBody(base, 0)])
+    expect(body).toMatchObject({ level_voices: true });
+  const off = { ...base, overrides: { ...base.overrides, levelVoices: false } };
+  for (const body of [renderBody('audiobook', off), chapterPreviewBody(off, 0)])
+    expect(body).not.toHaveProperty('level_voices');
+});
+
+it('sends the volume of each voice the script uses, and nothing untouched', () => {
+  const base = longformSession.state.drafts.audiobook;
+  const untouched = { ...base, script: '[voice:Mara] Hi', voiceGains: {} };
+  for (const body of [renderBody('audiobook', untouched), chapterPreviewBody(untouched, 0)])
+    expect(body).not.toHaveProperty('voice_gains');
+  const draft = {
+    ...base,
+    script: 'Intro [voice:Mara] Hi [voice:default] Back',
+    voiceCast: { Mara: 'actor' },
+    voiceGains: { '': -2, Mara: 3, Removed: 6 },
+  };
+  const full = renderBody('audiobook', draft);
+  expect(full.voice_gains).toEqual({ '': -2, Mara: 3 });
+  expect(chapterPreviewBody(draft, 0).voice_gains).toEqual(full.voice_gains);
+  const story = {
+    ...draft,
+    lines: [{ id: '1', text: '[voice:Mara] Hi', profileId: null }],
+  };
+  expect(renderBody('stories', story).voice_gains).toEqual({ '': -2, Mara: 3 });
+});
+
 it('does not recreate a cleared draft during pagehide persistence', async () => {
   editLongform('stories', { script: 'Must stay deleted' });
   localStorage.setItem('voicestudio.longform.v1', 'old');
@@ -193,4 +223,25 @@ it('does not recreate a cleared draft during pagehide persistence', async () => 
   window.dispatchEvent(new Event('pagehide'));
   await new Promise((resolve) => setTimeout(resolve, 300));
   expect(localStorage.getItem('voicestudio.longform.v1')).toBeNull();
+});
+
+it('restores drafts saved before voice volumes and leveling existed', async () => {
+  localStorage.setItem(
+    'voicestudio.longform.v1',
+    JSON.stringify({
+      audiobook: { script: 'Hi', lines: [], overrides: { numStep: 24 }, voiceCast: {} },
+      stories: { script: '', lines: [], voiceGains: { Mara: 3, '': 'loud', Cole: 99 } },
+    }),
+  );
+  vi.resetModules();
+  try {
+    const restored = await import('./longform-session');
+    const { audiobook, stories } = restored.longformSession.state.drafts;
+    expect(audiobook.voiceGains).toEqual({});
+    expect(audiobook.overrides).toMatchObject({ numStep: 24, levelVoices: true });
+    expect(restored.renderBody('audiobook', audiobook)).toMatchObject({ level_voices: true });
+    expect(stories.voiceGains).toEqual({ Mara: 3, Cole: 12 });
+  } finally {
+    localStorage.removeItem('voicestudio.longform.v1');
+  }
 });

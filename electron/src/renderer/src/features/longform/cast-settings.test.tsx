@@ -1,0 +1,107 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import i18n from '@/i18n';
+import { CastSettings, VoiceGainControl } from './cast-settings';
+
+const profiles = [
+  { id: 'p-hao', name: 'Hao PV' },
+  { id: 'p-mai', name: 'Mai' },
+];
+const renderCast = (props: Partial<Parameters<typeof CastSettings>[0]> = {}) => {
+  const onVoiceGains = vi.fn();
+  render(
+    <CastSettings
+      names={['Mara', 'default']}
+      cast={{ Mara: 'p-mai' }}
+      profiles={profiles}
+      disabled={false}
+      onChange={vi.fn()}
+      voiceGains={{ Mara: 3 }}
+      onVoiceGains={onVoiceGains}
+      defaultVoiceName="Hao PV"
+      {...props}
+    />,
+  );
+  return onVoiceGains;
+};
+const volumeOf = (name: string) =>
+  screen.getByRole('slider', { name: i18n.t('leveling.volume_of', { name }) });
+const resetOf = (name: string) =>
+  screen.getByRole('button', { name: i18n.t('leveling.reset_volume_of', { name }) });
+
+it('sets a volume for the default voice and every cast name', () => {
+  const onVoiceGains = renderCast();
+  const defaultVoice = i18n.t('audiobook.default_voice');
+  expect(screen.getByText(defaultVoice).parentElement).toHaveTextContent('Hao PV');
+  expect(volumeOf(defaultVoice)).toHaveValue('0');
+  expect(volumeOf('Mara')).toHaveValue('3');
+  expect(volumeOf('Mara')).toHaveAttribute('aria-valuetext', '+3 dB');
+  // A voice with a volume says so without opening it.
+  expect(screen.getByText('Mara').closest('summary')).toHaveTextContent('+3 dB');
+  fireEvent.change(volumeOf(defaultVoice), { target: { value: '-4' } });
+  expect(onVoiceGains).toHaveBeenLastCalledWith({ Mara: 3, '': -4 });
+  fireEvent.change(volumeOf('Mara'), { target: { value: '0' } });
+  expect(onVoiceGains).toHaveBeenLastCalledWith({});
+});
+
+it('gives [voice:default] the default voice’s volume unless the cast names it', () => {
+  const onVoiceGains = renderCast({ voiceGains: { '': -2 } });
+  expect(volumeOf('default')).toHaveValue('-2');
+  fireEvent.change(volumeOf('default'), { target: { value: '5' } });
+  expect(onVoiceGains).toHaveBeenLastCalledWith({ '': 5 });
+});
+
+it('resets one voice to 0 dB', () => {
+  const onVoiceGains = renderCast({ voiceGains: { Mara: 3, '': -1 } });
+  fireEvent.click(resetOf('Mara'));
+  expect(onVoiceGains).toHaveBeenLastCalledWith({ '': -1 });
+});
+
+it('has nothing to reset at 0 dB', () => {
+  renderCast({ voiceGains: {} });
+  expect(resetOf('Mara')).toBeDisabled();
+  expect(screen.getByText('Mara').closest('summary')).not.toHaveTextContent('dB');
+});
+
+it('keeps the plain cast picker when no volumes are wired', () => {
+  render(
+    <CastSettings
+      names={['Mara']}
+      cast={{}}
+      profiles={profiles}
+      disabled={false}
+      onChange={vi.fn()}
+    />,
+  );
+  expect(screen.queryByRole('slider')).toBeNull();
+  expect(
+    screen.getByRole('group', { name: i18n.t('audiobook.cast') + ': Mara' }),
+  ).toBeInTheDocument();
+});
+
+it('colors every voice as the editor colors its tags and lane', () => {
+  render(
+    <CastSettings
+      names={['Ben', 'default']}
+      voices={['Mara', 'Ben', 'default']}
+      cast={{}}
+      profiles={profiles}
+      disabled={false}
+      onChange={vi.fn()}
+      voiceGains={{}}
+      onVoiceGains={vi.fn()}
+    />,
+  );
+  const swatch = (text: string) => screen.getByText(text).previousElementSibling;
+  // Colors follow the whole script's order, even where the panel lists only some names.
+  expect(swatch('Ben')).toHaveClass('bg-amber-400');
+  // An uncast `[voice:default]` reads in the default voice, which is neutral.
+  expect(swatch('default')).toHaveClass('bg-muted-foreground/50');
+  expect(swatch(i18n.t('audiobook.default_voice'))).toHaveClass('bg-muted-foreground/50');
+});
+
+it('locks the volume while rendering', () => {
+  render(<VoiceGainControl name="Mara" value={2} disabled onChange={vi.fn()} />);
+  expect(volumeOf('Mara')).toBeDisabled();
+  expect(resetOf('Mara')).toBeDisabled();
+});

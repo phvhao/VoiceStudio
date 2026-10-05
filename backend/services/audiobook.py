@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import json
 import zlib
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from dataclasses import dataclass, field, replace
+from typing import Callable, Optional, Sequence
 
 
 #: Mix constant for the per-occurrence seed nonce (#1208) — a large odd
@@ -71,6 +71,23 @@ def punctuation_pause_pairs(pauses) -> Optional[tuple]:
     if pauses is None:
         return None
     return tuple(sorted((str(k), int(v)) for k, v in dict(pauses).items()))
+
+
+def voice_gain_pairs(gains) -> Optional[tuple]:
+    """``{voice name: dB}`` → the sorted, hashable pairs :class:`ExpressiveOptions`
+    stores: names trimmed like the parser trims them, gains clamped to ±12 dB
+    and rounded to 0.1 dB, 0 dB dropped — so no change at all stays ``None``
+    and two requests that sound the same share one cache key."""
+    if not gains:
+        return None
+    from services.voice_leveling import clamp_gain_db
+
+    pairs = {}
+    for name, db in dict(gains).items():
+        value = round(clamp_gain_db(db), 1)
+        if value:
+            pairs[str(name).strip()] = value
+    return tuple(sorted(pairs.items())) or None
 
 
 @dataclass(frozen=True)
@@ -119,11 +136,17 @@ class ExpressiveOptions:
     #: Listen back to each take with the installed ASR and retake the ones
     #: that say something else (``services.speech_verify``).
     verify_speech: bool = False
+    #: Voice leveling (``services.voice_leveling``): bring every voice of a
+    #: chapter to one speech level, plus the user's own volume per voice —
+    #: sorted ``(name, dB)`` pairs, ``''`` naming the book's default voice.
+    #: Both re-balance finished takes, so they key the chapter, never a take.
+    level_voices: bool = False
+    voice_gains: Optional[tuple] = None
 
     #: Manifest keys that shape the join, not the engine call — never forward
     #: these as synth kwargs.
     JOIN_KEYS = ("line_gap_ms", "paragraph_gap_ms", "trim_edges",
-                 "punctuation_pauses", "split_commas")
+                 "punctuation_pauses", "split_commas", "level_voices", "voice_gains")
     #: Manifest keys that are never engine kwargs (the join, plus render-side
     #: switches such as the speech check).
     RENDER_KEYS = JOIN_KEYS + ("verify_speech",)
@@ -133,6 +156,8 @@ class ExpressiveOptions:
         kw = {k: getattr(self, k) for k in self.JOIN_KEYS}
         if kw["punctuation_pauses"] is not None:
             kw["punctuation_pauses"] = dict(kw["punctuation_pauses"])
+        if kw["voice_gains"] is not None:
+            kw["voice_gains"] = dict(kw["voice_gains"])
         return kw
 
     @property
@@ -175,11 +200,25 @@ class ExpressiveOptions:
             payload["phrase_split"] = PHRASE_SPLIT_REVISION
         if self.verify_speech:
             payload["verify_speech"] = True
+        if self.level_voices:
+            payload["level_voices"] = True
+        if self.voice_gains:
+            payload["voice_gains"] = dict(self.voice_gains)
         return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
+    def take_signature(self) -> str:
+        """:meth:`cache_signature` without voice leveling: what keys a single
+        take (the segment cache). Leveling only re-balances finished takes, so
+        turning it on or changing a voice's volume re-assembles chapters from
+        the takes already cached instead of synthesizing them again."""
+        return replace(self, level_voices=False, voice_gains=None).cache_signature()
+
     def to_manifest(self) -> dict:
-        """JSON-safe dict for the durable resume manifest (emo_vector → list)."""
-        return {
+        """JSON-safe dict for the durable resume manifest (emo_vector → list).
+
+        Voice leveling is written only when on: the remote chapter key hashes
+        this manifest, so every chapter rendered without it keeps its key."""
+        manifest = {
             "num_step": self.num_step,
             "guidance_scale": self.guidance_scale,
             "position_temperature": self.position_temperature,
@@ -198,6 +237,11 @@ class ExpressiveOptions:
             "split_commas": self.split_commas,
             "verify_speech": self.verify_speech,
         }
+        if self.level_voices:
+            manifest["level_voices"] = True
+        if self.voice_gains:
+            manifest["voice_gains"] = dict(self.voice_gains)
+        return manifest
 
     @classmethod
     def from_manifest(cls, data: Optional[dict]) -> "ExpressiveOptions":
@@ -222,6 +266,8 @@ class ExpressiveOptions:
             punctuation_pauses=punctuation_pause_pairs(data.get("punctuation_pauses")),
             split_commas=bool(data.get("split_commas", False)),
             verify_speech=bool(data.get("verify_speech", False)),
+            level_voices=bool(data.get("level_voices", False)),
+            voice_gains=voice_gain_pairs(data.get("voice_gains")),
         )
 
 
@@ -419,6 +465,9 @@ def synthesize_chapter(
     punctuation_pauses: Optional[dict] = None,
     split_commas: bool = False,
     verifier: Optional["object"] = None,
+    level_voices: bool = False,
+    voice_gains: Optional[dict] = None,
+    voice_names: Optional[Sequence[str]] = None,
 ):
     """Render a chapter's spans to one waveform via an injected ``synth``.
 
@@ -445,6 +494,15 @@ def synthesize_chapter(
     ``attempt=n`` for a retake when it accepts that keyword, so a pinned seed
     still yields a different take.
 
+    ``level_voices`` / ``voice_gains`` re-balance the rendered spans before
+    they are joined (:mod:`services.voice_leveling`): each voice — span ``i``
+    speaks ``voice_names[i]``, ``''`` for the book's default voice (default:
+    the span's ``voice_id``) — is measured over all its spans and brought to
+    one speech level, plus its own volume from ``voice_gains`` (dB by name).
+    It runs after the segment cache, which keeps the takes as rendered, so
+    turning it on or changing a volume re-assembles a chapter without
+    synthesizing again. Silence is untouched.
+
     Returns ``(audio_tensor, duration_seconds)``. torch + chunked_tts are
     imported lazily so this module stays import-light for the pure parser path.
     """
@@ -459,7 +517,12 @@ def synthesize_chapter(
 
     from services.chunked_tts import split_paragraphs
 
-    items: list = []  # ("a", tensor) for audio, ("s", n_samples) for silence
+    if voice_names is None:
+        voice_names = [span.voice_id or "" for span in spans]
+    elif len(voice_names) != len(spans):
+        raise ValueError("voice_names must name the voice of every span")
+    # ("a", tensor, voice) for audio, ("s", n_samples, None) for silence
+    items: list = []
     pending_gap_ms = 0  # join silence owed before the next spoken span
     # Validate the complete requested silence before touching synthesis/cache.
     # Incremental shortening would bake context-dependent gaps into reusable
@@ -514,7 +577,7 @@ def synthesize_chapter(
             return trace_call("synthesis", synth, text, span.voice_id, span.speed)
         return verifier.render(text, take) if verifier is not None else take(0)
 
-    for span, paragraphs in zip(spans, paragraphs_by_span):
+    for span, paragraphs, voice in zip(spans, paragraphs_by_span, voice_names):
         if span.text:
             occ_key = (span.voice_id, span.text, getattr(span, "speed", None))
             occ = occ_counts.get(occ_key, 0)
@@ -555,8 +618,8 @@ def synthesize_chapter(
                 if pending_gap_ms > 0:
                     n = int(sample_rate * pending_gap_ms / 1000.0)
                     if n > 0:
-                        items.append(("s", n))
-                items.append(("a", audio))
+                        items.append(("s", n, None))
+                items.append(("a", audio, voice))
                 # What follows this span: nothing in the middle of a line that
                 # inline markup split, the paragraph gap where a blank line sat
                 # on that split (line gap if no paragraph gap is set), else the
@@ -566,21 +629,31 @@ def synthesize_chapter(
             pending_gap_ms = 0
             n = int(sample_rate * span.pause_ms_after / 1000.0)
             if n > 0:
-                items.append(("s", n))
+                items.append(("s", n, None))
 
     if not items:
         return torch.zeros(0, dtype=torch.float32), 0.0
+    if level_voices or voice_gains:
+        from services.voice_leveling import apply_gain, voice_gains_db
+
+        gains = voice_gains_db([(voice, audio) for kind, audio, voice in items if kind == "a"],
+                               sample_rate, level=level_voices, offsets=voice_gains)
+        # Replaced one span at a time: leveling never holds a second copy of
+        # the chapter.
+        for i, (kind, audio, voice) in enumerate(items):
+            if kind == "a":
+                items[i] = (kind, apply_gain(audio, gains[voice]), voice)
     # Engines return (1, samples) per the TTSBackend contract while a bare
     # zeros(n) is 1-D — mixing the two crashed the final concat (#897). So
     # materialize inter-span silence AFTER the loop, matching the rendered
     # audio's channel dims / dtype / device (same pattern as generation.py's
     # _render_with_pauses). A silence-only chapter stays 1-D float32 as before.
-    ref = next((t for kind, t in items if kind == "a"), None)
+    ref = next((t for kind, t, _ in items if kind == "a"), None)
     parts: list = [
         val if kind == "a"
         else (torch.zeros(val, dtype=torch.float32) if ref is None
               else torch.zeros(*ref.shape[:-1], val, dtype=ref.dtype, device=ref.device))
-        for kind, val in items
+        for kind, val, _ in items
     ]
     # Hard-concat spans + silences (crossfading silence would bleed the gap).
     audio = parts[0] if len(parts) == 1 else concatenate_audio_chunks(parts, sample_rate, crossfade_ms=0)

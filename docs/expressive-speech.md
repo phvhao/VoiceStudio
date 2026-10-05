@@ -12,7 +12,8 @@ ignores.
 | You want | Do this | Works on |
 |---|---|---|
 | A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text | Every engine |
-| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide, the editor colors each tag, and right-clicking a tag changes or removes it | Every engine (Reactions: default engine) |
+| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
+| Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
 | Whispering | Style → `whisper` (the voice-design/style field) | Default engine |
@@ -54,6 +55,76 @@ API callers keep the take they had unless they ask: long-form requests
 `punctuation_pauses` / `split_commas` / `verify_speech` fields; `/generate`
 takes `reading=app` or a JSON object with those fields. The setting itself is
 `GET`/`PUT /api/settings/reading`.
+
+## The script editor
+
+The Audiobook script editor numbers its lines and draws a thin lane beside
+them in the color of the voice reading each line, so you can see where a
+`[voice:NAME]` switch takes effect without reading the tags. Every name keeps
+the same color in the editor, the **Cast** panel and the toolbar's voice
+picker; `[voice:]` (back to the default voice) is outlined in gray. The line
+with the cursor is shaded, `# Chapter` lines show as bands, and the status bar
+underneath shows the line and column, the voice in effect at the cursor and the
+profile cast to read it (for example *Voice: Mara, read by Lan*), and the
+script's length.
+
+In Audiobook and Stories, click a tag — or put the cursor on it and press
+**Alt+Enter** — to open a card for it:
+
+- **`[voice:NAME]`** — switch the tag to another name or a voice profile, cast
+  the name to a profile (the same setting as the Cast panel), set the name's
+  volume, **Listen to this part** or **Select this part** (everything that
+  voice reads up to the next switch), or remove the tag.
+- **`[pause …]`** — pick a preset or type a length.
+- **Delivery** (`[slow]`, `[fast]`, `[emphasis]`, `[spell]`) — switch both
+  halves of the pair to another kind, or remove the pair.
+- **`[[word|respelling]]`** — edit the respelling.
+- **Reactions** — swap for another sound.
+- **Unknown tags** — the card explains that the engine reads them aloud as
+  written.
+
+Every change is one ordinary edit, so **Ctrl+Z** undoes it. Right-clicking a
+tag offers the same actions. Typing `[` suggests voices (the script's names
+and your voice profiles), pauses, delivery and reactions; ↑↓ choose, **Enter** or **Tab** inserts and
+**Esc** closes. Tags inside a `# Chapter` line are part of the title, so they
+are not clickable there.
+
+## Voice volume
+
+Each voice profile is cloned from its own recording, and the default engine
+matches the loudness of that recording — so a book with a quiet narrator and a
+loud character comes out uneven. **Even out voice volume** (Production
+Overrides, on by default in Audiobook and Stories) measures how loud each voice
+speaks in each chapter and brings every voice to the same level (−20 dBFS of
+speech; silence is ignored). Each voice gets one gain per chapter, so its own
+rises and falls stay intact; the automatic change is capped at ±12 dB, and a
+boost never pushes a peak past 0.97 of full scale.
+
+To make one voice louder or quieter on top of that, use the volume slider for
+that name in the **Cast** panel (the **Default voice** row covers untagged text
+and `[voice:]`) or in a voice tag's card: −12 to +12 dB in 1 dB steps. It
+applies to every tag with that name. Turning leveling on or changing a volume
+reassembles the affected chapters from takes already rendered, without new
+synthesis; a remote GPU worker has no take cache, so it renders those chapters
+once more.
+
+API callers opt in per request: `/audiobook`, `/longform/render` and
+`/audiobook/preview` take `level_voices: true` and `voice_gains`, a map of
+voice name to dB (`""` is the default voice; at most 64 names, each value
+clamped to ±12 dB). Requests without them render exactly as before.
+
+## Listening back in the reader
+
+When a book finishes, **Audiobook ready** shows a compact player: play/pause, a
+seek bar with a mark at each chapter, previous/next chapter, the elapsed and
+total time, a speed menu (0.75× to 2×) and the sentence being read, with the
+current word highlighted. **Open reader** opens the full text over the same
+audio. The current sentence and word are highlighted as the book plays and the
+text scrolls to follow; scroll yourself and following pauses until you press
+**Back to the current line** or seek. Click any word to play from there, or
+jump with the chapter menu. **Space** plays or pauses and **←/→** skip 5
+seconds. Word timing is estimated from the text, so the highlight can run
+slightly ahead of or behind the voice.
 
 ## Recovering an interrupted audiobook
 

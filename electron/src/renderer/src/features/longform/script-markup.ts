@@ -7,8 +7,10 @@ import { TAGS } from '@shared/utils/constants';
  * markup toolbar applies. Nothing here decides how a script renders.
  */
 
-// Mirrors omnivoice/utils/text.py: PAUSE_MAX_MS clamps every [pause …].
+// Mirrors omnivoice/utils/text.py: PAUSE_MAX_MS clamps every [pause …], and
+// a bare [pause] lasts PAUSE_DEFAULT_MS.
 export const PAUSE_MAX_MS = 10_000;
+export const PAUSE_DEFAULT_MS = 350;
 
 export const PAUSE_PRESETS = [
   { id: 'breath', ms: 250 },
@@ -49,7 +51,7 @@ const PRONUNCIATION_RE = /^\[\[[^\]]{0,256}\]\]$/;
 // H1 chapter heading, same shape as longform_parser._HEADING_RE.
 const HEADING_RE = /^[ \t]*#[ \t]+\S.*$/gm;
 const VOICE_RE = /^\[voice:([^\][]*)\]$/;
-const PAUSE_RE = /^\[\s*pause(?:\s+\d+(?:\.\d+)?(?:\s*(?:ms|s))?)?\s*\]$/i;
+const PAUSE_RE = /^\[\s*pause(?:\s+(\d+(?:\.\d+)?)(?:\s*(ms|s))?)?\s*\]$/i;
 const DELIVERY_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
 const EXPRESSIONS = new Set(TAGS.map((tag) => tag.toLowerCase()));
 
@@ -115,6 +117,14 @@ export function pauseToken(ms: number): string {
 
 export function formatPauseSeconds(ms: number): string {
   return `${Number((clampPauseMs(ms) / 1000).toFixed(2))} s`;
+}
+
+/** How long a `[pause …]` tag pauses, to the millisecond; `null` for any other text. */
+export function pauseMs(token: string): number | null {
+  const match = PAUSE_RE.exec(token);
+  if (!match) return null;
+  if (match[1] === undefined) return PAUSE_DEFAULT_MS;
+  return clampPauseMs(Number(match[1]) * (match[2]?.toLowerCase() === 's' ? 1000 : 1));
 }
 
 export interface ExpressionGroup {
@@ -260,6 +270,12 @@ export function voiceToken(name: string): string {
   return `[voice:${name}]`;
 }
 
+/** The name in a `[voice:NAME]` tag; `null` for the resets and for any other text. */
+export function voiceName(token: string): string | null {
+  const name = VOICE_RE.exec(token)?.[1].trim();
+  return name && name !== 'default' ? name : null;
+}
+
 /**
  * Voice the selection with `name` and return to the default after it; with a
  * bare caret, switch the voice from the caret on.
@@ -375,6 +391,108 @@ export function previewPassage(text: string, start: number, end: number): string
     : passage;
 }
 
+/**
+ * The text as a textarea holds it: a textarea only knows `\n` line breaks, so
+ * offsets read from its selection count against this.
+ */
+export function normalizeNewlines(text: string): string {
+  return text.includes('\r') ? text.replace(/\r\n?/g, '\n') : text;
+}
+
+/** 1-based line and column of `offset`, as an editor's status bar shows them. */
+export function caretPosition(text: string, offset: number): { line: number; column: number } {
+  const [at] = clampRange(text, offset, offset);
+  let line = 1;
+  let lineStart = 0;
+  for (let index = text.indexOf('\n'); index !== -1 && index < at;) {
+    line++;
+    lineStart = index + 1;
+    index = text.indexOf('\n', lineStart);
+  }
+  return { line, column: at - lineStart + 1 };
+}
+
+export interface VoiceSwitch {
+  /** Where the switch is written: the tag, or the chapter heading's line. */
+  offset: number;
+  end: number;
+  /** Who reads from here on; `null` is the book's default voice. */
+  voice: string | null;
+  kind: 'voice' | 'reset' | 'chapter';
+}
+
+/**
+ * Every place the narrator changes, in order, read the way the render reads
+ * them (longform_parser): `[voice:NAME]` holds until the next switch,
+ * `[voice:]` and `[voice:default]` return to the default voice, and with
+ * `headings` every `# Title` line opens a chapter on the default voice. A tag
+ * inside a heading line is part of the chapter's title, so it switches nothing.
+ */
+export function voiceSwitches(text: string, { headings = false } = {}): VoiceSwitch[] {
+  const switches: VoiceSwitch[] = [];
+  const scan = (from: number, to: number) => {
+    for (const match of text.slice(from, to).matchAll(VOICE_TOKEN_RE)) {
+      const offset = from + match.index;
+      const name = match[1].trim();
+      const reset = name === '' || name === 'default';
+      switches.push({
+        offset,
+        end: offset + match[0].length,
+        voice: reset ? null : name,
+        kind: reset ? 'reset' : 'voice',
+      });
+    }
+  };
+  if (!headings) {
+    scan(0, text.length);
+    return switches;
+  }
+  let cursor = 0;
+  for (const match of text.matchAll(HEADING_RE)) {
+    scan(cursor, match.index);
+    cursor = match.index + match[0].length;
+    switches.push({ offset: match.index, end: cursor, voice: null, kind: 'chapter' });
+  }
+  scan(cursor, text.length);
+  return switches;
+}
+
+/**
+ * The voice in effect at `offset` among a text's `switches`. A heading's whole
+ * line belongs to its chapter; a tag takes over once `offset` is inside it, so
+ * the caret on `[voice:Mara]` already reads as Mara.
+ */
+export function voiceInEffect(switches: readonly VoiceSwitch[], offset: number): string | null {
+  let voice: string | null = null;
+  for (const change of switches) {
+    if (change.kind === 'chapter' ? change.offset > offset : change.offset >= offset) break;
+    voice = change.voice;
+  }
+  return voice;
+}
+
+/** The voice in effect at `offset` (`null` is the default voice). */
+export function voiceAt(text: string, offset: number, options: { headings?: boolean } = {}) {
+  return voiceInEffect(voiceSwitches(text, options), offset);
+}
+
+/**
+ * What a voice tag reads: from the tag's end to the next switch (or the end
+ * of its chapter, or of the text), without the whitespace around it.
+ */
+export function voiceSection(
+  text: string,
+  token: Pick<MarkupToken, 'end'>,
+  options: { headings?: boolean } = {},
+): [number, number] {
+  const next = voiceSwitches(text, options).find((change) => change.offset >= token.end);
+  let from = token.end;
+  let to = next ? next.offset : text.length;
+  while (from < to && /\s/.test(text[from])) from++;
+  while (to > from && /\s/.test(text[to - 1])) to--;
+  return [from, to];
+}
+
 export interface MarkupToken {
   start: number;
   end: number;
@@ -382,14 +500,28 @@ export interface MarkupToken {
   kind: Exclude<MarkupKind, 'text' | 'heading'>;
 }
 
-/** The markup token under (or touching) position `pos`, for editing it. */
-export function tokenAt(text: string, pos: number): MarkupToken | null {
+const HEADING_LINE_RE = new RegExp(HEADING_RE.source);
+
+/** Whether `offset` is on a `# Chapter` heading line. */
+function onHeadingLine(text: string, offset: number): boolean {
+  const lineStart = text.lastIndexOf('\n', offset - 1) + 1;
+  const lineEnd = text.indexOf('\n', lineStart);
+  return HEADING_LINE_RE.test(text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd));
+}
+
+/**
+ * The markup token under (or touching) position `pos`, for editing it. With
+ * `headings`, a tag on a `# Chapter` line is part of the title, as the
+ * highlighter and the renderer read it, so there is no token there.
+ */
+export function tokenAt(text: string, pos: number, { headings = false } = {}): MarkupToken | null {
   for (const match of text.matchAll(TOKEN_RE)) {
     const start = match.index;
     const end = start + match[0].length;
     if (start > pos) break;
-    if (pos <= end)
-      return { start, end, text: match[0], kind: classifyToken(match[0]) as MarkupToken['kind'] };
+    if (pos > end) continue;
+    if (headings && onHeadingLine(text, start)) return null;
+    return { start, end, text: match[0], kind: classifyToken(match[0]) as MarkupToken['kind'] };
   }
   return null;
 }
@@ -406,31 +538,50 @@ export function replaceRange(
   return edit(text, a, b, insert, select ? a : a + insert.length, a + insert.length);
 }
 
+/** A delivery tag's kind, `[/Slow]` → `slow`; `null` for any other text. */
+export function deliveryKind(token: string): DeliveryTag | null {
+  if (!DELIVERY_RE.test(token)) return null;
+  return token.replace(/[[\]/]/g, '').toLowerCase() as DeliveryTag;
+}
+
+/**
+ * A delivery tag and its partner, opening half first: the next closing tag of
+ * the same kind after an opening one, the last opening tag before a closing
+ * one. `null` for a tag without its partner.
+ */
+function deliveryPair(
+  text: string,
+  token: MarkupToken,
+): [Pick<MarkupToken, 'start' | 'end'>, Pick<MarkupToken, 'start' | 'end'>] | null {
+  const name = deliveryKind(token.text);
+  if (!name) return null;
+  const closing = token.text.startsWith('[/');
+  // `name` is one of the four delivery words, so it needs no escaping.
+  const partner = new RegExp(String.raw`\[` + (closing ? '' : '/') + name + String.raw`\]`, 'gi');
+  let match: RegExpExecArray | null = null;
+  if (closing) {
+    for (const m of text.slice(0, token.start).matchAll(partner)) match = m as RegExpExecArray;
+  } else {
+    partner.lastIndex = token.end;
+    match = partner.exec(text);
+  }
+  if (!match) return null;
+  const other = { start: match.index, end: match.index + match[0].length };
+  return closing ? [other, token] : [token, other];
+}
+
 /**
  * Remove a token. A delivery tag takes its partner with it and keeps the
  * words between them; a respelling keeps the word it respelled; any other tag
  * goes with one neighbouring space, so no double space is left behind.
  */
 export function removeToken(text: string, token: MarkupToken): MarkupEdit {
-  if (token.kind === 'delivery') {
-    const name = token.text.replace(/[[\]/]/g, '').toLowerCase();
-    const closing = token.text.startsWith('[/');
-    // `name` is one of the four delivery words, so it needs no escaping.
-    const partner = new RegExp(String.raw`\[` + (closing ? '' : '/') + name + String.raw`\]`, 'gi');
-    let match: RegExpExecArray | null = null;
-    if (closing) {
-      for (const m of text.slice(0, token.start).matchAll(partner)) match = m as RegExpExecArray;
-    } else {
-      partner.lastIndex = token.end;
-      match = partner.exec(text);
-    }
-    if (match) {
-      const [open, close] = closing
-        ? [{ start: match.index, end: match.index + match[0].length }, token]
-        : [token, { start: match.index, end: match.index + match[0].length }];
-      const inner = text.slice(open.end, close.start);
-      return replaceRange(text, open.start, close.end, inner, { select: true });
-    }
+  const pair = token.kind === 'delivery' ? deliveryPair(text, token) : null;
+  if (pair) {
+    const [open, close] = pair;
+    return replaceRange(text, open.start, close.end, text.slice(open.end, close.start), {
+      select: true,
+    });
   }
   if (token.kind === 'pronunciation') {
     const inner = token.text.slice(2, -2);
@@ -441,8 +592,127 @@ export function removeToken(text: string, token: MarkupToken): MarkupEdit {
   return replaceRange(text, token.start, token.end + (after ? 1 : 0), '');
 }
 
+/**
+ * Read a delivery pair another way, `[slow]…[/slow]` → `[fast]…[/fast]`: both
+ * halves change in one edit (one undo step) and the words between them stay.
+ * A tag without its partner changes alone. The caret ends after the tag that
+ * was edited.
+ */
+export function changeDeliveryKind(
+  text: string,
+  token: MarkupToken,
+  kind: DeliveryTag,
+): MarkupEdit {
+  const closing = token.text.startsWith('[/');
+  const pair = deliveryPair(text, token);
+  if (!pair)
+    return replaceRange(text, token.start, token.end, closing ? `[/${kind}]` : `[${kind}]`);
+  const [open, close] = pair;
+  const insert = `[${kind}]${text.slice(open.end, close.start)}[/${kind}]`;
+  return edit(
+    text,
+    open.start,
+    close.end,
+    insert,
+    open.start + (closing ? insert.length : kind.length + 2),
+  );
+}
+
 /** Select the "how it is read" half of `[[word|respelling]]`. */
 export function respellingRange(token: MarkupToken): [number, number] {
   const bar = token.text.indexOf('|');
   return bar < 0 ? [token.start + 2, token.end - 2] : [token.start + bar + 1, token.end - 2];
+}
+
+/**
+ * The halves of `[[word|respelling]]`: the word the author wrote (`null` in a
+ * bare `[[respelling]]`) and what is spoken in its place.
+ */
+export function respellingParts(token: Pick<MarkupToken, 'text'>): {
+  word: string | null;
+  respelling: string;
+} {
+  const inner = token.text.slice(2, -2);
+  const bar = inner.indexOf('|');
+  return bar < 0
+    ? { word: null, respelling: inner }
+    : { word: inner.slice(0, bar), respelling: inner.slice(bar + 1) };
+}
+
+// The inside of an override is bounded like pronunciation._INLINE_RE.
+const RESPELLING_MAX = 256;
+
+/**
+ * A respelling as it can sit inside `[[…|…]]`: brackets, bars and line breaks
+ * would end or split the override, so they become spaces.
+ */
+export function cleanRespelling(value: string): string {
+  return value
+    .replace(/[[\]|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Speak `respelling` for this override from now on; the caret lands after it. */
+export function setRespelling(text: string, token: MarkupToken, respelling: string): MarkupEdit {
+  const { word } = respellingParts(token);
+  const head = word === null ? '' : `${word}|`;
+  const said = cleanRespelling(respelling)
+    .slice(0, Math.max(0, RESPELLING_MAX - head.length))
+    .trim();
+  return replaceRange(text, token.start, token.end, `[[${head}${said}]]`);
+}
+
+// How much of a tag being typed the suggestions look at, each side of the caret.
+const TYPED_TAG_MAX = 40;
+
+/** A tag being typed: its `[`, the text typed after it, and where it ends. */
+export interface TypedTag {
+  start: number;
+  /** Past the rest of a tag the caret sits in (through its `]`), else the caret. */
+  end: number;
+  /** What was typed between the `[` and the caret. */
+  query: string;
+}
+
+/**
+ * The tag being typed at `caret`: a `[` on the caret's line with no `[`, `]`
+ * or line break between it and the caret, at most TYPED_TAG_MAX characters
+ * back. `[[` starts a respelling, not a tag, and with `headings` a `# Chapter`
+ * line holds a title, not tags (as `tokenAt` reads it). With the caret inside
+ * a tag (`[pa|use 1s]`), `end` reaches past its `]`, so completing it replaces
+ * the whole tag instead of leaving its tail behind.
+ */
+export function typedTagAt(
+  text: string,
+  caret: number,
+  { headings = false } = {},
+): TypedTag | null {
+  const [at] = clampRange(text, caret, caret);
+  const head = text.slice(Math.max(0, at - TYPED_TAG_MAX - 1), at);
+  const bracket = head.lastIndexOf('[');
+  if (bracket < 0) return null;
+  const query = head.slice(bracket + 1);
+  const start = at - query.length - 1;
+  if (/[\]\n]/.test(query) || text[start - 1] === '[' || text[start + 1] === '[') return null;
+  if (headings && onHeadingLine(text, start)) return null;
+  const tail = text.slice(at, at + TYPED_TAG_MAX);
+  const close = tail.search(/[[\]\n]/);
+  return { start, end: close >= 0 && tail[close] === ']' ? at + close + 1 : at, query };
+}
+
+/**
+ * Complete the tag being typed: `open` replaces it from its `[`, and with a
+ * closing half the caret lands between the two (`[slow]|[/slow]`). Like
+ * `insertToken`, a single tag keeps a space between itself and the word after.
+ */
+export function completeTag(
+  text: string,
+  tag: Pick<TypedTag, 'start' | 'end'>,
+  open: string,
+  close = '',
+): MarkupEdit {
+  const after = text.slice(tag.end);
+  const space = !close && after && !/^\s/.test(after) ? ' ' : '';
+  return edit(text, tag.start, tag.end, open + close + space, tag.start + open.length);
 }

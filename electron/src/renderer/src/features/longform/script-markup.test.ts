@@ -5,19 +5,33 @@ import { storyToSpans } from '@shared/utils/storyToSpans';
 import {
   PAUSE_PRESETS,
   applyVoice,
+  caretPosition,
   castNameForProfile,
+  changeDeliveryKind,
   classifyToken,
+  cleanRespelling,
+  completeTag,
+  deliveryKind,
   expressionGroups,
   insertChapter,
   insertToken,
+  normalizeNewlines,
+  pauseMs,
   pauseToken,
   previewPassage,
   pronounceSelection,
   removeToken,
   replaceRange,
+  respellingParts,
   respellingRange,
+  setRespelling,
   tokenAt,
   tokenizeMarkup,
+  typedTagAt,
+  voiceAt,
+  voiceName,
+  voiceSection,
+  voiceSwitches,
   wrapSelection,
   type MarkupEdit,
 } from './script-markup';
@@ -102,6 +116,114 @@ describe('pauses', () => {
     expect(pauseToken(1250)).toBe('[pause 1250ms]');
     expect(pauseToken(60_000)).toBe('[pause 10s]');
     expect(pauseToken(-1)).toBe('[pause 0ms]');
+  });
+
+  it('reads a tag back as long as the render pipeline pauses', () => {
+    for (const token of ['[pause]', '[pause 300]', '[PAUSE 2 s]', '[pause 1.5s]', '[pause 60s]']) {
+      expect(pauseMs(token), token).toBe(spans(`Before ${token} after`)[0].pause_ms_after);
+    }
+    expect(pauseMs('[sigh]')).toBeNull();
+  });
+});
+
+describe('voice switches', () => {
+  const book = [
+    'Narrated intro.',
+    '[voice:Mara] Hello. [voice: Ben ] Hi.',
+    '[voice:default] Back.',
+    '# Two [voice:Title]',
+    'Narrated [voice:] again.',
+  ].join('\n');
+
+  it('lists every change of reader in order, a heading included', () => {
+    const switches = voiceSwitches(book, { headings: true });
+    expect(switches.map((change) => [change.kind, change.voice])).toEqual([
+      ['voice', 'Mara'],
+      ['voice', 'Ben'],
+      ['reset', null],
+      ['chapter', null],
+      ['reset', null],
+    ]);
+    expect(book.slice(switches[0].offset, switches[0].end)).toBe('[voice:Mara]');
+    // A tag in a heading is part of the chapter's title.
+    expect(book.slice(switches[3].offset, switches[3].end)).toBe('# Two [voice:Title]');
+  });
+
+  it('reads # lines as narration where there are no chapters', () => {
+    expect(voiceSwitches('# One [voice:Mara] x').map((change) => change.voice)).toEqual(['Mara']);
+  });
+
+  it('agrees with the render pipeline on who reads each phrase', () => {
+    const text = 'Narrator first. [voice:Mara] Mara speaks. [voice:Ben]Ben now. [voice:] Narrator.';
+    const phrases = spans(text);
+    expect(phrases).toHaveLength(4);
+    for (const span of phrases)
+      expect(voiceAt(text, text.indexOf(span.text)), span.text).toBe(span.voice_id);
+  });
+
+  it('starts every chapter on the default voice, from its heading line on', () => {
+    const text = '[voice:Mara] One.\n# Two\nNarrated.';
+    expect(voiceAt(text, text.indexOf('One'), { headings: true })).toBe('Mara');
+    expect(voiceAt(text, text.indexOf('# Two'), { headings: true })).toBeNull();
+    expect(voiceAt(text, text.indexOf('Narrated'), { headings: true })).toBeNull();
+    // Stories has no chapters inside a line: the voice carries on.
+    expect(voiceAt(text, text.indexOf('Narrated'))).toBe('Mara');
+  });
+
+  it('gives the caret on a tag that tag’s voice, and the one before it ahead of it', () => {
+    const text = 'a [voice:Mara] b [voice:default] c';
+    expect(voiceAt(text, text.indexOf('[voice:Mara]'))).toBeNull();
+    expect(voiceAt(text, text.indexOf('[voice:Mara]') + 3)).toBe('Mara');
+    expect(voiceAt(text, text.indexOf(' c'))).toBeNull();
+  });
+
+  it('names the voice in a tag, never the resets', () => {
+    expect(voiceName('[voice: Mara ]')).toBe('Mara');
+    expect(voiceName('[voice:]')).toBeNull();
+    expect(voiceName('[voice:default]')).toBeNull();
+    expect(voiceName('Mara')).toBeNull();
+  });
+});
+
+describe('voiceSection', () => {
+  it('runs from the tag to the next switch, without the space around it', () => {
+    const text = 'Intro [voice:Mara]  Hello there.\n\n [voice:Ben] Bye.';
+    const [from, to] = voiceSection(text, tokenAt(text, text.indexOf('[voice:Mara]') + 1)!);
+    expect(text.slice(from, to)).toBe('Hello there.');
+  });
+
+  it('ends with the chapter, or with the text', () => {
+    const text = '[voice:Mara] One.\n# Two\nTwo.';
+    const token = tokenAt(text, 1)!;
+    const [from, to] = voiceSection(text, token, { headings: true });
+    expect(text.slice(from, to)).toBe('One.');
+    const [start, end] = voiceSection(text, token);
+    expect(text.slice(start, end)).toBe('One.\n# Two\nTwo.');
+  });
+
+  it('is empty when the tag reads nothing', () => {
+    const text = 'x [voice:Mara] ';
+    const [from, to] = voiceSection(text, tokenAt(text, 3)!);
+    expect(from).toBe(to);
+  });
+});
+
+describe('caretPosition', () => {
+  it('counts lines and columns from 1, like an editor', () => {
+    const text = 'ab\ncd\n\nef';
+    expect(caretPosition(text, 0)).toEqual({ line: 1, column: 1 });
+    expect(caretPosition(text, 2)).toEqual({ line: 1, column: 3 });
+    expect(caretPosition(text, 3)).toEqual({ line: 2, column: 1 });
+    expect(caretPosition(text, 6)).toEqual({ line: 3, column: 1 });
+    expect(caretPosition(text, text.length)).toEqual({ line: 4, column: 3 });
+    expect(caretPosition(text, 99)).toEqual({ line: 4, column: 3 });
+    expect(caretPosition('', 0)).toEqual({ line: 1, column: 1 });
+  });
+
+  it('counts the way the textarea does once line endings are normalized', () => {
+    expect(normalizeNewlines('a\r\nb\rc\n')).toBe('a\nb\nc\n');
+    const plain = 'no carriage returns';
+    expect(normalizeNewlines(plain)).toBe(plain);
   });
 });
 
@@ -266,6 +388,13 @@ describe('editing existing markup', () => {
     expect(tokenAt(text, 1)).toBeNull();
   });
 
+  it('reads a tag on a chapter heading as part of the title where there are chapters', () => {
+    const book = '# One [voice:Mara]\n[pause 1s] Text';
+    expect(tokenAt(book, 8, { headings: true })).toBeNull();
+    expect(tokenAt(book, 8)?.text).toBe('[voice:Mara]');
+    expect(tokenAt(book, book.indexOf('[pause') + 1, { headings: true })?.kind).toBe('pause');
+  });
+
   it('removes a delivery pair from either end and keeps its words selected', () => {
     for (const tag of ['[slow]', '[/slow]']) {
       const edit = removeToken(text, tokenAt(text, text.indexOf(tag) + 1)!);
@@ -293,5 +422,111 @@ describe('editing existing markup', () => {
       text.indexOf('jiff'),
       text.indexOf('jiff') + 4,
     ]);
+  });
+
+  it('switches a delivery pair from either end in one edit and keeps the words', () => {
+    const open = tokenAt(text, text.indexOf('[slow]') + 1)!;
+    const close = tokenAt(text, text.indexOf('[/slow]') + 1)!;
+    const fromOpen = changeDeliveryKind(text, open, 'emphasis');
+    expect(fromOpen.text).toBe(
+      'Say [pause 1s] then [emphasis]softly now[/emphasis] and [[gif|jiff]] [huh] ok',
+    );
+    expect(fromOpen.text.slice(0, fromOpen.selectionStart)).toMatch(/\[emphasis\]$/);
+    const fromClose = changeDeliveryKind(text, close, 'fast');
+    expect(fromClose.text).toContain('[fast]softly now[/fast] and');
+    expect(fromClose.text.slice(0, fromClose.selectionStart)).toMatch(/\[\/fast\]$/);
+    // One replacement covers both halves, so one undo restores both.
+    expect(text.slice(fromClose.from, fromClose.to)).toBe('[slow]softly now[/slow]');
+  });
+
+  it('switches an unpaired delivery tag alone, and reads mixed-case kinds', () => {
+    const lone = 'a [SLOW]b';
+    expect(changeDeliveryKind(lone, tokenAt(lone, 3)!, 'spell').text).toBe('a [spell]b');
+    expect(deliveryKind('[/Emphasis]')).toBe('emphasis');
+    expect(deliveryKind('[pause 1s]')).toBeNull();
+  });
+
+  it('agrees with the render pipeline after switching a pair', () => {
+    const line = 'Then [slow]very softly[/slow] done.';
+    const edit = changeDeliveryKind(line, tokenAt(line, 6)!, 'fast');
+    expect(spans(edit.text).map((span) => span.text)).toEqual(spans(line).map((s) => s.text));
+    expect(spans(edit.text).map((span) => span.speed)).not.toEqual(
+      spans(line).map((span) => span.speed),
+    );
+  });
+
+  it('respells an override in place and keeps the word it respells', () => {
+    const token = tokenAt(text, text.indexOf('[[') + 2)!;
+    expect(respellingParts(token)).toEqual({ word: 'gif', respelling: 'jiff' });
+    const edit = setRespelling(text, token, '  ghif ');
+    expect(edit.text).toContain('and [[gif|ghif]] [huh]');
+    expect(edit.selectionStart).toBe(text.indexOf('[[') + '[[gif|ghif]]'.length);
+    const bare = 'Say [[Nuh-VAD-uh]] now';
+    const bareToken = tokenAt(bare, 6)!;
+    expect(respellingParts(bareToken)).toEqual({ word: null, respelling: 'Nuh-VAD-uh' });
+    expect(setRespelling(bare, bareToken, 'nuh VAH da').text).toBe('Say [[nuh VAH da]] now');
+  });
+
+  it('keeps a respelling from closing or splitting its override', () => {
+    expect(cleanRespelling('a]b [c|d]\ne')).toBe('a b c d e');
+    const token = tokenAt(text, text.indexOf('[[') + 2)!;
+    const edit = setRespelling(text, token, 'x'.repeat(400));
+    const written = tokenAt(edit.text, text.indexOf('[[') + 2)!;
+    expect(written.kind).toBe('pronunciation');
+    expect(written.text.length).toBe(256 + 4);
+  });
+});
+
+describe('typing a tag', () => {
+  it('finds the tag being typed back to its bracket on the same line', () => {
+    expect(typedTagAt('Hello [pa', 9)).toEqual({ start: 6, end: 9, query: 'pa' });
+    expect(typedTagAt('[', 1)).toEqual({ start: 0, end: 1, query: '' });
+    // The rest of a tag the caret sits in is part of it.
+    expect(typedTagAt('a [pa|use 1s] b'.replace('|', ''), 5)).toEqual({
+      start: 2,
+      end: 12,
+      query: 'pa',
+    });
+  });
+
+  it('stays out of closed tags, other lines, respellings and long runs', () => {
+    expect(typedTagAt('[pause 1s] x', 12)).toBeNull();
+    expect(typedTagAt('[pa\nuse', 6)).toBeNull();
+    expect(typedTagAt('[[gif|ji', 8)).toBeNull();
+    expect(typedTagAt('[[', 1)).toBeNull();
+    expect(typedTagAt('[' + 'a'.repeat(41), 42)).toBeNull();
+    expect(typedTagAt('[' + 'a'.repeat(40), 41)?.query).toHaveLength(40);
+    expect(typedTagAt('no bracket', 4)).toBeNull();
+  });
+
+  it('reads a bracket on a chapter heading as part of the title where there are chapters', () => {
+    const book = '# One [voi\n[pa';
+    expect(typedTagAt(book, 10, { headings: true })).toBeNull();
+    expect(typedTagAt(book, 10)?.query).toBe('voi');
+    expect(typedTagAt(book, book.length, { headings: true })?.query).toBe('pa');
+  });
+
+  it('does not swallow text after the caret that is not a tag’s tail', () => {
+    expect(typedTagAt('[pa words [pause 1s]', 3)?.end).toBe(3);
+    expect(typedTagAt('[pa words\n]', 3)?.end).toBe(3);
+  });
+
+  it('completes the tag being typed, spacing it off the next word', () => {
+    const text = 'Wait [pa then';
+    const edit = completeTag(text, typedTagAt(text, 8)!, '[pause 1s]');
+    expect(edit.text).toBe('Wait [pause 1s] then');
+    expect(edit.selectionStart).toBe('Wait [pause 1s]'.length);
+    const word = 'Wait [|then'.replace('|', '');
+    expect(completeTag(word, typedTagAt(word, 6)!, '[sigh]').text).toBe('Wait [sigh] then');
+    const inside = 'a [pa|use 1s] b'.replace('|', '');
+    expect(completeTag(inside, typedTagAt(inside, 5)!, '[pause 2s]').text).toBe('a [pause 2s] b');
+  });
+
+  it('puts the caret between the halves of a completed pair', () => {
+    const text = 'Say [sl';
+    const edit = completeTag(text, typedTagAt(text, 7)!, '[slow]', '[/slow]');
+    expect(edit.text).toBe('Say [slow][/slow]');
+    expect(edit.selectionStart).toBe('Say [slow]'.length);
+    expect(edit.selectionEnd).toBe(edit.selectionStart);
   });
 });

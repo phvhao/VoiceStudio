@@ -17,6 +17,8 @@ export interface Overrides {
   trimEdges: boolean | null;
   /** null follows Settings → Reading. */
   reading: Reading | null;
+  /** Bring every voice of a chapter to one loudness; only `false` turns it off. */
+  levelVoices: boolean;
 }
 export interface Reading {
   phraseRendering: boolean;
@@ -42,6 +44,22 @@ export function readingToRequest(reading: Reading | null): {
 };
 export function readingFromSettings(settings: ReadingSettingsBody): Reading;
 export const DEFAULT_OVERRIDES: Overrides;
+/** dB of volume per voice: `[voice:NAME]` name → gain, `''` for the default voice. */
+export type VoiceGains = Record<string, number>;
+export const MAX_VOICE_GAIN_DB: number;
+export function voiceGainKey(name: string, cast?: Record<string, string> | null): string;
+export function clampVoiceGain(db: unknown): number;
+export function voiceGain(gains: VoiceGains | null | undefined, key: string): number;
+export function setVoiceGain(
+  gains: VoiceGains | null | undefined,
+  key: string,
+  db: number,
+): VoiceGains;
+export function restoreVoiceGains(value: unknown): VoiceGains;
+export function voiceGainsToRequest(
+  gains: VoiceGains | null | undefined,
+  keys: Iterable<string>,
+): VoiceGains | undefined;
 export function overridesToRequest(
   overrides: Overrides | null,
   language?: string,

@@ -29,6 +29,7 @@ import { ProfileAvatar } from '@/components/profile-avatar';
 import { cn } from '@/lib/utils';
 import { castVoice } from './cast-map';
 import { MARKUP_STYLES } from './markup-textarea';
+import { voiceAccent } from './voice-palette';
 import {
   PAUSE_MAX_MS,
   PAUSE_PRESETS,
@@ -86,6 +87,10 @@ const DELIVERY: { tag: DeliveryTag; icon: ComponentType; label: string; hint: st
 
 // Above this many profiles the voice picker gets a search field.
 const VOICE_SEARCH_MIN = 7;
+
+// What opens the tag at the caret (MarkupTextarea: Alt+Enter, Option on a Mac).
+const OPEN_TAG_KEYS =
+  typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform) ? '⌥↩' : 'Alt+Enter';
 
 /**
  * The `[voice:NAME]` name for a profile, casting it to the profile when the
@@ -334,7 +339,13 @@ export function MarkupToolbar({
                       className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
                       onClick={() => voice(name)}
                     >
-                      <span className="size-2 shrink-0 rounded-full bg-sky-500" />
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          'size-2 shrink-0 rounded-full',
+                          voiceAccent(name, scriptNames).dot,
+                        )}
+                      />
                       <span className="truncate">{direct ?? name}</span>
                       <span className="ml-auto truncate text-xs text-muted-foreground">
                         {detail}
@@ -541,9 +552,11 @@ export function MarkupToolbar({
             </dt>
             <dd className="text-muted-foreground">{t('markup.guide_unknown')}</dd>
           </dl>
-          <p className="border-t border-border/50 pt-2 text-muted-foreground">
-            {t('markup.guide_select')}
-          </p>
+          <div className="space-y-1 border-t border-border/50 pt-2 text-muted-foreground">
+            <p>{t('markup.guide_select')}</p>
+            <p>{t('editor.guide_click', { keys: OPEN_TAG_KEYS })}</p>
+            <p>{t('editor.guide_suggest')}</p>
+          </div>
         </PopoverContent>
       </Popover>
     </div>

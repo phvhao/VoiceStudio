@@ -31,14 +31,10 @@ export function ChapterPreviews({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const controller = useRef<AbortController | null>(null);
-  const fingerprint = JSON.stringify([
-    draft.script,
-    draft.voice,
-    draft.language,
-    draft.voiceCast,
-    draft.lexicon,
-    draft.overrides,
-  ]);
+  // A plan or preview is stale once the request it came from would change.
+  // Deriving the key from that request keeps every input it reads (a voice's
+  // volume included) in step without a list to maintain here.
+  const fingerprint = JSON.stringify(chapterPreviewBody(draft, 0));
   useEffect(() => {
     setChapters(null);
     setOutput(null);

@@ -1,0 +1,923 @@
+import {
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import { Combobox } from '@base-ui/react/combobox';
+import { Popover } from '@base-ui/react/popover';
+import {
+  BoldIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CircleAlertIcon,
+  PauseIcon,
+  PlayIcon,
+  RabbitIcon,
+  RemoveFormattingIcon,
+  SearchIcon,
+  SmileIcon,
+  SpeechIcon,
+  SpellCheckIcon,
+  TextSelectIcon,
+  Trash2Icon,
+  TurtleIcon,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ProfileAvatar } from '@/components/profile-avatar';
+import { cn } from '@/lib/utils';
+import {
+  setVoiceGain,
+  voiceGain,
+  voiceGainKey,
+  type VoiceGains,
+} from '@shared/utils/longformOverrides';
+import { castVoice } from './cast-map';
+import { VoiceGainControl } from './cast-settings';
+import type { MarkupEditorHandle } from './markup-editor-context';
+import { applyMarkupEdit, castProfileVoice, type MarkupTarget } from './markup-toolbar';
+import {
+  DELIVERY_TAGS,
+  PAUSE_MAX_MS,
+  PAUSE_PRESETS,
+  VOICE_RESET_TOKEN,
+  changeDeliveryKind,
+  cleanRespelling,
+  deliveryKind,
+  expressionGroups,
+  expressionVariant,
+  formatPauseSeconds,
+  pauseMs,
+  pauseToken,
+  removeToken,
+  replaceRange,
+  respellingParts,
+  respellingRange,
+  setRespelling,
+  voiceName,
+  voiceSection,
+  voiceToken,
+  type DeliveryTag,
+  type MarkupEdit,
+  type MarkupToken,
+} from './script-markup';
+import { voiceAccent } from './voice-palette';
+
+export type TagProfile = { id: string; name: string; image_url?: string | null };
+
+/**
+ * What the tools around a script editor (tag card, context menu, suggestions)
+ * know about the script, and what they may change besides its text.
+ */
+export interface TagToolProps {
+  getTarget(): MarkupTarget | null;
+  /** `# Title` lines open chapters (Audiobook): a tag on one is part of the title. */
+  headings?: boolean;
+  /** Each line has a voice of its own, which `[voice:]` returns to (Stories). */
+  lineVoices?: boolean;
+  profiles: TagProfile[];
+  /** `[voice:NAME]` names used in the script, first-seen order. */
+  scriptNames: string[];
+  /** The order voices take their colors in; `scriptNames` unless given. */
+  voices?: readonly string[];
+  voiceCast: Record<string, string>;
+  onVoiceCast(cast: Record<string, string>): void;
+  /** Volume per voice, the Cast panel's; without `onVoiceGains` no volume is offered. */
+  voiceGains?: VoiceGains;
+  onVoiceGains?(gains: VoiceGains): void;
+  /** The book's default voice, once one is chosen. */
+  defaultVoiceName?: string;
+  /** Audition `from…to` of the script, such as one voice's part. */
+  onListenRange?(from: number, to: number): void;
+}
+
+export const DELIVERY_LABELS: Record<DeliveryTag, string> = {
+  slow: 'audiobook.insert_slow',
+  fast: 'audiobook.insert_fast',
+  emphasis: 'audiobook.insert_emphasis',
+  spell: 'audiobook.insert_spell',
+};
+
+export const DELIVERY_ICONS: Record<DeliveryTag, ComponentType<{ className?: string }>> = {
+  slow: TurtleIcon,
+  fast: RabbitIcon,
+  emphasis: BoldIcon,
+  spell: SpellCheckIcon,
+};
+
+/** The label key of an expression group: its sound, or "Reactions" for the rest. */
+export function expressionGroupLabel(key: string): string {
+  return key === 'other' ? 'audiobook.insert_reactions' : `stories.tones.${key}`;
+}
+
+/** Case- and accent-blind text to search in, so "hao" finds "Hào" and "dao" finds "Đào". */
+export function searchKey(text: string): string {
+  // NFD splits most accents into combining marks; đ is a letter of its own.
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/đ/g, 'd');
+}
+
+/**
+ * Edit a tag only while its text is still where it was found, through
+ * `applyMarkupEdit` so Ctrl+Z undoes it. False when the tag has moved or
+ * changed since: the edit would land on other text.
+ */
+export function editTag(
+  target: MarkupTarget | null,
+  token: MarkupToken,
+  make: (value: string) => MarkupEdit,
+): boolean {
+  if (!target || target.element.value.slice(token.start, token.end) !== token.text) return false;
+  applyMarkupEdit(target, (value) => make(value));
+  return true;
+}
+
+/**
+ * Everything that can be done to one tag. The tag card and the context menu
+ * both act through here, so a tag behaves the same however it is reached.
+ */
+export function tagActions(tools: TagToolProps, token: MarkupToken) {
+  const { getTarget, headings = false, voiceCast, onVoiceCast, voiceGains, onVoiceGains } = tools;
+  const edit = (make: (value: string) => MarkupEdit) => editTag(getTarget(), token, make);
+  const replace = (insert: string) =>
+    edit((value) => replaceRange(value, token.start, token.end, insert));
+  // The voice a `[voice:NAME]` switches to; the resets and other tags have none.
+  const name = voiceName(token.text);
+  // A reset hands the text to the default voice, whose volume is kept under ''.
+  const gainKey = name === null ? '' : voiceGainKey(name, voiceCast);
+  const section = (): [number, number] | null => {
+    const element = getTarget()?.element;
+    return element ? voiceSection(element.value, token, { headings }) : null;
+  };
+  const select = (range: [number, number] | null, direction?: 'backward') => {
+    const element = getTarget()?.element;
+    if (!element || !range) return;
+    // Once the menu or the card has handed focus back to the editor.
+    requestAnimationFrame(() => {
+      element.focus();
+      element.setSelectionRange(range[0], range[1], direction);
+    });
+  };
+  return {
+    name,
+    replace,
+    remove: () => edit((value) => removeToken(value, token)),
+    /** Switch the tag to a script name, or with `null` back to the default voice. */
+    switchTo: (voice: string | null) =>
+      replace(voice === null ? VOICE_RESET_TOKEN : voiceToken(voice)),
+    /** Switch the tag to a profile, cast under a readable name. */
+    switchToProfile(profile: TagProfile) {
+      const next = castProfileVoice(profile, voiceCast, onVoiceCast);
+      return next === name || replace(voiceToken(next));
+    },
+    /** The profile cast to the name: '' while the default voice reads it. */
+    castTo: name === null ? '' : castVoice(voiceCast, name),
+    /** Cast the name to a profile, or with '' leave it to the default voice. */
+    cast(profileId: string) {
+      if (name === null) return;
+      const next = { ...voiceCast };
+      if (profileId) next[name] = profileId;
+      else delete next[name];
+      onVoiceCast(next);
+    },
+    gain: voiceGain(voiceGains, gainKey),
+    setGain: onVoiceGains && ((db: number) => onVoiceGains(setVoiceGain(voiceGains, gainKey, db))),
+    /** What a voice tag reads, up to the next change of voice. */
+    section,
+    listen: tools.onListenRange
+      ? () => {
+          const range = section();
+          if (range && range[0] < range[1]) tools.onListenRange?.(range[0], range[1]);
+        }
+      : undefined,
+    /** Select the voice's part, its start (and the tag) kept in view. */
+    selectSection: () => select(section(), 'backward'),
+    setPause: (ms: number) => replace(pauseToken(ms)),
+    setDelivery: (kind: DeliveryTag) => edit((value) => changeDeliveryKind(value, token, kind)),
+    respell: (respelling: string) => edit((value) => setRespelling(value, token, respelling)),
+    /** Select the respelling in the editor, to retype it there. */
+    selectRespelling: () => select(respellingRange(token)),
+  };
+}
+
+export type TagActions = ReturnType<typeof tagActions>;
+
+/** A tag the editor opened: clicked, or reached with Alt+Enter. */
+export interface TagActivation {
+  token: MarkupToken;
+  handle: MarkupEditorHandle;
+  via: 'pointer' | 'keyboard';
+  /** Tells activations apart: each one opens a fresh card. */
+  id: number;
+}
+
+const CARD =
+  'w-72 max-w-[calc(100vw-1rem)] origin-(--transform-origin) space-y-3 rounded-lg surface-glass p-3 text-sm text-popover-foreground shadow-md ring-1 ring-border outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:animate-none';
+const CHIP =
+  'inline-flex items-center gap-1 rounded-full border border-border/60 px-2 py-0.5 text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 aria-pressed:border-primary/50 aria-pressed:bg-primary/12 [&_svg]:size-3.5';
+
+// Values of the voice pickers. A `[voice:NAME]` name never holds a bracket,
+// so these never collide with one.
+const DEFAULT_CHOICE = '[default]';
+const PROFILE_CHOICE = '[profile]';
+
+/**
+ * The card for the tag the user clicked, or reached with Alt+Enter: what the
+ * tag does and the edits it allows. After a click the editor keeps the focus,
+ * so typing goes on; from the keyboard the focus moves into the card, and
+ * closing it hands the focus back to the editor.
+ */
+export function MarkupTagCard({
+  activation,
+  onClose,
+  ...tools
+}: TagToolProps & {
+  /** The tag the card is open for; `null` closes it. */
+  activation: TagActivation | null;
+  onClose(): void;
+}) {
+  const { t } = useTranslation();
+  // The last tag stays on the card while it animates closed.
+  const [shown, setShown] = useState(activation);
+  if (activation && activation !== shown) setShown(activation);
+  const current = activation ?? shown;
+  // How Base UI closed the card, which decides where the focus goes.
+  const closedBy = useRef<string | null>(null);
+  const focusRef = useRef<HTMLElement | null>(null);
+  const anchor = useMemo(
+    () => current && current.handle.anchorAt(current.token.start, current.token.end),
+    [current],
+  );
+  if (!current) return null;
+  const { token, handle } = current;
+  return (
+    <Popover.Root
+      key={current.id}
+      open={activation !== null}
+      onOpenChange={(open, details) => {
+        if (open) return;
+        closedBy.current = details.reason;
+        onClose();
+      }}
+    >
+      <Popover.Portal>
+        <Popover.Positioner
+          anchor={anchor}
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          className="isolate z-50 outline-none"
+        >
+          <Popover.Popup
+            aria-label={t('editor.card_label', { tag: token.text })}
+            initialFocus={current.via === 'keyboard' ? focusRef : false}
+            // A press elsewhere leaves the focus where that press put it.
+            finalFocus={() => (closedBy.current === 'outside-press' ? true : handle.element)}
+            className={CARD}
+          >
+            <TagCardBody
+              token={token}
+              tools={tools}
+              focusRef={focusRef}
+              onDone={() => {
+                closedBy.current = null;
+                onClose();
+              }}
+            />
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function Header({
+  icon,
+  title,
+  token,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  token: MarkupToken;
+  children: ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="flex min-w-0 items-center gap-2">
+        {icon}
+        <span className="min-w-0 truncate font-medium">{title}</span>
+        <code className="ms-auto max-w-[55%] shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+          {token.text}
+        </code>
+      </p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
+    </div>
+  );
+}
+
+/** A voice's color swatch (`voiceAccent(...).dot`). */
+export function VoiceDot({ className }: { className: string }) {
+  return <span aria-hidden="true" className={cn('size-2.5 shrink-0 rounded-full', className)} />;
+}
+
+/** The dashed ring `[voice:]` wears in the editor: back to the default voice. */
+export function ResetDot() {
+  return (
+    <span
+      aria-hidden="true"
+      className="size-2.5 shrink-0 rounded-full border border-dashed border-muted-foreground/70"
+    />
+  );
+}
+
+/** The card's last row: the tag's actions, and the one that takes it away at the end. */
+function Footer({ children, end }: { children?: ReactNode; end: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 border-t border-border/50 pt-2">
+      {children}
+      <span className="ms-auto flex">{end}</span>
+    </div>
+  );
+}
+
+interface VoiceChoice {
+  value: string;
+  label: string;
+  icon: ReactNode;
+}
+
+interface VoiceChoiceGroup {
+  key: string;
+  label?: string;
+  items: VoiceChoice[];
+}
+
+/**
+ * A voice picker on the card: a list grouped like the toolbar's (the default
+ * voice, the script's names, the profiles), searchable ignoring case and
+ * accents, since a library of cloned voices grows long.
+ */
+function VoiceChoicePicker({
+  label,
+  value,
+  groups,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  groups: VoiceChoiceGroup[];
+  onChange(value: string): void;
+}) {
+  const { t } = useTranslation();
+  const shown = groups.filter((group) => group.items.length > 0);
+  const items = Combobox.createItems(shown, {
+    getValue: (choice: VoiceChoice) => choice.value,
+    getLabel: (choice: VoiceChoice) => choice.label,
+  });
+  const current = shown.flatMap((group) => group.items).find((choice) => choice.value === value);
+  return (
+    <Combobox.Root
+      items={items}
+      value={value}
+      onValueChange={(next) => {
+        // Picking the current voice again changes nothing.
+        if (typeof next === 'string' && next !== value) onChange(next);
+      }}
+      filter={(choice: VoiceChoice, query: string) =>
+        searchKey(choice.label).includes(searchKey(query))
+      }
+      // The search starts empty, not seeded with the chosen voice's name.
+      defaultInputValue=""
+      autoHighlight
+    >
+      <Combobox.Trigger
+        aria-label={label}
+        className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-left text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50"
+      >
+        {current?.icon}
+        <span className="min-w-0 flex-1 truncate">{current?.label}</span>
+        <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      </Combobox.Trigger>
+      <Combobox.Portal>
+        <Combobox.Positioner align="start" sideOffset={4} className="isolate z-50 outline-none">
+          <Combobox.Popup
+            aria-label={label}
+            className="flex max-h-[min(50vh,18rem,var(--available-height))] w-(--anchor-width) max-w-(--available-width) min-w-56 origin-(--transform-origin) flex-col overflow-hidden rounded-lg surface-glass text-popover-foreground shadow-md ring-1 ring-border outline-none duration-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:animate-none"
+          >
+            <div className="flex shrink-0 items-center gap-2 border-b border-border/60 px-2.5">
+              <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <Combobox.Input
+                placeholder={t('markup.voice_search')}
+                aria-label={t('markup.voice_search')}
+                className="h-8 w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+            <Combobox.Empty>
+              <p className="px-3 py-3 text-center text-xs text-muted-foreground">
+                {t('markup.voice_none')}
+              </p>
+            </Combobox.Empty>
+            <Combobox.List className="min-h-0 flex-1 scroll-py-1 overflow-y-auto overscroll-contain p-1 empty:p-0">
+              {(group: VoiceChoiceGroup) => (
+                <Combobox.Group key={group.key} items={group.items}>
+                  {group.label && (
+                    <Combobox.GroupLabel className="px-2 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                      {group.label}
+                    </Combobox.GroupLabel>
+                  )}
+                  <Combobox.Collection>
+                    {(choice: VoiceChoice) => (
+                      <Combobox.Item
+                        key={choice.value}
+                        value={choice.value}
+                        className="flex min-h-7 cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground"
+                      >
+                        {choice.icon}
+                        <span className="min-w-0 flex-1 truncate">{choice.label}</span>
+                        <Combobox.ItemIndicator className="flex">
+                          <CheckIcon className="size-3.5" />
+                        </Combobox.ItemIndicator>
+                      </Combobox.Item>
+                    )}
+                  </Combobox.Collection>
+                </Combobox.Group>
+              )}
+            </Combobox.List>
+          </Combobox.Popup>
+        </Combobox.Positioner>
+      </Combobox.Portal>
+    </Combobox.Root>
+  );
+}
+
+interface BodyProps {
+  token: MarkupToken;
+  tools: TagToolProps;
+  act: TagActions;
+  focusRef: RefObject<HTMLElement | null>;
+  /** The card is done: an edit changed the tag it describes, or the choice was made. */
+  onDone(): void;
+}
+
+function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>) {
+  const { t } = useTranslation();
+  const act = tagActions(tools, token);
+  const props = { token, tools, act, focusRef, onDone };
+  const remove = (
+    <Button
+      size="xs"
+      variant="ghost"
+      onClick={() => {
+        act.remove();
+        onDone();
+      }}
+    >
+      <Trash2Icon />
+      {t('context.remove_tag')}
+    </Button>
+  );
+  switch (token.kind) {
+    case 'voice':
+    case 'voiceReset':
+      return <VoiceBody {...props} remove={remove} />;
+    case 'pause':
+      return <PauseBody {...props} remove={remove} />;
+    case 'expression':
+      return <ExpressionBody {...props} remove={remove} />;
+    case 'delivery':
+      return <DeliveryBody {...props} />;
+    case 'pronunciation':
+      return <PronunciationBody {...props} />;
+    case 'unknown':
+      return (
+        <>
+          <Header
+            icon={<CircleAlertIcon className="size-3.5 shrink-0 text-destructive" />}
+            title={t('editor.card_unknown_title')}
+            token={token}
+          >
+            {t('editor.card_unknown')}
+          </Header>
+          <Footer end={remove} />
+        </>
+      );
+  }
+}
+
+/** `[voice:NAME]` and `[voice:]`: who reads from here, who that is cast to, and how loud. */
+function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: ReactNode }) {
+  const { t } = useTranslation();
+  const { profiles, scriptNames, defaultVoiceName, lineVoices = false } = tools;
+  const voices = tools.voices ?? scriptNames;
+  const { name } = act;
+  // Older Stories scripts put a profile id in the tag.
+  const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
+  const label = (voice: string) => profileName(voice) ?? voice;
+  const avatar = (profile: TagProfile) => (
+    <ProfileAvatar name={profile.name} imageUrl={profile.image_url} className="size-4" />
+  );
+  const switchTo = (value: string) => {
+    const profile = value.startsWith(PROFILE_CHOICE)
+      ? profiles.find((candidate) => PROFILE_CHOICE + candidate.id === value)
+      : undefined;
+    if (profile) act.switchToProfile(profile);
+    else act.switchTo(value === DEFAULT_CHOICE ? null : value);
+    onDone();
+  };
+  // A name that is a profile id reads in that profile without being cast.
+  const direct = name !== null && !act.castTo && profileName(name) !== undefined;
+  const castValue = act.castTo || (direct ? name : DEFAULT_CHOICE);
+  const missing = act.castTo !== '' && profileName(act.castTo) === undefined;
+  const section = act.section();
+  const reads = section !== null && section[0] < section[1];
+  return (
+    <>
+      {name === null ? (
+        <Header icon={<ResetDot />} title={t('markup.voice_reset')} token={token}>
+          {t(lineVoices ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
+        </Header>
+      ) : (
+        <Header
+          icon={<VoiceDot className={voiceAccent(name, voices).dot} />}
+          title={label(name)}
+          token={token}
+        >
+          {t('editor.card_voice')}
+        </Header>
+      )}
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-xs">
+        <span className="text-muted-foreground">{t('audiobook.insert_voice')}</span>
+        <VoiceChoicePicker
+          label={t('audiobook.insert_voice')}
+          value={name ?? DEFAULT_CHOICE}
+          onChange={switchTo}
+          groups={[
+            {
+              key: 'default',
+              items: [
+                { value: DEFAULT_CHOICE, label: t('markup.voice_reset'), icon: <ResetDot /> },
+              ],
+            },
+            {
+              key: 'script',
+              label: t('markup.voice_in_script'),
+              items: scriptNames.map((voice) => ({
+                value: voice,
+                label: label(voice),
+                icon: <VoiceDot className={voiceAccent(voice, voices).dot} />,
+              })),
+            },
+            {
+              key: 'profiles',
+              label: t('markup.voice_profiles'),
+              items: profiles.map((profile) => ({
+                value: PROFILE_CHOICE + profile.id,
+                label: profile.name,
+                icon: avatar(profile),
+              })),
+            },
+          ]}
+        />
+        {name !== null && (
+          <>
+            <span className="text-muted-foreground">{t('editor.read_by')}</span>
+            <VoiceChoicePicker
+              label={t('editor.read_by')}
+              value={castValue}
+              onChange={(value) => act.cast(value === DEFAULT_CHOICE ? '' : value)}
+              groups={[
+                {
+                  key: 'default',
+                  items: [
+                    {
+                      value: DEFAULT_CHOICE,
+                      label: defaultVoiceName
+                        ? t('editor.status_default', { name: defaultVoiceName })
+                        : t('editor.status_default_none'),
+                      icon: <ResetDot />,
+                    },
+                  ],
+                },
+                {
+                  key: 'profiles',
+                  label: t('markup.voice_profiles'),
+                  items: [
+                    ...profiles.map((profile) => ({
+                      value: profile.id,
+                      label: profile.name,
+                      icon: avatar(profile),
+                    })),
+                    ...(missing
+                      ? [
+                          {
+                            value: act.castTo,
+                            label: t('modelSettings.unavailable'),
+                            icon: <CircleAlertIcon className="size-4 text-destructive" />,
+                          },
+                        ]
+                      : []),
+                  ],
+                },
+              ]}
+            />
+          </>
+        )}
+      </div>
+      {name !== null && (missing || castValue === DEFAULT_CHOICE) && (
+        <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+          <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+          {missing ? t('editor.cast_missing') : t('editor.uncast', { name: label(name) })}
+        </p>
+      )}
+      {/* In Stories `[voice:]` goes back to each line's own voice, not one shared default. */}
+      {act.setGain && (name !== null || !lineVoices) && (
+        <div className="space-y-1">
+          <VoiceGainControl
+            name={name === null ? t('audiobook.default_voice') : label(name)}
+            value={act.gain}
+            onChange={act.setGain}
+          />
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            {name === null
+              ? t('editor.volume_default')
+              : t('editor.volume_every', { tag: voiceToken(name) })}
+          </p>
+        </div>
+      )}
+      <Footer end={remove}>
+        {name !== null && act.listen && (
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!reads}
+            onClick={() => {
+              act.listen?.();
+              onDone();
+            }}
+          >
+            <PlayIcon />
+            {t('editor.listen_part')}
+          </Button>
+        )}
+        {name !== null && (
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={!reads}
+            onClick={() => {
+              act.selectSection();
+              onDone();
+            }}
+          >
+            <TextSelectIcon />
+            {t('editor.select_part')}
+          </Button>
+        )}
+      </Footer>
+    </>
+  );
+}
+
+function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remove: ReactNode }) {
+  const { t } = useTranslation();
+  const ms = pauseMs(token.text) ?? 0;
+  const [seconds, setSeconds] = useState(String(ms / 1000));
+  const customMs = Math.round(Number(seconds) * 1000);
+  const valid = Number.isFinite(customMs) && customMs > 0 && customMs <= PAUSE_MAX_MS;
+  const choose = (next: number) => {
+    if (next !== ms) act.setPause(next);
+    onDone();
+  };
+  return (
+    <>
+      <Header
+        icon={<PauseIcon className="size-3.5 shrink-0 text-amber-500" />}
+        title={t('audiobook.insert_pause')}
+        token={token}
+      >
+        {t('editor.card_pause', { duration: formatPauseSeconds(ms) })}
+      </Header>
+      <div role="group" aria-label={t('markup.pause_hint')} className="flex flex-wrap gap-1">
+        {PAUSE_PRESETS.map((preset) => (
+          <button
+            key={preset.id}
+            ref={preset.ms === ms ? (node) => void (focusRef.current = node) : undefined}
+            type="button"
+            aria-pressed={preset.ms === ms}
+            className={CHIP}
+            onClick={() => choose(preset.ms)}
+          >
+            {t(`markup.pause_${preset.id}`)}
+            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              {formatPauseSeconds(preset.ms)}
+            </span>
+          </button>
+        ))}
+      </div>
+      <form
+        className="flex items-center gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (valid) choose(customMs);
+        }}
+      >
+        <label className="flex flex-1 items-center gap-1.5 text-xs text-muted-foreground">
+          {t('markup.pause_custom')}
+          <Input
+            type="number"
+            min="0.1"
+            max={PAUSE_MAX_MS / 1000}
+            step="0.1"
+            value={seconds}
+            aria-invalid={!valid}
+            className="h-7 w-16 px-2 text-xs"
+            onChange={(event) => setSeconds(event.target.value)}
+          />
+          s
+        </label>
+        <Button type="submit" size="xs" variant="secondary" disabled={!valid}>
+          {t('editor.apply')}
+        </Button>
+      </form>
+      <Footer end={remove} />
+    </>
+  );
+}
+
+function ExpressionBody({
+  token,
+  act,
+  focusRef,
+  onDone,
+  remove,
+}: BodyProps & { remove: ReactNode }) {
+  const { t } = useTranslation();
+  const groups = expressionGroups();
+  const current = token.text.toLowerCase();
+  const group = groups.find((candidate) =>
+    candidate.tags.some((tag) => tag.toLowerCase() === current),
+  );
+  const title = group
+    ? [t(expressionGroupLabel(group.key)), expressionVariant(token.text)]
+        .filter(Boolean)
+        .join(' · ')
+    : token.text;
+  return (
+    <>
+      <Header
+        icon={<SmileIcon className="size-3.5 shrink-0 text-emerald-500" />}
+        title={title}
+        token={token}
+      >
+        {t('editor.card_expression')}
+      </Header>
+      <div className="space-y-1.5">
+        {groups.map((candidate) => (
+          <div key={candidate.key} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 truncate text-xs text-muted-foreground">
+              {t(expressionGroupLabel(candidate.key))}
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {candidate.tags.map((tag) => {
+                const pressed = tag.toLowerCase() === current;
+                return (
+                  <button
+                    key={tag}
+                    ref={pressed ? (node) => void (focusRef.current = node) : undefined}
+                    type="button"
+                    title={tag}
+                    aria-pressed={pressed}
+                    className={CHIP}
+                    onClick={() => {
+                      if (!pressed) act.replace(tag);
+                      onDone();
+                    }}
+                  >
+                    {candidate.tags.length > 1
+                      ? expressionVariant(tag) || tag
+                      : t(expressionGroupLabel(candidate.key))}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <Footer end={remove} />
+    </>
+  );
+}
+
+function DeliveryBody({ token, act, focusRef, onDone }: BodyProps) {
+  const { t } = useTranslation();
+  const kind = deliveryKind(token.text) ?? 'slow';
+  const Icon = DELIVERY_ICONS[kind];
+  return (
+    <>
+      <Header
+        icon={<Icon className="size-3.5 shrink-0 text-violet-500" />}
+        title={t(DELIVERY_LABELS[kind])}
+        token={token}
+      >
+        {t('editor.card_delivery', { open: `[${kind}]`, close: `[/${kind}]` })}
+      </Header>
+      <div role="group" aria-label={t('context.delivery')} className="flex flex-wrap gap-1">
+        {DELIVERY_TAGS.map((tag) => {
+          const KindIcon = DELIVERY_ICONS[tag];
+          return (
+            <button
+              key={tag}
+              ref={tag === kind ? (node) => void (focusRef.current = node) : undefined}
+              type="button"
+              aria-pressed={tag === kind}
+              className={CHIP}
+              onClick={() => {
+                if (tag !== kind) act.setDelivery(tag);
+                onDone();
+              }}
+            >
+              <KindIcon />
+              {t(DELIVERY_LABELS[tag])}
+            </button>
+          );
+        })}
+      </div>
+      <Footer
+        end={
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              act.remove();
+              onDone();
+            }}
+          >
+            <RemoveFormattingIcon />
+            {t('context.remove_markup')}
+          </Button>
+        }
+      />
+    </>
+  );
+}
+
+function PronunciationBody({ token, act, focusRef, onDone }: BodyProps) {
+  const { t } = useTranslation();
+  const { word, respelling } = respellingParts(token);
+  const [value, setValue] = useState(respelling);
+  const next = cleanRespelling(value);
+  return (
+    <>
+      <Header
+        icon={<SpeechIcon className="size-3.5 shrink-0 text-rose-500" />}
+        title={t('markup.pronounce')}
+        token={token}
+      >
+        {word ? t('editor.card_pronunciation', { word }) : t('editor.card_pronunciation_bare')}
+      </Header>
+      <form
+        className="flex items-center gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!next) return;
+          if (next !== respelling) act.respell(next);
+          onDone();
+        }}
+      >
+        <label className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="shrink-0">{t('editor.read_as')}</span>
+          <Input
+            ref={(node) => void (focusRef.current = node)}
+            value={value}
+            aria-invalid={!next}
+            className="h-7 min-w-0 flex-1 px-2 text-xs"
+            onChange={(event) => setValue(event.target.value)}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+        </label>
+        <Button type="submit" size="xs" variant="secondary" disabled={!next}>
+          {t('editor.apply')}
+        </Button>
+      </form>
+      <Footer
+        end={
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              act.remove();
+              onDone();
+            }}
+          >
+            <RemoveFormattingIcon />
+            {t('context.keep_word')}
+          </Button>
+        }
+      />
+    </>
+  );
+}

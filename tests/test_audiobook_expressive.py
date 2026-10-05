@@ -44,6 +44,8 @@ _ALL_FIELDS = {
     "punctuation_pauses": (("sentence", 400),),
     "split_commas": True,
     "verify_speech": True,
+    "level_voices": True,
+    "voice_gains": (("Mara", 3.0),),
 }
 
 

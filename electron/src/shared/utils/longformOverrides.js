@@ -31,7 +31,70 @@ export const DEFAULT_OVERRIDES = {
   // Reading (sentence by sentence, punctuation pauses, speech check): null
   // follows Settings → Reading; an object is this project's own choice.
   reading: null,
+  // Bring every voice of a chapter to one loudness. On unless turned off:
+  // overrides saved before this field existed read as on too.
+  levelVoices: true,
 };
+
+/** Largest cut or boost of one voice's own volume, in dB (the server clamps the same). */
+export const MAX_VOICE_GAIN_DB = 12;
+
+/**
+ * The key a voice's volume is stored and sent under: its `[voice:NAME]` name,
+ * or `''` for the book's default voice. `[voice:default]` reads in the default
+ * voice unless the cast gives that name a voice of its own; the server levels
+ * by the same rule (backend/services/voice_leveling.py span_voice_name).
+ */
+export function voiceGainKey(name, cast) {
+  const key = (name || '').trim();
+  const castDefault = cast && Object.hasOwn(cast, 'default') && cast.default;
+  return key === 'default' && !castDefault ? '' : key;
+}
+
+/** A volume in dB as stored: within ±MAX_VOICE_GAIN_DB; anything that is not a finite number is 0. */
+export function clampVoiceGain(db) {
+  if (typeof db !== 'number' || !Number.isFinite(db)) return 0;
+  return Math.max(-MAX_VOICE_GAIN_DB, Math.min(MAX_VOICE_GAIN_DB, db));
+}
+
+/** The volume stored for `key`, 0 dB when there is none. */
+export function voiceGain(gains, key) {
+  return gains && Object.hasOwn(gains, key) ? clampVoiceGain(gains[key]) : 0;
+}
+
+/** `gains` with `key` set to `db`; 0 dB removes the key, so untouched voices stay absent. */
+export function setVoiceGain(gains, key, db) {
+  const value = clampVoiceGain(db);
+  return Object.fromEntries([
+    ...Object.entries(gains || {}).filter(([name]) => name !== key),
+    ...(value ? [[key, value]] : []),
+  ]);
+}
+
+/** Volumes as persisted → the valid ones (drafts saved before volumes existed have none). */
+export function restoreVoiceGains(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.keys(value).flatMap((key) => {
+      const db = voiceGain(value, key);
+      return db ? [[key, db]] : [];
+    }),
+  );
+}
+
+/**
+ * The request's `voice_gains` for the voices `keys` names (zero volumes left
+ * out), or `undefined` when none is set — an untouched book sends nothing.
+ */
+export function voiceGainsToRequest(gains, keys) {
+  const body = Object.fromEntries(
+    [...new Set(keys)].flatMap((key) => {
+      const db = voiceGain(gains, key);
+      return db ? [[key, db]] : [];
+    }),
+  );
+  return Object.keys(body).length ? body : undefined;
+}
 
 /**
  * Reading settings in their default state. `phraseRendering`: every sentence
@@ -88,8 +151,9 @@ export function readingFromSettings(settings) {
  * the backend expects. Only NON-default values are emitted, plus how to read
  * the text: the project's own reading settings, or `use_app_reading` to
  * follow Settings → Reading (API callers that send neither keep the old
- * render). Shared by the full render and the per-chapter preview so both hit
- * the same cache slot.
+ * render), and `level_voices` unless the project turned leveling off.
+ * Shared by the full render and the per-chapter preview so both hit the same
+ * cache slot.
  */
 export function overridesToRequest(overrides, language) {
   const o = overrides || DEFAULT_OVERRIDES;
@@ -112,5 +176,6 @@ export function overridesToRequest(overrides, language) {
   if (o.trimEdges != null) body.trim_edges = o.trimEdges;
   if (o.reading) Object.assign(body, readingToRequest(o.reading));
   else body.use_app_reading = true;
+  if (o.levelVoices !== false) body.level_voices = true;
   return body;
 }

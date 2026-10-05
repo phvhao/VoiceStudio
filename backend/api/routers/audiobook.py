@@ -22,6 +22,7 @@ epub/pdf ingest, ACX mastering shipped; the resume UI surface remains a follow-u
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -36,15 +37,16 @@ from core.render_trace import call as trace_call, stage as trace_stage
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from services.audiobook import (
     ExpressiveOptions,
     punctuation_pause_pairs,
     parse_audiobook_script,
     synthesize_chapter,
+    voice_gain_pairs,
 )
 from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
 from services.longform_render import (
@@ -57,6 +59,7 @@ from services.longform_render import (
     write_lf_text,
 )
 from services import longform_resume  # pure (no torch) — durable resume manifest
+from services.voice_leveling import MAX_LEVEL_GAIN_DB, span_voice_name  # pure (no torch)
 
 logger = logging.getLogger("omnivoice.audiobook")
 router = APIRouter()
@@ -123,6 +126,8 @@ class ExpressiveMixin(BaseModel):
       closure; other engines ignore them.
     * ``vary_repeats`` — cache opt-out: give identical repeated lines distinct
       takes instead of replaying one recording (default off = today).
+    * ``level_voices`` / ``voice_gains`` — voice leveling: one speech level for
+      every voice of a chapter, plus a volume per voice (default off = today).
     """
 
     model_config = ConfigDict(allow_inf_nan=False)
@@ -162,6 +167,23 @@ class ExpressiveMixin(BaseModel):
     # request leaves out. The app sends this; API callers that omit it keep
     # exactly the render they had (one take per paragraph, no check).
     use_app_reading: bool = False
+    # Voice leveling: bring every voice of a chapter to one speech level, so a
+    # cast cloned from quiet and loud recordings reads at one volume; and a
+    # volume of the user's own per voice, in dB by [voice:NAME] name ('' = the
+    # default voice), clamped to ±12 dB. Omitted → the audio renders as before.
+    level_voices: bool | None = None
+    voice_gains: Annotated[
+        dict[Annotated[str, StringConstraints(max_length=128)], float],
+        Field(max_length=64),
+    ] | None = None
+
+    @field_validator("voice_gains")
+    @classmethod
+    def _clamp_voice_gains(cls, gains: dict[str, float] | None) -> dict[str, float] | None:
+        if gains is None:
+            return None
+        return {name: max(-MAX_LEVEL_GAIN_DB, min(MAX_LEVEL_GAIN_DB, db))
+                for name, db in gains.items()}
 
 
 def _reading_fields(req: "ExpressiveMixin") -> dict:
@@ -203,6 +225,8 @@ def _expressive_opts(req: "ExpressiveMixin") -> ExpressiveOptions:
         paragraph_gap_ms=int(req.paragraph_gap_ms),
         trim_edges=bool(req.trim_edges),
         **_reading_fields(req),
+        level_voices=bool(req.level_voices),
+        voice_gains=voice_gain_pairs(req.voice_gains),
     )
 
 
@@ -741,7 +765,7 @@ async def _prepare_synth(
 
 
 def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, lexicon=None,
-                           language=None, opts=None, voice_map=None):
+                           language=None, opts=None, voice_map=None, default_voice=None):
     """Render one chapter, content-addressed so a re-run reuses it (resume).
 
     Returns ``(wav_path, duration_s, was_cached, seg_stats)``. Two cache
@@ -767,6 +791,11 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     either cache key and BEFORE ``synthesize_chapter``'s lexicon pass, so the
     per-project dictionary operates on normalized text and toggling / changing
     normalization output naturally invalidates cached chapters and segments.
+
+    Voice leveling (``opts.level_voices`` / ``opts.voice_gains``) keys only the
+    outer layer: it re-balances finished takes, so the segments stay as
+    rendered and a leveling change re-assembles the chapter from them.
+    ``default_voice`` tells which spans the default voice reads for it.
 
     Runs in the GPU-pool executor.
     """
@@ -846,9 +875,21 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     vmap_sig = voice_map_signature(voice_map)
     if vmap_sig:
         sig["\x00voicemap"] = vmap_sig
-    seg_extra_sig = f"{lex_sig}\x00{expr_sig}" if expr_sig else lex_sig
+    # A take never depends on voice leveling, so the segment layer keys the
+    # options without it — the same key as before leveling existed.
+    take_sig = opts.take_signature()
+    seg_extra_sig = f"{lex_sig}\x00{take_sig}" if take_sig else lex_sig
     if vmap_sig:
         seg_extra_sig = f"{seg_extra_sig}\x00{vmap_sig}"
+    # The voice each span is leveled under follows the default voice as well
+    # as the cast (a Stories line read by the default voice's profile shares
+    # its volume), so with leveling on it keys the chapter too.
+    voice_names = [span_voice_name(s.voice_id, default_voice, voice_map) for s in spans]
+    leveled_sig = ""
+    if opts.level_voices or opts.voice_gains:
+        leveled_sig = json.dumps(dict(zip((s.voice_id or "" for s in spans), voice_names)),
+                                 sort_keys=True, ensure_ascii=False)
+        sig["\x00leveled voices"] = leveled_sig
     # The resolved synthesis language reaches every engine call, and
     # normalization can leave two languages' text identical, so it must key
     # BOTH layers or a French render replays the English audio (#2524). Genuine
@@ -890,6 +931,8 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     }
     if language:
         inputs["language"] = language
+    if leveled_sig:
+        inputs["leveled voices"] = leveled_sig
     for k, v in resolved.items():
         label = f"voice {re.sub(r'[^A-Za-z0-9_-]', '', k)[:40] or '(default)'}"
         inputs[f"{label} reference audio"] = _portable_ref_audio(v.get("ref_audio"))
@@ -934,7 +977,7 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
         verifier = SpeechVerifier(sr)
     audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
                                     segment_cache=seg_cache, verifier=verifier,
-                                    **opts.join_kwargs())
+                                    voice_names=voice_names, **opts.join_kwargs())
     # Invisible provenance mark on the assembled chapter (#1169), tensor stage,
     # before the WAV lands in the cache — this single site covers every
     # longform front door (/audiobook, /longform/render [Stories],
@@ -965,17 +1008,24 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
     from services.text_normalization import normalize_for_tts
     from services.watermark import is_enabled as watermark_enabled
 
+    leveling = bool(opts.level_voices or opts.voice_gains)
     rows, voices, refs = [], [], []
     for span in chapter.spans:
         profile_id = _map_span_voice(span.voice_id, default_voice, voice_map)
         voice = _resolve_voice(profile_id)
         voice_leases.hold(lease, voice.get("ref_audio"))
-        rows.append({
+        row = {
             "text": normalize_for_tts(span.text, language),
             "pause_ms_after": span.pause_ms_after,
             "speed": getattr(span, "speed", None),
             "join": getattr(span, "join", None),
-        })
+        }
+        if leveling:
+            # The worker knows a span only by its row, so it is told which
+            # voice to level it under. Sent only with leveling on, so every
+            # other chapter keeps its remote key.
+            row["voice"] = span_voice_name(span.voice_id, default_voice, voice_map)
+        rows.append(row)
         refs.append(voice.get("ref_audio"))
         voices.append({
             "ref_text": voice.get("ref_text"), "instruct": voice.get("instruct"),
@@ -1038,6 +1088,18 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
     ), wav_path
 
 
+def _chapter_opts(opts: ExpressiveOptions, chapter, default_voice, voice_map) -> ExpressiveOptions:
+    """``opts`` with the volumes of only the voices this chapter speaks: turning
+    one voice up re-assembles the chapters it is in (and re-renders them on a
+    remote worker), and leaves every other chapter's cache key as it was."""
+    if not opts.voice_gains:
+        return opts
+    spoken = {span_voice_name(s.voice_id, default_voice, voice_map)
+              for s in chapter.spans if s.text}
+    return dataclasses.replace(
+        opts, voice_gains=tuple(p for p in opts.voice_gains if p[0] in spoken) or None)
+
+
 async def _run_chapter(chapter, *, operation="audiobook", decision, job, default_voice, language, opts,
                        voice_map, lexicon, cache_dir, lease=None):
     """Run one chapter through the gateway; local preparation stays lazy.
@@ -1046,6 +1108,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
     from services import gpu_gateway
     from services.tts_backend import active_backend_id, get_backend_class
 
+    opts = _chapter_opts(opts, chapter, default_voice, voice_map)
     engine_id = active_backend_id()
     remote, remote_cache = _remote_chapter_call(
         chapter, engine_id=engine_id, default_voice=default_voice,
@@ -1076,7 +1139,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
         return gpu_gateway.LocalCall(
             fn=lambda: _render_chapter_cached(
                 chapter, synth, sr, local_engine, resolve, cache_dir, lexicon,
-                language, opts, voice_map,
+                language, opts, voice_map, default_voice=default_voice,
             ),
             what="Audiobook chapter",
             timeout=generate_timeout_s(

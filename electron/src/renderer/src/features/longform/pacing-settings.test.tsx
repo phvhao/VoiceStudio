@@ -28,7 +28,10 @@ import { storyChunkBody } from './story-preview';
 
 it('follows Settings → Reading unless the project has its own', () => {
   // Only the flag: the server applies the app-wide setting.
-  expect(overridesToRequest(DEFAULT_OVERRIDES, 'Auto')).toEqual({ use_app_reading: true });
+  expect(overridesToRequest(DEFAULT_OVERRIDES, 'Auto')).toEqual({
+    use_app_reading: true,
+    level_voices: true,
+  });
 });
 
 it('sends a project’s own reading explicitly, clamped, including "off"', () => {
@@ -42,13 +45,19 @@ it('sends a project’s own reading explicitly, clamped, including "off"', () =>
     punctuation_pauses: { ...DEFAULT_PUNCTUATION_PAUSES, comma: 80, sentence: 5000 },
     split_commas: true,
     verify_speech: true,
+    level_voices: true,
   });
   expect(
     overridesToRequest(
       { ...DEFAULT_OVERRIDES, reading: { ...reading, phraseRendering: false } },
       'Auto',
     ),
-  ).toEqual({ punctuation_pauses: null, split_commas: false, verify_speech: true });
+  ).toEqual({
+    punctuation_pauses: null,
+    split_commas: false,
+    verify_speech: true,
+    level_voices: true,
+  });
 });
 
 it('summarises the app setting and copies it when the project takes its own', () => {

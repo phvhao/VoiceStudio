@@ -11,6 +11,7 @@ metadata and the backend fallback mirror it.
 **Highlights**
 - Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
 - Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
+- Voices in a book come out at the same volume, and each voice can be turned up or down
 
 ### Changed
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
@@ -22,6 +23,12 @@ metadata and the backend fallback mirror it.
 - Long text is read sentence by sentence in Audiobook, Stories, Clone and Voice Design, joined with a pause you set per punctuation mark; a line break counts as a full stop; existing books render once more the first time
 - Settings → Reading holds sentence-by-sentence reading, the per-mark pauses and the speech check for the whole app; each workspace opens it from a quick button, and a book can keep its own values
 - Script editors get a right-click menu: cut, copy and paste, every markup insert, and changing or removing the tag under the cursor
+- The Audiobook editor numbers its lines, marks each line with the color of the voice reading it, shades the current line and chapter titles, and shows the line, column and voice at the cursor below the script
+- Each voice name keeps its own color in the editor, the Cast panel and the toolbar's voice picker
+- Clicking a tag, or Alt+Enter on it, opens a card to recast a voice, set its volume, listen to or select its part, change a pause or delivery, or respell a word; right-click offers the same
+- Typing [ in a script suggests voices, profiles, pauses, delivery and reactions
+- Audiobook and Stories even out voice volume per chapter (on by default), and Cast sets a −12 to +12 dB volume per voice; local renders reassemble chapters from takes already made
+- The finished audiobook plays from a compact card with chapter marks, chapter skips and speed; Open reader shows the whole text, follows the voice word by word, and plays from any word you click
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
 - Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
 - Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books

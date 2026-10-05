@@ -102,6 +102,31 @@ it('inserts a chapter heading with the next chapter number', () => {
   expect(script().value).toBe('# Chapter 1\nText\n\n# Chapter 2\n');
 });
 
+it('shows each voice of the script in its own color', async () => {
+  render(
+    <MarkupToolbar
+      getTarget={() => null}
+      disabled={false}
+      profiles={[]}
+      scriptNames={['Mara', 'Ben']}
+      voiceCast={{}}
+      onVoiceCast={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: /^Voice/ }));
+  const swatch = async (name: string) =>
+    (await screen.findByRole('button', { name: new RegExp(`^${name}`) })).firstElementChild;
+  expect(await swatch('Mara')).toHaveClass('bg-sky-400');
+  expect(await swatch('Ben')).toHaveClass('bg-amber-400');
+});
+
+it('explains clicking a tag and typing [ in the markup guide', async () => {
+  render(<Editor initial="" />);
+  fireEvent.click(screen.getByRole('button', { name: 'Markup reference' }));
+  expect(await screen.findByText(/press Alt\+Enter with the cursor on it/)).toBeVisible();
+  expect(screen.getByText('Type [ for suggestions of every tag.')).toBeVisible();
+});
+
 it('highlights markup behind the text', () => {
   const { container } = render(<Editor initial="Hi [pause 1s] [voice:Mara]there [oops]" />);
   const kinds = [...container.querySelectorAll('mark')].map((mark) => [

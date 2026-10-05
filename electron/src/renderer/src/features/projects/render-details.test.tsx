@@ -23,7 +23,7 @@ const record: RenderRecord = {
     lines: 18,
     words: 9322,
     speeds: [0.95],
-    options: { line_gap_ms: 250, seed: 7 },
+    options: { line_gap_ms: 250, seed: 7, level_voices: true, voice_gains: { Mara: 3 } },
   },
 };
 
@@ -48,7 +48,9 @@ it('shows how the render was made, and says so plainly when an old render has no
   const view = render(<RenderDetails render={record} />);
   expect(screen.getByText('Jake (fine-tune)')).toBeVisible();
   expect(screen.getByText('9 chapters · 18 lines · 9322 words')).toBeVisible();
-  expect(screen.getByText('Gap between lines 250 · Seed 7')).toBeVisible();
+  expect(
+    screen.getByText('Gap between lines 250 · Seed 7 · Even out voice volume Enabled'),
+  ).toBeVisible();
   expect(screen.getByText('MP3')).toBeVisible();
   view.unmount();
   render(<RenderDetails render={{ job_id: 'old', output: 'x.mp3' }} />);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -37,6 +37,7 @@ export function ProductionSettings({
     unitDisplay: 'short',
   });
   const [open, setOpen] = useState(false);
+  const levelingHint = useId();
   const engines = useQuery({
     queryKey: ['longform-tts-capabilities'],
     queryFn: ({ signal }) =>
@@ -79,6 +80,21 @@ export function ProductionSettings({
           onCheckedChange={(postprocess) => onChange({ ...value, postprocess })}
         />
       </label>
+      <div className="space-y-1">
+        <label className="flex items-center justify-between gap-2 text-xs">
+          {t('leveling.auto')}
+          <Switch
+            disabled={disabled}
+            // Overrides saved before leveling existed have no field: on.
+            checked={value.levelVoices !== false}
+            aria-describedby={levelingHint}
+            onCheckedChange={(levelVoices) => onChange({ ...value, levelVoices })}
+          />
+        </label>
+        <p id={levelingHint} className="text-xs leading-relaxed text-muted-foreground">
+          {t('leveling.auto_hint')}
+        </p>
+      </div>
       <label
         className="flex items-center justify-between gap-2 text-xs"
         title={t('audiobook.vary_repeats_help')}

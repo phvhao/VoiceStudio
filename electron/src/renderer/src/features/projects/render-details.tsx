@@ -71,6 +71,7 @@ const OPTION_LABELS: Record<string, string> = {
   line_gap_ms: 'audiobook.line_gap',
   paragraph_gap_ms: 'audiobook.paragraph_gap',
   trim_edges: 'audiobook.trim_edges',
+  level_voices: 'leveling.auto',
 };
 
 /** "How it was made" for one finished render; older renders have no summary. */

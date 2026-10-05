@@ -511,8 +511,11 @@ class TaskExecutor:
                       join=row.get("join") if row.get("join") in ("continue", "paragraph") else None)
                  for i, row in enumerate(rows)]
         sample_rate = int(getattr(backend, "sample_rate", 0) or 24_000)
+        # A span's voice_id here is its row index, so voice leveling groups
+        # spans by the voice name each row carries ('' = the default voice).
         audio, _duration = synthesize_chapter(
             spans, synth, sample_rate, lexicon=params.get("lexicon"),
+            voice_names=[str(row.get("voice") or "") for row in rows],
             **opts.join_kwargs(),
         )
         return _mark(audio, sample_rate, params)

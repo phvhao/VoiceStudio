@@ -42,7 +42,8 @@ import { cn } from '@/lib/utils';
 import { reorder } from '@shared/utils/storyReorder';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupToolbar, type MarkupTarget } from './markup-toolbar';
-import { MarkupContextMenu } from './markup-context-menu';
+import { MarkupEditorTools } from './markup-editor-tools';
+import { VOICE_ACCENTS } from './voice-palette';
 import type { Draft } from './longform-session';
 interface Props {
   draft: Draft;
@@ -54,18 +55,9 @@ interface Props {
 }
 type Line = Draft['lines'][number];
 
-// One accent per cast member, in cast order, so a dialogue scans by speaker.
-// Literal class names: Tailwind only generates what it can see in source.
-const CHARACTER_ACCENTS = [
-  { border: 'border-l-sky-400', dot: 'bg-sky-400' },
-  { border: 'border-l-amber-400', dot: 'bg-amber-400' },
-  { border: 'border-l-emerald-400', dot: 'bg-emerald-400' },
-  { border: 'border-l-fuchsia-400', dot: 'bg-fuchsia-400' },
-  { border: 'border-l-orange-400', dot: 'bg-orange-400' },
-  { border: 'border-l-teal-400', dot: 'bg-teal-400' },
-  { border: 'border-l-rose-400', dot: 'bg-rose-400' },
-  { border: 'border-l-indigo-400', dot: 'bg-indigo-400' },
-] as const;
+// One accent per cast member, in cast order, so a dialogue scans by speaker;
+// the same palette colors voices in the editors.
+const CHARACTER_ACCENTS = VOICE_ACCENTS.map(({ border, dot }) => ({ border, dot }));
 const NO_ACCENT = { border: 'border-l-border/60', dot: 'bg-muted-foreground/40' };
 
 function characterAccent(cast: Draft['cast'], characterId?: string) {
@@ -272,6 +264,7 @@ export function StoryEditor({
     () => parseCastNames(draft.lines.map((line) => line.text).join('\n')),
     [draft.lines],
   );
+  const defaultVoiceName = profiles.find((profile) => profile.id === draft.voice)?.name;
   const audition = async (line: Line) => {
     if (disabled || !canSynthesize || controller.current) return;
     const current = new AbortController();
@@ -724,16 +717,20 @@ export function StoryEditor({
               )}
               {lineActions(line, index)}
             </div>
-            <MarkupContextMenu
+            <MarkupEditorTools
               getTarget={() => {
                 const element = lineInputs.current.get(line.id);
                 return element ? { element, setText: (text) => update(line.id, { text }) } : null;
               }}
               disabled={disabled}
+              lineVoices
               profiles={profiles}
               scriptNames={scriptNames}
               voiceCast={draft.voiceCast}
               onVoiceCast={(voiceCast) => onChange({ voiceCast })}
+              voiceGains={draft.voiceGains}
+              onVoiceGains={(voiceGains) => onChange({ voiceGains })}
+              defaultVoiceName={defaultVoiceName}
               onChapter={() => addChapter(line.id)}
             >
               <MarkupTextarea
@@ -743,6 +740,7 @@ export function StoryEditor({
                 }}
                 autoGrow
                 rows={2}
+                voices={scriptNames}
                 aria-label={t('stories.linePlaceholder')}
                 placeholder={t('stories.linePlaceholder')}
                 textClassName="px-3 pt-1 pb-3 text-sm leading-6 placeholder:text-muted-foreground/50"
@@ -750,7 +748,7 @@ export function StoryEditor({
                 disabled={disabled}
                 onValueChange={(text) => update(line.id, { text })}
               />
-            </MarkupContextMenu>
+            </MarkupEditorTools>
             {preview?.id === line.id && (
               <div className="px-3 pb-3">
                 <WaveformPlayer
