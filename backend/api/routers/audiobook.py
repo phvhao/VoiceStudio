@@ -961,6 +961,7 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
     import hashlib
 
     from services import gpu_gateway
+    from services.chunked_tts import PHRASE_SPLIT_REVISION
     from services.text_normalization import normalize_for_tts
     from services.watermark import is_enabled as watermark_enabled
 
@@ -985,8 +986,13 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
         "language": language, "lexicon": lexicon,
         "expressive": opts.to_manifest(), "watermark": bool(watermark_enabled()),
     }
+    # The worker cuts the phrases, so the splitter's revision keys the result
+    # too (it is not part of the manifest the worker receives).
+    phrase_split = ({"phrase_split": PHRASE_SPLIT_REVISION}
+                    if opts.punctuation_pauses is not None or opts.split_commas else {})
+
     def _signature(ref_audio: list) -> str:
-        payload = {**params, "ref_audio": ref_audio}
+        payload = {**params, **phrase_split, "ref_audio": ref_audio}
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
     # Keyed by the data-dir-relative reference path, like the local chapter

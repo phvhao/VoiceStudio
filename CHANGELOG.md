@@ -24,7 +24,7 @@ metadata and the backend fallback mirror it.
 - Script editors get a right-click menu: cut, copy and paste, every markup insert, and changing or removing the tag under the cursor
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
 - Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
-- Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written
+- Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books
 
 ## [0.5.7] — 2026-10-05
 

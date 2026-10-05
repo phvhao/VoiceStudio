@@ -89,10 +89,17 @@ def test_chapter_key_golden_unchanged_by_segment_layer():
     assert key == "ce2accacf51a70d04da0"
 
 
-def test_inline_override_text_never_replays_a_pre_resolution_render(monkeypatch):
-    """Renders made before longform resolved [[…]] spoke the brackets; text
-    carrying an override must key away from them, while every other text keeps
-    the exact key its existing cache was written under."""
+@pytest.mark.parametrize("rule, affected", [
+    # Before longform resolved [[…]] the brackets were spoken.
+    ("has_inline_overrides", "Say [[gif|jiff]]."),
+    # Before the quote/caps rules “đừng read as "dừng" and MÙA THU was spelled.
+    ("changed_by_quote_and_caps_rules", "“đừng cầu”"),
+    ("changed_by_quote_and_caps_rules", "MÙA THU tới."),
+])
+def test_text_a_reading_change_affects_never_replays_an_older_render(monkeypatch, rule,
+                                                                     affected):
+    """Text a reading change rewrites must key away from audio cached before
+    it, while every other text keeps the exact key its cache was written under."""
     import services.longform_render as lr
 
     def keys(text):
@@ -103,12 +110,13 @@ def test_inline_override_text_never_replays_a_pre_resolution_render(monkeypatch)
                               engine_id="eng", voice_sig={"": _SIG}),
         )
 
-    current = {t: keys(t) for t in ("Say [[gif|jiff]].", "Plain [text] here.")}
-    monkeypatch.setattr(lr, "has_inline_overrides", lambda _text: False)
+    plain = "Plain [text] here, USA and NASA."
+    current = {t: keys(t) for t in (affected, plain)}
+    monkeypatch.setattr(lr, rule, lambda _text: False)
     before = {t: keys(t) for t in current}
-    assert current["Plain [text] here."] == before["Plain [text] here."]
-    seg_now, chap_now = current["Say [[gif|jiff]]."]
-    seg_old, chap_old = before["Say [[gif|jiff]]."]
+    assert current[plain] == before[plain]
+    seg_now, chap_now = current[affected]
+    seg_old, chap_old = before[affected]
     assert seg_now != seg_old and chap_now != chap_old
 
 

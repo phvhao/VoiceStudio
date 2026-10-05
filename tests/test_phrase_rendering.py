@@ -155,6 +155,50 @@ def test_phrase_pauses_count_against_the_chapter_silence_budget():
                            punctuation_pauses={"sentence": 5000})
 
 
+_SPLIT_CORPUS = [
+    SEASONS,
+    "One. Two... Three; four: five, six!",
+    "\n".join(["Three pillars:", "(1) change yourself", "", "(2) attitude,", "is all."]),
+    'He said "Go." Then left. Dr. Smith paid 3.5 dollars at 10:30 sharp.',
+    "Sow–reap is the law. She laughed [sigh. no] then left; it was 1,000 days.",
+    "你好。世界！",
+    ("word " * 30).strip() + ", " + ("word " * 30).strip() + ".",
+]
+#: ``split_into_phrases`` output over ``_SPLIT_CORPUS`` per PHRASE_SPLIT_REVISION.
+_SPLIT_FINGERPRINTS = {2: "bd6d24f320b25872"}
+
+
+def _split_fingerprint() -> str:
+    import hashlib
+    import json
+
+    out = [split_into_phrases(text, split_commas=commas)
+           for text in _SPLIT_CORPUS for commas in (False, True)]
+    raw = json.dumps(out, ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+
+def test_a_change_to_the_phrases_bumps_the_split_revision():
+    """Cached chapters are keyed by the split revision, not the splitter's
+    code: phrases that change under the same revision replay old audio (a new
+    line-break rule rendered nothing until the revision moved)."""
+    from services.chunked_tts import PHRASE_SPLIT_REVISION
+
+    assert _SPLIT_FINGERPRINTS.get(PHRASE_SPLIT_REVISION) == _split_fingerprint(), (
+        "split_into_phrases now returns different phrases: bump "
+        "PHRASE_SPLIT_REVISION and record the new fingerprint here")
+
+
+def test_the_split_revision_keys_phrase_rendered_chapters_only(monkeypatch):
+    from services import chunked_tts
+
+    phrased = ExpressiveOptions(punctuation_pauses=(("sentence", 300),))
+    before = phrased.cache_signature()
+    monkeypatch.setattr(chunked_tts, "PHRASE_SPLIT_REVISION", 99)
+    assert phrased.cache_signature() != before
+    assert "phrase_split" not in ExpressiveOptions(seed=5).cache_signature()
+
+
 def test_default_options_keep_their_cache_signature_and_manifest_round_trips():
     assert ExpressiveOptions().cache_signature() == ""
     opts = ExpressiveOptions(punctuation_pauses=(("comma", 90), ("sentence", 300)),

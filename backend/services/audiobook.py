@@ -167,9 +167,12 @@ class ExpressiveOptions:
         # Phrase rendering and the speech check change the audio, so they key
         # the caches — but only when on, so every existing key stays as it was.
         if self.punctuation_pauses is not None or self.split_commas:
+            from services.chunked_tts import PHRASE_SPLIT_REVISION
+
             payload["punctuation_pauses"] = (dict(self.punctuation_pauses)
                                              if self.punctuation_pauses is not None else None)
             payload["split_commas"] = self.split_commas
+            payload["phrase_split"] = PHRASE_SPLIT_REVISION
         if self.verify_speech:
             payload["verify_speech"] = True
         return json.dumps(payload, sort_keys=True, ensure_ascii=False)

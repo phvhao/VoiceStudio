@@ -206,6 +206,11 @@ DEFAULT_PUNCTUATION_PAUSES = {
 #: Longest phrase sent to the engine in one call (~9-13 s of speech for
 #: spaced scripts; dense scripts are scaled down by ``_effective_max_chars``).
 PHRASE_MAX_CHARS = 200
+#: Revision of :func:`split_into_phrases`, folded into the long-form cache keys
+#: of phrase-rendered chapters so a render cut under older rules is never
+#: replayed. Bump it whenever the phrases it returns change (2: a line break
+#: ends a phrase); ``tests/test_phrase_rendering.py`` fails until you do.
+PHRASE_SPLIT_REVISION = 2
 
 # One candidate boundary: a run of one punctuation family. Fullwidth forms are
 # escapes to keep the repo's no-literal-CJK gate clean. Linear: each branch is

@@ -436,6 +436,14 @@ def _lowercase_shouted_words(text: str) -> str:
     return "".join(out)
 
 
+def changed_by_quote_and_caps_rules(text: str) -> bool:
+    """True when dropping double quotes or lowering shouted words rewrites
+    ``text`` — long-form cache keys use it so audio rendered before those rules
+    is not replayed for exactly the lines they now read differently."""
+    return any(_outside_brackets(text, fn) != text
+               for fn in (_drop_double_quotes, _lowercase_shouted_words))
+
+
 # ── Abbreviation expansion ────────────────────────────────────────────────────
 #
 # Per-language (key, expansion, guard) triples. Matching is case-sensitive

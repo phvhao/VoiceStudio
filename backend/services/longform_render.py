@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from services.pronunciation import has_inline_overrides
+from services.text_normalization import changed_by_quote_and_caps_rules
 
 _BITRATE_RE = re.compile(r"^\d{2,3}k$")
 #: Default ceiling for the content-addressed chapter cache. Above this, the
@@ -128,6 +129,22 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
 #: that carries an override include this marker so those older renders are
 #: never replayed. Text without one keeps its byte-identical key.
 INLINE_OVERRIDES_RENDER = 1
+#: Same idea for the reading rules that drop double quotes and lower shouted
+#: words (``text_normalization``): text they rewrite was spoken differently
+#: before them, so its keys carry this marker.
+QUOTE_CAPS_RULES_RENDER = 1
+
+
+def _render_rule_markers(texts: Iterable[str]) -> dict:
+    """Markers for reading changes that older cached audio predates — only for
+    the text a change actually affects, so every other key stays as it was."""
+    texts = [t or "" for t in texts]
+    markers = {}
+    if any(has_inline_overrides(t) for t in texts):
+        markers["inline_overrides"] = INLINE_OVERRIDES_RENDER
+    if any(changed_by_quote_and_caps_rules(t) for t in texts):
+        markers["quote_caps_rules"] = QUOTE_CAPS_RULES_RENDER
+    return markers
 
 
 def chapter_cache_key(
@@ -158,8 +175,7 @@ def chapter_cache_key(
                   + ([s[4]] if len(s) > 4 and s[4] else []) for s in spans],
         "voices": {k: voice_sig[k] for k in sorted(voice_sig)} if voice_sig else {},
     }
-    if any(has_inline_overrides(s[1]) for s in spans):
-        payload["inline_overrides"] = INLINE_OVERRIDES_RENDER
+    payload.update(_render_rule_markers(s[1] for s in spans))
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     # Content-addressing only — not a security digest. usedforsecurity=False
     # keeps bandit's B324 (weak-hash) check quiet.
@@ -393,8 +409,7 @@ def segment_cache_key(
         # Absent when 0 so the derivation is byte-identical to pre-#1208 for
         # every normal (non-vary_repeats) render.
         payload["nonce"] = int(nonce)
-    if has_inline_overrides(text):
-        payload["inline_overrides"] = INLINE_OVERRIDES_RENDER
+    payload.update(_render_rule_markers([text]))
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     # Content-addressing only — not a security digest (see chapter_cache_key).
     return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
