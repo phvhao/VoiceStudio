@@ -548,6 +548,10 @@ export function MarkupToolbar({
             </dt>
             <dd className="text-muted-foreground">{t('markup.guide_chapter')}</dd>
             <dt>
+              <Swatch kind="section">## …</Swatch>
+            </dt>
+            <dd className="text-muted-foreground">{t('book.guide_section')}</dd>
+            <dt>
               <Swatch kind="unknown">[other]</Swatch>
             </dt>
             <dd className="text-muted-foreground">{t('markup.guide_unknown')}</dd>

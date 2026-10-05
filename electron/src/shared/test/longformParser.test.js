@@ -46,6 +46,8 @@ describe('parseScriptToSpans — guards & rounding', () => {
       '[pause'.repeat(5000),
       '[voice:'.repeat(5000),
       '# \n'.repeat(5000),
+      '## \t'.repeat(5000),
+      '##x \n'.repeat(5000),
       '[a]'.repeat(5000),
     ]) {
       const t0 = Date.now();

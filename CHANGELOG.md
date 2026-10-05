@@ -12,6 +12,7 @@ metadata and the backend fallback mirror it.
 - Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
 - Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
 - Voices in a book come out at the same volume, and each voice can be turned up or down
+- Audiobooks get sections, a Contents panel, sentence-exact highlighting in the reader and an offline HTML export
 
 ### Changed
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
@@ -32,6 +33,14 @@ metadata and the backend fallback mirror it.
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
 - Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
 - Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books
+- Audiobook `## Section` and `### Section` lines open sections inside a chapter: the title is read aloud without the marks and never resets the voice; chapters containing such lines re-render once
+- A Contents panel beside the Audiobook editor lists chapters and sections, jumps to a heading, renames, adds or removes headings, shows whether each chapter is rendered or changed since the last book, and renders one chapter on its own
+- Export HTML saves a finished audiobook as an offline web page with its audio: contents, the full text following the voice, speed and keyboard controls
+- The reader moves to each sentence exactly when the voice reaches it in newly rendered books and follows the words as rendered; older books keep estimated timing and say so
+- The Audiobook default voice and every Cast name are picked from the searchable voice picker, and a Cast name can go back to the default voice
+- Render details name every reading setting: per-voice volume, per-mark pauses, comma splitting and the speech check
+- [voice:default] reads in the book's default voice in any case: Cast no longer lists it, its volume is the default voice's, and the editor colors it as the default voice
+- Plain-text and EPUB imports with CRLF or CR line endings no longer leave stray carriage returns in chapter text
 
 ## [0.5.7] — 2026-10-05
 

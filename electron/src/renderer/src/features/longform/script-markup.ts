@@ -1,4 +1,5 @@
 import { TAGS } from '@shared/utils/constants';
+import { isDefaultVoiceName } from '@shared/utils/audiobookScript';
 
 /**
  * Script markup for Stories and Audiobook: the editing side of the longform
@@ -29,6 +30,7 @@ export const VOICE_RESET_TOKEN = '[voice:]';
 export type MarkupKind =
   | 'text'
   | 'heading'
+  | 'section'
   | 'voice'
   | 'voiceReset'
   | 'pause'
@@ -50,6 +52,9 @@ const TOKEN_RE = /\[\[[^\]]{0,256}\]\]|\[[^\][]*\]/g;
 const PRONUNCIATION_RE = /^\[\[[^\]]{0,256}\]\]$/;
 // H1 chapter heading, same shape as longform_parser._HEADING_RE.
 const HEADING_RE = /^[ \t]*#[ \t]+\S.*$/gm;
+// A `## Section` / `### Section` line (longform_parser._SECTION_RE): group 1 is
+// its marks; the title after them is spoken, and its tags work as anywhere.
+const SECTION_RE = /^([ \t]*(#{2,3})[ \t]+)(\S.*)$/gm;
 const VOICE_RE = /^\[voice:([^\][]*)\]$/;
 const PAUSE_RE = /^\[\s*pause(?:\s+(\d+(?:\.\d+)?)(?:\s*(ms|s))?)?\s*\]$/i;
 const DELIVERY_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
@@ -60,8 +65,8 @@ export function classifyToken(token: string): MarkupKind {
   const voice = VOICE_RE.exec(token);
   if (voice) {
     const name = voice[1].trim();
-    // Stories wrote `[voice:default]` before `[voice:]`; both reset.
-    return name === '' || name === 'default' ? 'voiceReset' : 'voice';
+    // Stories wrote `[voice:default]` before `[voice:]`; both reset, in any case.
+    return isDefaultVoiceName(name) ? 'voiceReset' : 'voice';
   }
   if (PAUSE_RE.test(token)) return 'pause';
   if (DELIVERY_RE.test(token)) return 'delivery';
@@ -82,7 +87,7 @@ export function tokenizeMarkup(text: string, { headings = false } = {}): MarkupS
     if (last && kind === 'text' && last.kind === 'text') last.text += value;
     else segments.push({ text: value, kind });
   };
-  const scan = (chunk: string) => {
+  const tags = (chunk: string) => {
     let cursor = 0;
     for (const match of chunk.matchAll(TOKEN_RE)) {
       push(chunk.slice(cursor, match.index), 'text');
@@ -92,9 +97,19 @@ export function tokenizeMarkup(text: string, { headings = false } = {}): MarkupS
     push(chunk.slice(cursor), 'text');
   };
   if (!headings) {
-    scan(text);
+    tags(text);
     return segments;
   }
+  // Between chapter headings, a section line's marks are a segment of their own.
+  const scan = (chunk: string) => {
+    let cursor = 0;
+    for (const match of chunk.matchAll(SECTION_RE)) {
+      tags(chunk.slice(cursor, match.index));
+      push(match[1], 'section');
+      cursor = match.index + match[1].length;
+    }
+    tags(chunk.slice(cursor));
+  };
   let cursor = 0;
   for (const match of text.matchAll(HEADING_RE)) {
     scan(text.slice(cursor, match.index));
@@ -273,7 +288,7 @@ export function voiceToken(name: string): string {
 /** The name in a `[voice:NAME]` tag; `null` for the resets and for any other text. */
 export function voiceName(token: string): string | null {
   const name = VOICE_RE.exec(token)?.[1].trim();
-  return name && name !== 'default' ? name : null;
+  return name && !isDefaultVoiceName(name) ? name : null;
 }
 
 /**
@@ -339,7 +354,7 @@ export function castNameForProfile(
   cast: Record<string, string>,
 ): string {
   const taken = (name: string) =>
-    name.toLowerCase() === 'default' || (Object.hasOwn(cast, name) && cast[name] !== profile.id);
+    isDefaultVoiceName(name) || (Object.hasOwn(cast, name) && cast[name] !== profile.id);
   const base = sanitizeCastName(profile.name) || profile.id;
   if (!taken(base)) return base;
   const existing = Object.keys(cast).find((name) => cast[name] === profile.id && !taken(name));
@@ -386,7 +401,7 @@ export function previewPassage(text: string, start: number, end: number): string
   const chapter = heading ? lead.slice(heading.index + heading[0].length) : lead;
   const voice = [...chapter.matchAll(VOICE_TOKEN_RE)].pop();
   const name = voice?.[1].trim();
-  return name && name !== 'default' && !passage.startsWith('[voice:')
+  return name && !isDefaultVoiceName(name) && !passage.startsWith('[voice:')
     ? `${voiceToken(name)} ${passage}`
     : passage;
 }
@@ -434,7 +449,7 @@ export function voiceSwitches(text: string, { headings = false } = {}): VoiceSwi
     for (const match of text.slice(from, to).matchAll(VOICE_TOKEN_RE)) {
       const offset = from + match.index;
       const name = match[1].trim();
-      const reset = name === '' || name === 'default';
+      const reset = isDefaultVoiceName(name);
       switches.push({
         offset,
         end: offset + match[0].length,
@@ -497,7 +512,7 @@ export interface MarkupToken {
   start: number;
   end: number;
   text: string;
-  kind: Exclude<MarkupKind, 'text' | 'heading'>;
+  kind: Exclude<MarkupKind, 'text' | 'heading' | 'section'>;
 }
 
 const HEADING_LINE_RE = new RegExp(HEADING_RE.source);

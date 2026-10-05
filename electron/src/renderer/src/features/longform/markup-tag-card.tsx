@@ -147,7 +147,7 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
   // The voice a `[voice:NAME]` switches to; the resets and other tags have none.
   const name = voiceName(token.text);
   // A reset hands the text to the default voice, whose volume is kept under ''.
-  const gainKey = name === null ? '' : voiceGainKey(name, voiceCast);
+  const gainKey = name === null ? '' : voiceGainKey(name);
   const section = (): [number, number] | null => {
     const element = getTarget()?.element;
     return element ? voiceSection(element.value, token, { headings }) : null;

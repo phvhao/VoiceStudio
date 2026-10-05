@@ -59,6 +59,7 @@ GET /audio/{audio_id}.ogg
 GET /audio/{audio_id}.opus
 GET /audio/{audio_id}/quality
 GET /audiobook/jobs
+GET /audiobook/timeline/{output}
 GET /batch/download/{job_id}/{lang}
 GET /batch/jobs
 GET /batch/jobs/{job_id}
@@ -199,7 +200,9 @@ POST /archetypes/previews/check
 POST /archetypes/{archetype_id}/use
 POST /audiobook
 POST /audiobook/cover
+POST /audiobook/export/html
 POST /audiobook/import
+POST /audiobook/outline
 POST /audiobook/plan
 POST /audiobook/preview
 POST /audiobook/resume/{job_id}

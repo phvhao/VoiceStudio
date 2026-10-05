@@ -444,23 +444,30 @@ class TaskExecutor:
         )
         await report.loading(1.0, "model ready")
         await report.progress(0.05, "synthesising chapter")
+        timing: list = []
         audio = await self._bounded_thread(
             self._synthesize_audiobook,
             backend,
             spans,
             voices,
             params,
+            timing,
             timeout=run_budget, code="EXECUTION_TIMEOUT", what="Audiobook chapter",
         )
         await report.progress(0.9, "encoding")
         payload, meta = await self._thread_call(
             self._encode, audio, params, backend
         )
+        if timing:
+            payload, meta = _with_timeline(payload, meta, timing[0])
         await report.progress(1.0, "done")
         return {"meta": meta, "payload": payload}
 
     @staticmethod
-    def _synthesize_audiobook(backend, rows: list[dict], voices: list[dict], params: dict):
+    def _synthesize_audiobook(backend, rows: list[dict], voices: list[dict], params: dict,
+                              timing: list | None = None):
+        """Render one chapter; ``timing`` (when given) receives its timing
+        document, as :func:`services.audiobook.synthesize_chapter` measures it."""
         from services.audiobook import ExpressiveOptions, Span, segment_seed, synthesize_chapter
         from services.tts_backend import OmniVoiceBackend
 
@@ -516,6 +523,7 @@ class TaskExecutor:
         audio, _duration = synthesize_chapter(
             spans, synth, sample_rate, lexicon=params.get("lexicon"),
             voice_names=[str(row.get("voice") or "") for row in rows],
+            timing=timing,
             **opts.join_kwargs(),
         )
         return _mark(audio, sample_rate, params)
@@ -1356,6 +1364,26 @@ def _mark(audio, sample_rate: int, params: dict):
         # stripped-down worker install still must not lose the audio.
         logger.warning("Provenance marking unavailable on this worker", exc_info=True)
         return audio
+
+
+def _with_timeline(payload: bytes, meta: dict, doc: dict) -> tuple[bytes, dict]:
+    """The chapter WAV with its timing document inside it.
+
+    A result carries one file, so the timing rides in a RIFF chunk of its own
+    (``services.longform_render.embed_timeline_chunk``) that every audio
+    reader skips; the control plane reads it back for the book's timeline.
+    The document counts frames, and the file plays them at the rate it
+    declares. Best-effort: on any failure the chapter is timed as a whole.
+    """
+    try:
+        from services.longform_render import embed_timeline_chunk  # noqa: PLC0415
+
+        rate = int(meta.get("sample_rate") or doc["sample_rate"])
+        payload = embed_timeline_chunk(payload, dict(doc, sample_rate=rate))
+    except Exception:
+        logger.warning("Could not attach the chapter timing", exc_info=True)
+        return payload, meta
+    return payload, dict(meta, bytes=len(payload), inline=len(payload) <= INLINE_LIMIT_BYTES)
 
 
 def _parse_params(raw: str) -> dict[str, Any]:

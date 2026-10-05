@@ -231,7 +231,7 @@ export function renderBody(mode: Mode, draft: Draft) {
   // removed name must not move the cache key.
   const voice_gains = voiceGainsToRequest(draft.voiceGains, [
     '',
-    ...names.map((name) => voiceGainKey(name, draft.voiceCast)),
+    ...names.map((name) => voiceGainKey(name)),
   ]);
   const common = {
     ...overridesToRequest(draft.overrides, draft.language),

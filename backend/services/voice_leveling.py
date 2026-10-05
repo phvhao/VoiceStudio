@@ -50,13 +50,14 @@ def span_voice_name(voice_id: Optional[str], default_voice: Optional[str] = None
 
     The parser writes the default voice's profile id into every run without a
     tag and after ``[voice:]``, and Stories writes a line's profile id;
-    ``[voice:default]`` reads in the default voice too unless the cast gives
-    that name a voice of its own. The editor keys volumes by the same rule
-    (``voiceGainKey`` in ``electron/src/shared/utils/longformOverrides.js``).
+    ``[voice:default]``, in any case, reads in the default voice too unless an
+    API caller's cast gives that name a voice of its own. The editor never
+    casts it and keys its volume under ``''`` (``voiceGainKey`` in
+    ``electron/src/shared/utils/longformOverrides.js``).
     """
     if not voice_id or voice_id == default_voice:
         return ""
-    if voice_id == "default" and not (voice_map or {}).get("default"):
+    if voice_id.lower() == "default" and not (voice_map or {}).get(voice_id):
         return ""
     return voice_id
 

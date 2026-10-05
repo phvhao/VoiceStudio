@@ -11,6 +11,7 @@ import {
   type VoiceGains,
 } from '@shared/utils/longformOverrides';
 import { DEFAULT_VOICE_ACCENT, voiceAccent } from './voice-palette';
+import { VoicePicker, type VoiceProfile } from './voice-picker';
 
 /** A voice's color, as its tags and lane show it in the editor. */
 function Swatch({ className }: { className: string }) {
@@ -88,6 +89,7 @@ export function CastSettings({
   cast,
   profiles,
   disabled,
+  loading,
   onChange,
   voiceGains,
   onVoiceGains,
@@ -102,17 +104,18 @@ export function CastSettings({
    */
   voices?: readonly string[];
   cast: Record<string, string>;
-  profiles: { id: string; name: string }[];
+  profiles: VoiceProfile[];
   disabled: boolean;
+  /** The profiles are still loading: a cast voice is not missing yet. */
+  loading?: boolean;
   onChange: (cast: Record<string, string>) => void;
   /** Volume per voice; with `onVoiceGains`, the default voice and every name get a volume control. */
   voiceGains?: VoiceGains;
   onVoiceGains?: (gains: VoiceGains) => void;
-  /** The default voice's profile name, shown on its volume row. */
+  /** The default voice's profile name: on its volume row, and what an uncast name reads in. */
   defaultVoiceName?: string;
 }) {
   const { t } = useTranslation();
-  const gainText = useVoiceGainText();
   const volume = (key: string, name: string) =>
     onVoiceGains && (
       <VoiceGainControl
@@ -144,62 +147,33 @@ export function CastSettings({
         <p className="text-xs text-muted-foreground">{t('audiobook.cast_empty')}</p>
       )}
       {names.map((name) => {
-        // `[voice:default]` shares the default voice's volume unless it is cast.
-        const gainKey = voiceGainKey(name, cast);
-        const gain = voiceGain(voiceGains, gainKey);
+        // `[voice:default]` reads in, and shares the volume of, the default voice.
+        const gainKey = voiceGainKey(name);
         return (
-          <details key={name} className="space-y-2">
-            <summary className="cursor-pointer text-sm">
-              {/* An uncast `[voice:default]` reads in the default voice, as the editor shows it. */}
+          <div key={name} role="group" aria-label={name} className="space-y-1.5">
+            <p className="flex items-center text-sm">
+              {/* `[voice:default]` reads in the default voice, as the editor shows it. */}
               <Swatch
                 className={gainKey ? voiceAccent(name, voices).dot : DEFAULT_VOICE_ACCENT.dot}
               />
-              <span className="font-medium">{name}</span>
-              <span className="ml-2 text-xs text-muted-foreground">
-                {castVoice(cast, name)
-                  ? profiles.find((profile) => profile.id === castVoice(cast, name))?.name ||
-                    t('modelSettings.unavailable')
-                  : t('audiobook.cast_uses_default')}
-              </span>
-              {onVoiceGains && gain !== 0 && (
-                <span className="ml-2 text-xs text-muted-foreground tabular-nums">
-                  {gainText(gain)}
-                </span>
-              )}
-            </summary>
+              <span className="truncate font-medium">{name}</span>
+            </p>
+            <VoicePicker
+              value={castVoice(cast, name) || null}
+              onChange={(id) => {
+                const next = { ...cast };
+                if (id) next[name] = id;
+                else delete next[name];
+                onChange(next);
+              }}
+              profiles={profiles}
+              disabled={disabled}
+              loading={loading}
+              defaultOption={{ label: t('audiobook.cast_uses_default'), detail: defaultVoiceName }}
+              aria-label={t('editor.voice_for', { name })}
+            />
             {volume(gainKey, name)}
-            <div
-              className="max-h-48 space-y-1 overflow-y-auto"
-              role="group"
-              aria-label={(title ?? t('audiobook.cast')) + ': ' + name}
-            >
-              <Button
-                size="sm"
-                className="w-full justify-start"
-                variant={!castVoice(cast, name) ? 'secondary' : 'ghost'}
-                disabled={disabled}
-                onClick={() => {
-                  const next = { ...cast };
-                  delete next[name];
-                  onChange(next);
-                }}
-              >
-                {t('stories.defaultVoice')}
-              </Button>
-              {profiles.map((profile) => (
-                <Button
-                  key={profile.id}
-                  className="w-full justify-start"
-                  size="sm"
-                  variant={castVoice(cast, name) === profile.id ? 'secondary' : 'ghost'}
-                  disabled={disabled}
-                  onClick={() => onChange({ ...cast, [name]: profile.id })}
-                >
-                  {profile.name}
-                </Button>
-              ))}
-            </div>
-          </details>
+          </div>
         );
       })}
     </details>

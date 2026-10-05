@@ -1,4 +1,5 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { BookOpenTextIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -10,8 +11,9 @@ import {
   type MediaPlayerInstance,
 } from '@/components/media-player';
 import { Button } from '@/components/ui/button';
+import { ApiError, apiJson } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
-import { buildLyricsTimeline } from '@shared/utils/audiobookLyrics';
+import { buildLyricsTimeline, type AudiobookTimeline } from '@shared/utils/audiobookLyrics';
 import {
   AudiobookReader,
   ChapterStepButton,
@@ -29,20 +31,50 @@ import {
 import type { AudiobookRenderChapter } from './longform-session';
 
 /**
+ * The render's timeline sidecar for `output`: exact phrase timings. Null when
+ * the book has none (rendered before timelines, or the file is gone); the
+ * reader then estimates.
+ */
+export async function fetchAudiobookTimeline(
+  output: string,
+  signal?: AbortSignal,
+): Promise<AudiobookTimeline | null> {
+  try {
+    const timeline = await apiJson<AudiobookTimeline>(
+      '/audiobook/timeline/' + encodeURIComponent(output),
+      { signal },
+    );
+    // A sidecar names its book: one naming another file does not time this one.
+    return timeline?.output === undefined || timeline.output === output ? timeline : null;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
  * The finished book on the page: a compact "now playing" card whose reader
  * dialog shares its audio element, so playback carries on as it opens and
- * closes.
+ * closes. With `output` (the book's file name) the highlight follows the
+ * render's timeline sidecar.
  */
 export function SyncedAudiobookPlayer({
   src,
   script,
   chapters,
+  output,
 }: {
   src: string;
   script: string;
   chapters: AudiobookRenderChapter[];
+  output?: string;
 }) {
   const player = useRef<MediaPlayerInstance>(null);
+  const timeline = useQuery({
+    queryKey: ['audiobook-timeline', output],
+    queryFn: ({ signal }) => (output ? fetchAudiobookTimeline(output, signal) : null),
+    enabled: Boolean(output),
+  });
 
   return (
     <StudioMediaPlayer
@@ -54,7 +86,12 @@ export function SyncedAudiobookPlayer({
       className="overflow-hidden rounded-xl border border-border/60 bg-muted/20 shadow-[inset_0_1px_0_rgb(255_255_255/4%)]"
     >
       <MediaProvider loaders={audioLoaders} className="hidden" />
-      <NowPlayingCard player={player} script={script} chapters={chapters} />
+      <NowPlayingCard
+        player={player}
+        script={script}
+        chapters={chapters}
+        timeline={timeline.data ?? null}
+      />
     </StudioMediaPlayer>
   );
 }
@@ -63,18 +100,20 @@ function NowPlayingCard({
   player,
   script,
   chapters,
+  timeline,
 }: {
   player: RefObject<MediaPlayerInstance | null>;
   script: string;
   chapters: AudiobookRenderChapter[];
+  timeline: AudiobookTimeline | null;
 }) {
   const { t } = useTranslation();
   const [reading, setReading] = useState(false);
   const duration = useMediaState('duration');
   const error = useMediaState('error');
   const book = useMemo(
-    () => buildReaderBook(script, buildLyricsTimeline(script, { chapters, duration })),
-    [chapters, duration, script],
+    () => buildReaderBook(script, buildLyricsTimeline(script, { chapters, duration, timeline })),
+    [chapters, duration, script, timeline],
   );
   const steps = book.chapters.length > 1;
 

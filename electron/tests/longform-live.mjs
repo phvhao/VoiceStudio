@@ -33,8 +33,9 @@ try {
   await page.goto(base + '/#/audiobook');
   await page
     .locator('[data-slot=secondary-sidebar]')
-    .getByRole('button', { name: profile.name, exact: true })
+    .getByRole('combobox', { name: 'Default voice', exact: true })
     .click();
+  await page.getByRole('option', { name: profile.name, exact: true }).click();
   await page
     .getByRole('textbox', { name: 'Script', exact: true })
     .fill(
@@ -42,7 +43,6 @@ try {
     );
   await page.getByText('Production overrides', { exact: true }).click();
   await page.getByLabel('Seed', { exact: true }).fill('0');
-  await page.getByRole('button', { name: 'Preview plan', exact: true }).click();
   await page.getByRole('button', { name: 'Preview chapter: Verification', exact: true }).click();
   await page.getByRole('button', { name: 'Play', exact: true }).waitFor({ timeout: 120000 });
   await page.getByRole('button', { name: 'Play', exact: true }).click();

@@ -1,5 +1,6 @@
 import type { ReactNode, Ref } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import '@/i18n';
 
@@ -80,6 +81,13 @@ vi.mock('@/components/media-player', async () => {
   };
 });
 
+const api = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/api/client', async (original) => ({
+  ...(await original<typeof import('@/lib/api/client')>()),
+  apiJson: api,
+}));
+
+import { ApiError } from '@/lib/api/client';
 import { SyncedAudiobookPlayer } from './synced-audiobook-player';
 
 // Two seconds a word: Alpha 0, beta. 2, Gamma 4, delta. 6 | Epsilon 8, zeta 10, eta. 12.
@@ -111,8 +119,19 @@ afterEach(() => {
   Reflect.deleteProperty(document, 'caretRangeFromPoint');
 });
 
-const renderPlayer = () =>
-  render(<SyncedAudiobookPlayer src="/api/audio/book.m4b" script={script} chapters={chapters} />);
+const renderPlayer = (output?: string) =>
+  render(
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <SyncedAudiobookPlayer
+        src="/api/audio/book.m4b"
+        script={script}
+        chapters={chapters}
+        output={output}
+      />
+    </QueryClientProvider>,
+  );
 const advance = (time: number) => act(() => media.set({ currentTime: time }));
 async function openReader() {
   fireEvent.click(screen.getByRole('button', { name: 'Open reader' }));
@@ -270,4 +289,86 @@ it('plays, pauses and skips from the keyboard, leaving the seek bar its own arro
   expect(media.get('currentTime')).toBe(0);
   fireEvent.keyDown(pane, { key: ' ' });
   expect(media.instance.pause).toHaveBeenCalledOnce();
+});
+
+// The render's timeline: chapter One timed take by take, with silences
+// between; chapter Two known only by its span.
+const sidecar = {
+  version: 1,
+  output: 'audiobook_one.m4b',
+  duration: 14,
+  chapters: [
+    {
+      title: 'One',
+      start: 0,
+      end: 8,
+      precision: 'phrase',
+      phrases: [
+        { text: 'Alpha beta.', start: 1, end: 3, voice: null },
+        { text: 'Gamma delta.', start: 5, end: 7, voice: null },
+      ],
+    },
+    {
+      title: 'Two',
+      start: 8,
+      end: 14,
+      precision: 'span',
+      phrases: [{ text: 'Epsilon zeta eta.', start: 8.5, end: 13, voice: null }],
+    },
+  ],
+};
+
+it('follows the timeline sidecar exactly, phrase by phrase', async () => {
+  api.mockResolvedValue(sidecar);
+  renderPlayer('audiobook_one.m4b');
+  expect(api).toHaveBeenCalledWith(
+    '/audiobook/timeline/audiobook_one.m4b',
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  const { dialog, pane } = await openReader();
+  // Before the first take starts nothing is lit.
+  await waitFor(() => expect(within(pane).queryByText('Alpha')).toBeNull());
+  expect(pane.querySelector('[aria-current]')).toBeNull();
+  // A phrase-timed chapter needs no estimate note.
+  expect(within(dialog).queryByText(/Word timing is estimated/)).toBeNull();
+
+  advance(1);
+  expect(within(pane).getByText('Alpha')).toHaveAttribute('aria-current', 'true');
+  advance(4); // the silence after the first take: it stays lit
+  expect(within(pane).getByText('beta.')).toHaveAttribute('aria-current', 'true');
+  expect(within(pane).getByText('beta.').parentElement).toHaveClass('bg-primary/10');
+  advance(5); // the next take, to the millisecond
+  expect(within(pane).getByText('Gamma')).toHaveAttribute('aria-current', 'true');
+  expect(within(pane).getByText('Alpha beta.')).not.toHaveClass('bg-primary/10');
+
+  fireEvent.click(within(pane).getByText('delta.'));
+  expect(media.get('currentTime')).toBeCloseTo(6.001, 6);
+
+  advance(9); // chapter Two is only timed by its span
+  expect(within(dialog).getByText(/Word timing is estimated/)).toBeVisible();
+});
+
+it('estimates the timing when the book has no timeline', async () => {
+  api.mockRejectedValue(new ApiError(404, 'Not found'));
+  renderPlayer('audiobook_old.m4b');
+  await waitFor(() => expect(api).toHaveBeenCalledOnce());
+  await act(async () => {});
+  const { dialog, pane } = await openReader();
+  // Two seconds a word, from the stream's chapter durations.
+  expect(within(pane).getByText('Alpha')).toHaveAttribute('aria-current', 'true');
+  expect(within(dialog).getByText(/Word timing is estimated/)).toBeVisible();
+});
+
+it('ignores a timeline written for another file and asks for none without an output', async () => {
+  api.mockResolvedValue({ ...sidecar, output: 'audiobook_two.m4b' });
+  renderPlayer('audiobook_one.m4b');
+  await waitFor(() => expect(api).toHaveBeenCalledOnce());
+  await act(async () => {});
+  const { dialog, pane } = await openReader();
+  expect(within(pane).getByText('Alpha')).toHaveAttribute('aria-current', 'true');
+  expect(within(dialog).getByText(/Word timing is estimated/)).toBeVisible();
+
+  api.mockClear();
+  renderPlayer();
+  expect(api).not.toHaveBeenCalled();
 });

@@ -23,6 +23,7 @@ ingestion, the streaming synth job + UI are deferred follow-ups.
 from __future__ import annotations
 
 import json
+import re
 import zlib
 from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Sequence
@@ -304,12 +305,21 @@ class Span:
     #: line ends here — line gap. Emitted only when set, so every existing plan,
     #: manifest and cache key is byte-identical.
     join: Optional[str] = None
+    #: The ``## Title`` / ``### Title`` section this span opens (the title as
+    #: written) and its level (2 or 3); ``None`` on every other span. Read by
+    #: the outline, the rendered timeline and the HTML export — never by
+    #: synthesis, so no cache key sees it. Emitted only when set.
+    section: Optional[str] = None
+    section_level: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = {"voice_id": self.voice_id, "text": self.text,
              "pause_ms_after": self.pause_ms_after, "speed": self.speed}
         if self.join:
             d["join"] = self.join
+        if self.section is not None:
+            d["section"] = self.section
+            d["section_level"] = self.section_level
         return d
 
 
@@ -419,10 +429,24 @@ def _gap_after_span(span: Span, line_gap_ms: int, paragraph_gap_ms: int) -> int:
     return line_gap_ms
 
 
-def _join_with_gap(parts: list, sample_rate: int, gap_ms: int):
-    """Hard-concat rendered paragraphs with ``gap_ms`` of silence between them."""
+def _join_with_gap(parts: list, sample_rate: int, gap_ms: int, starts: Optional[list] = None):
+    """Hard-concat rendered paragraphs with ``gap_ms`` of silence between them.
+
+    ``starts`` (a list the caller owns) receives where each part begins in the
+    result, in samples — ``None`` for a part that was empty."""
     import torch
 
+    n = int(sample_rate * gap_ms / 1000.0)
+    if starts is not None:
+        cursor = 0
+        for p in parts:
+            if p is None or p.shape[-1] == 0:
+                starts.append(None)
+                continue
+            if cursor and n > 0:
+                cursor += n
+            starts.append(cursor)
+            cursor += p.shape[-1]
     parts = [p for p in parts if p is not None and p.shape[-1] > 0]
     if not parts:
         return None
@@ -430,7 +454,6 @@ def _join_with_gap(parts: list, sample_rate: int, gap_ms: int):
         return parts[0]
     from services.chunked_tts import concatenate_audio_chunks
 
-    n = int(sample_rate * gap_ms / 1000.0)
     ref = parts[0]
     out: list = []
     for i, part in enumerate(parts):
@@ -438,6 +461,30 @@ def _join_with_gap(parts: list, sample_rate: int, gap_ms: int):
             out.append(torch.zeros(*ref.shape[:-1], n, dtype=ref.dtype, device=ref.device))
         out.append(part)
     return concatenate_audio_chunks(out, sample_rate, crossfade_ms=0)
+
+
+def _span_units(text: str, *, paragraph_gap_ms: int = 0,
+                punctuation_pauses: Optional[dict] = None,
+                split_commas: bool = False) -> list:
+    """How one span's spoken text is cut into engine takes: per paragraph
+    (when a paragraph gap is asked for), ``(takes, silence after each take)``
+    — the phrases of a phrase-by-phrase render, else today's <=800-char chunks
+    joined by the crossfade (``None``)."""
+    from services.chunked_tts import (split_into_phrases, split_paragraphs,
+                                      split_text_into_chunks)
+
+    if not text:
+        return []
+    paragraphs = (split_paragraphs(text) if paragraph_gap_ms > 0 else []) or [text]
+    units = []
+    for paragraph in paragraphs:
+        if punctuation_pauses is not None:
+            phrases = split_into_phrases(paragraph, punctuation_pauses,
+                                         split_commas=split_commas)
+            units.append(([p for p, _ in phrases], [ms for _, ms in phrases]))
+        else:
+            units.append((split_text_into_chunks(paragraph), None))
+    return units
 
 
 def _accepts_attempt(synth) -> bool:
@@ -468,6 +515,7 @@ def synthesize_chapter(
     level_voices: bool = False,
     voice_gains: Optional[dict] = None,
     voice_names: Optional[Sequence[str]] = None,
+    timing: Optional[list] = None,
 ):
     """Render a chapter's spans to one waveform via an injected ``synth``.
 
@@ -503,6 +551,12 @@ def synthesize_chapter(
     turning it on or changing a volume re-assembles a chapter without
     synthesizing again. Silence is untouched.
 
+    ``timing`` (a list the caller owns) receives the chapter's timing
+    document: where every take sits in the returned audio, measured after
+    every trim and join (see :func:`chapter_timing_doc`). The segment cache
+    keeps each span's take ranges next to its WAV; a span loaded from a
+    segment cached before that is timed as a whole.
+
     Returns ``(audio_tensor, duration_seconds)``. torch + chunked_tts are
     imported lazily so this module stays import-light for the pure parser path.
     """
@@ -510,12 +564,8 @@ def synthesize_chapter(
     from core.render_trace import call as trace_call
     from services.chunked_tts import (concatenate_audio_chunks,
                                       join_phrases,
-                                      join_rendered_chunks,
-                                      split_into_phrases,
-                                      split_text_into_chunks)
+                                      join_rendered_chunks)
     from services.pronunciation import apply_inline_overrides, apply_lexicon
-
-    from services.chunked_tts import split_paragraphs
 
     if voice_names is None:
         voice_names = [span.voice_id or "" for span in spans]
@@ -534,24 +584,13 @@ def synthesize_chapter(
         # Same order as apply_pronunciation: lexicon first, then the script's
         # own [[word|respelling]] overrides, so an inline override always wins.
         text = apply_inline_overrides(apply_lexicon(span.text, lexicon)) if span.text else ""
-        paragraphs = (split_paragraphs(text) if paragraph_gap_ms > 0 else []) or [text]
-        if not span.text:
-            paragraphs = []
-        # Each paragraph becomes (takes, silence after each take): the phrases
-        # of a phrase-by-phrase render, else today's <=800-char chunks joined
-        # by the crossfade (``None``).
-        units = []
-        for paragraph in paragraphs:
-            if punctuation_pauses is not None:
-                phrases = split_into_phrases(paragraph, punctuation_pauses,
-                                             split_commas=split_commas)
-                units.append(([p for p, _ in phrases], [ms for _, ms in phrases]))
-            else:
-                units.append((split_text_into_chunks(paragraph), None))
+        units = _span_units(text, paragraph_gap_ms=paragraph_gap_ms,
+                            punctuation_pauses=punctuation_pauses,
+                            split_commas=split_commas)
         paragraphs_by_span.append(units)
         if span.text:
             total_join_ms += sum(sum(gaps) for _, gaps in units if gaps)
-            total_join_ms += planned_gap_ms + max(0, len(paragraphs) - 1) * paragraph_gap_ms
+            total_join_ms += planned_gap_ms + max(0, len(units) - 1) * paragraph_gap_ms
             if total_join_ms > MAX_JOIN_SILENCE_MS:
                 raise ValueError(
                     "Requested join silence exceeds 15 minutes in one chapter; "
@@ -577,19 +616,27 @@ def synthesize_chapter(
             return trace_call("synthesis", synth, text, span.voice_id, span.speed)
         return verifier.render(text, take) if verifier is not None else take(0)
 
-    for span, paragraphs, voice in zip(spans, paragraphs_by_span, voice_names):
+    # Take ranges inside each span's audio, by the index of its "a" item:
+    # ``[[take index, start, end], …]`` in samples, ``None`` where unknown.
+    span_timing: dict = {}
+    for index, (span, paragraphs, voice) in enumerate(zip(spans, paragraphs_by_span, voice_names)):
         if span.text:
             occ_key = (span.voice_id, span.text, getattr(span, "speed", None))
             occ = occ_counts.get(occ_key, 0)
             occ_counts[occ_key] = occ + 1
             audio = trace_call("cache", segment_cache.load, span, nonce=occ) if segment_cache is not None else None
-            if audio is None:
+            units = None
+            if audio is not None:
+                units = _cached_take_ranges(segment_cache, span, occ, audio.shape[-1])
+            else:
                 # A blank line inside one span is a paragraph break: render
                 # each paragraph on its own so the join can put a deliberate
                 # gap there instead of running the paragraphs together.
                 # With no paragraph gap asked for, the span stays ONE engine
                 # call — the pre-existing bytes, seeds and prosody.
                 rendered_paragraphs = []
+                paragraph_ranges = []
+                first_take = 0
                 for chunks, gaps in paragraphs:
                     rendered = []
                     for c in chunks:
@@ -600,25 +647,39 @@ def synthesize_chapter(
                     # here both hid them — a chapter would come back short with
                     # nothing said about it — and misaligned `rendered` from
                     # `chunks`, so the concat could not name which text was lost.
+                    ranges: list = []
                     if gaps is not None:
                         joined = join_phrases(rendered, sample_rate, gaps,
-                                              texts=chunks, trim_edges=trim_edges)
+                                              texts=chunks, trim_edges=trim_edges,
+                                              ranges=ranges)
                     else:
                         joined = join_rendered_chunks(rendered, sample_rate,
                                                       crossfade_ms=crossfade_ms,
-                                                      texts=chunks, trim_edges=trim_edges)
+                                                      texts=chunks, trim_edges=trim_edges,
+                                                      ranges=ranges)
                     if joined is not None:
                         rendered_paragraphs.append(joined)
+                        paragraph_ranges.append([(first_take + k, a, b) for k, a, b in ranges])
+                    first_take += len(chunks)
+                starts: list = []
                 audio = _join_with_gap(
                     rendered_paragraphs, sample_rate,
-                    paragraph_gap_ms)
+                    paragraph_gap_ms, starts=starts)
+                if audio is not None:
+                    units = [[k, start + a, start + b]
+                             for start, ranges in zip(starts, paragraph_ranges)
+                             if start is not None for k, a, b in ranges if b > a] or None
                 if audio is not None and segment_cache is not None:
                     trace_call("cache", segment_cache.store, span, audio, nonce=occ)
+                    if units and hasattr(segment_cache, "store_timing"):
+                        segment_cache.store_timing(span, units, nonce=occ,
+                                                   samples=audio.shape[-1])
             if audio is not None:
                 if pending_gap_ms > 0:
                     n = int(sample_rate * pending_gap_ms / 1000.0)
                     if n > 0:
                         items.append(("s", n, None))
+                span_timing[len(items)] = (index, units)
                 items.append(("a", audio, voice))
                 # What follows this span: nothing in the middle of a line that
                 # inline markup split, the paragraph gap where a blank line sat
@@ -632,6 +693,9 @@ def synthesize_chapter(
                 items.append(("s", n, None))
 
     if not items:
+        if timing is not None:
+            timing.append(chapter_timing_doc([], sample_rate, 0,
+                                             phrases=punctuation_pauses is not None))
         return torch.zeros(0, dtype=torch.float32), 0.0
     if level_voices or voice_gains:
         from services.voice_leveling import apply_gain, voice_gains_db
@@ -657,7 +721,215 @@ def synthesize_chapter(
     ]
     # Hard-concat spans + silences (crossfading silence would bleed the gap).
     audio = parts[0] if len(parts) == 1 else concatenate_audio_chunks(parts, sample_rate, crossfade_ms=0)
+    if timing is not None:
+        # Leveling scales takes and never changes a length, so each span
+        # starts where the lengths before it add up to.
+        entries, cursor = [], 0
+        for i, part in enumerate(parts):
+            if i in span_timing:
+                index, units = span_timing[i]
+                entries.append({
+                    "span": index, "start": cursor, "end": cursor + part.shape[-1],
+                    "units": [[k, cursor + a, cursor + b] for k, a, b in units] if units else None,
+                })
+            cursor += part.shape[-1]
+        if cursor == audio.shape[-1]:
+            timing.append(chapter_timing_doc(entries, sample_rate, cursor,
+                                             phrases=punctuation_pauses is not None))
     return audio, audio.shape[-1] / float(sample_rate)
+
+
+def _cached_take_ranges(segment_cache, span, nonce: int, samples: int) -> Optional[list]:
+    """Take ranges kept with a cached segment, or ``None`` (a segment cached
+    before timing was kept, or a cache that keeps none)."""
+    load = getattr(segment_cache, "load_timing", None)
+    if load is None:
+        return None
+    try:
+        units = load(span, nonce, samples=samples)
+    except Exception:  # noqa: BLE001 — timing is a nicety; the audio is what counts
+        return None
+    from services.longform_render import valid_segment_timing
+
+    return valid_segment_timing(
+        {"version": TIMELINE_VERSION, "samples": samples, "units": units}, samples)
+
+
+def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: bool) -> dict:
+    """The timing document of one rendered chapter (version 1).
+
+    ``spans`` lists every span that put audio in the chapter: ``{"span":
+    index in the chapter, "start", "end", "units": [[take index, start, end],
+    …] | None}`` in samples of the chapter audio, ``samples`` long at
+    ``sample_rate``. A take index counts the span's takes in order across its
+    paragraphs (a take the engine returned nothing for has no range).
+    ``phrases`` says the takes are sentences and clauses (phrase-by-phrase
+    reading) rather than <=800-character chunks; ``units`` is ``None`` for a
+    span only known as a whole.
+    """
+    return {"version": TIMELINE_VERSION, "sample_rate": int(sample_rate),
+            "samples": int(samples), "phrases": bool(phrases), "spans": spans}
+
+
+# ── Rendered timeline (what the reader highlights) ──────────────────────────
+
+#: A single-bracket tag left in span text ([laugh], [sigh]…): read by the
+#: engine, never shown. ``[[…]]`` overrides are resolved before this applies.
+_TAG_RE = re.compile(r"\[[^\[\]\n]{0,256}\]")
+_SPACE_RE = re.compile(r"\s+")
+
+
+def _written_overrides(text: str) -> str:
+    """``text`` with each ``[[word|respelling]]`` shown as ``word`` (and
+    ``[[respelling]]`` as ``respelling``): what the script says, not what the
+    engine was told to say."""
+    from services.pronunciation import _INLINE_RE
+
+    if not text or "[[" not in text:
+        return text or ""
+    return _INLINE_RE.sub(lambda m: m.group(1).split("|", 1)[0], text)
+
+
+def _display_text(text: str) -> str:
+    """Take text as the listener reads it: tags removed, whitespace collapsed."""
+    return _SPACE_RE.sub(" ", _TAG_RE.sub(" ", text or "")).strip()
+
+
+def _take_texts(text: str, **split) -> list:
+    return [take for takes, _ in _span_units(text, **split) for take in takes]
+
+
+def span_display_takes(original: str, normalized: str, *, lexicon: Optional[dict] = None,
+                       **split) -> list:
+    """The display text of each take of one span, by take index.
+
+    The span's ``original`` text (as the parser wrote it) is cut with the same
+    rules as the text the engine spoke — ``normalized`` text with the lexicon
+    and inline overrides applied — and paired with it take by take. When the
+    two cut differently (normalization spelled a number out, the lexicon
+    added a full stop), the normalized text is cut instead, overrides still
+    shown as written, and failing that the spoken takes themselves.
+    ``split`` is :func:`_span_units`' keywords.
+    """
+    from services.pronunciation import apply_inline_overrides, apply_lexicon
+
+    spoken = _take_texts(apply_inline_overrides(apply_lexicon(normalized, lexicon)), **split)
+    for candidate in (original, normalized):
+        takes = _take_texts(_written_overrides(candidate), **split)
+        if len(takes) == len(spoken):
+            return [_display_text(t) for t in takes]
+    return [_display_text(t) for t in spoken]
+
+
+def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] = None,
+                  voice_map: Optional[dict] = None, language: Optional[str] = None,
+                  lexicon: Optional[dict] = None,
+                  opts: Optional[ExpressiveOptions] = None) -> dict:
+    """The rendered-timeline sidecar of a finished book (version 1).
+
+    ``chapters`` lists what the file holds, in order: ``(chapter, duration
+    seconds, timing document or None[, cache key])`` — the plan's
+    :class:`Chapter`, its exact audio length, what :func:`synthesize_chapter`
+    measured, and the name of the cached chapter audio it came from (kept as
+    ``key``, so the outline can tell which chapters changed since this book).
+    Times are seconds in the output file, rounded to 1 ms. A chapter's
+    precision is ``"phrase"`` when every take of it is known, ``"span"`` when
+    some span is only known as a whole (a segment cached before timing was
+    kept, or <=800-character chunks), and ``"chapter"`` when nothing inside it
+    is known: its text is then one entry per section, timed by its share of
+    the characters.
+
+    ``sections`` lists the chapter's ``##``/``###`` headings in order:
+    ``{"title", "level", "start", "phrase"}`` — the title as the listener reads
+    it, where it is heard, and the index of its first entry in ``phrases``.
+    """
+    from services.text_normalization import normalize_for_tts
+    from services.voice_leveling import span_voice_name
+
+    opts = opts or ExpressiveOptions()
+    split = {"paragraph_gap_ms": opts.paragraph_gap_ms,
+             "punctuation_pauses": (dict(opts.punctuation_pauses)
+                                    if opts.punctuation_pauses is not None else None),
+             "split_commas": opts.split_commas}
+
+    def voice_of(span) -> Optional[str]:
+        return span_voice_name(span.voice_id, default_voice, voice_map) or None
+
+    def entry(text, start, end, voice) -> dict:
+        return {"text": text, "start": round(start, 3), "end": round(end, 3), "voice": voice}
+
+    out, offset = [], 0.0
+    for chapter, duration, timing, *rest in chapters:
+        start, end = offset, offset + float(duration)
+        offset = end
+        spans = list(chapter.spans)
+        if timing is not None and any(not 0 <= s["span"] < len(spans) for s in timing["spans"]):
+            timing = None  # describes another plan — never trust it
+        # Each entry in ``phrases`` and the span it was read from.
+        phrases, owners, precision = [], [], "chapter"
+        if timing is not None:
+            rate = float(timing["sample_rate"])
+            precision = "phrase" if timing["phrases"] else "span"
+            for item in timing["spans"]:
+                span = spans[item["span"]]
+                voice = voice_of(span)
+                if item["units"] is None:
+                    precision = "span"
+                    ranges = [(_display_text(_written_overrides(span.text)),
+                               item["start"], item["end"])]
+                else:
+                    takes = span_display_takes(span.text, normalize_for_tts(span.text, language),
+                                               lexicon=lexicon, **split)
+                    ranges = [(takes[k] if k < len(takes) else "", a, b)
+                              for k, a, b in item["units"]]
+                for text, a, b in ranges:
+                    if text:
+                        phrases.append(entry(text, min(end, start + a / rate),
+                                             min(end, start + b / rate), voice))
+                        owners.append(item["span"])
+        else:
+            # The whole chapter as one entry — or, with sections, each heading
+            # and the text after it as entries of their own — timed by their
+            # share of the chapter's characters.
+            blocks: list = []
+            heading = False
+            for index, span in enumerate(spans):
+                opens = getattr(span, "section", None) is not None
+                if not blocks or opens or heading:
+                    blocks.append((index, []))
+                heading = opens
+                if span.text:
+                    blocks[-1][1].append(span)
+            texts = [_display_text(" ".join(_written_overrides(s.text) for s in block))
+                     for _, block in blocks]
+            total = sum(len(t) for t in texts)
+            at = 0
+            for (first, block), text in zip(blocks, texts):
+                voices = {voice_of(s) for s in block}
+                if text:
+                    phrases.append(entry(text, start + (end - start) * at / total,
+                                         start + (end - start) * (at + len(text)) / total,
+                                         voices.pop() if len(voices) == 1 else None))
+                    owners.append(first)
+                at += len(text)
+        sections = []
+        for index, span in enumerate(spans):
+            if getattr(span, "section", None) is None:
+                continue
+            # Heard from the first entry read at or after its heading.
+            first = next((k for k, owner in enumerate(owners) if owner >= index), None)
+            if first is None:
+                continue
+            sections.append({"title": _display_text(_written_overrides(span.section)),
+                             "level": span.section_level or 2,
+                             "start": phrases[first]["start"], "phrase": first})
+        doc = {"title": chapter.title, "start": round(start, 3), "end": round(end, 3),
+               "precision": precision, "phrases": phrases, "sections": sections}
+        if rest and rest[0]:
+            doc["key"] = str(rest[0])
+        out.append(doc)
+    return {"version": TIMELINE_VERSION, "output": output, "duration": round(offset, 3),
+            "chapters": out}
 
 
 # ── ffmpeg / metadata builders ──────────────────────────────────────────────
@@ -668,6 +940,7 @@ def synthesize_chapter(
 # ``longform_render`` directly to reach global metadata, cover art, loudness,
 # and mp3 output.
 from services.longform_render import (  # noqa: E402
+    TIMELINE_VERSION,
     build_concat_list,
     build_ffmetadata,
     build_render_cmd,

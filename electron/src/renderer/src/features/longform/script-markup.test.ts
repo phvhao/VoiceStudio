@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TAGS } from '@shared/utils/constants';
-import { validateScript } from '@shared/utils/audiobookScript';
+import { parseCastNames, validateScript } from '@shared/utils/audiobookScript';
 import { storyToSpans } from '@shared/utils/storyToSpans';
 import {
   PAUSE_PRESETS,
@@ -74,6 +74,27 @@ describe('tokenizeMarkup', () => {
     expect(tokenizeMarkup('# Title', { headings: false })).toEqual([
       { text: '# Title', kind: 'text' },
     ]);
+    expect(tokenizeMarkup('## Part', { headings: false })).toEqual([
+      { text: '## Part', kind: 'text' },
+    ]);
+  });
+
+  it('marks a section line by its marks, its spoken title keeping its tags', () => {
+    const text = '# One\n  ## Part [voice:Mara] two\n### Deep\n#### body\n##body';
+    const segments = tokenizeMarkup(text, { headings: true });
+    expect(segments.map((segment) => segment.text).join('')).toBe(text);
+    expect(segments).toEqual([
+      { text: '# One', kind: 'heading' },
+      { text: '\n', kind: 'text' },
+      { text: '  ## ', kind: 'section' },
+      { text: 'Part ', kind: 'text' },
+      { text: '[voice:Mara]', kind: 'voice' },
+      { text: ' two\n', kind: 'text' },
+      { text: '### ', kind: 'section' },
+      { text: 'Deep\n#### body\n##body', kind: 'text' },
+    ]);
+    // A section's tags are tags, unlike a chapter heading's.
+    expect(tokenAt(text, text.indexOf('[voice:Mara]') + 2, { headings: true })?.kind).toBe('voice');
   });
 
   it('agrees with the pre-flight validator on which tags are unknown', () => {
@@ -182,6 +203,19 @@ describe('voice switches', () => {
     expect(voiceName('[voice:]')).toBeNull();
     expect(voiceName('[voice:default]')).toBeNull();
     expect(voiceName('Mara')).toBeNull();
+  });
+
+  it('reads [voice:Default] in any case as the default voice, as Cast and the render do', () => {
+    const text = '[voice:Mara] a [voice: Default ] b [voice:DEFAULT] c';
+    expect(parseCastNames(text)).toEqual(['Mara']);
+    expect(voiceName('[voice:Default]')).toBeNull();
+    expect(classifyToken('[voice:DEFAULT]')).toBe('voiceReset');
+    expect(voiceSwitches(text).map((change) => [change.kind, change.voice])).toEqual([
+      ['voice', 'Mara'],
+      ['reset', null],
+      ['reset', null],
+    ]);
+    expect(voiceAt(text, text.indexOf(' b'))).toBeNull();
   });
 });
 

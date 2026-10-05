@@ -1,5 +1,4 @@
 import { readTextFile } from '@shared/utils/readTextFile';
-import { ProfileAvatar } from '@/components/profile-avatar';
 import {
   BookOpenTextIcon,
   FileAudioIcon,
@@ -29,9 +28,11 @@ import { StorySpeed } from './story-speed';
 import { ProjectSettings } from './project-settings';
 import { ProductionSettings } from './production-settings';
 import { PacingSettings, SpeechCheckReport } from './pacing-settings';
-import { ChapterPreviews } from './chapter-previews';
+import { BookOutline } from './book-outline';
+import { ExportHtmlButton } from './html-export';
 import { castVoice } from './cast-map';
 import { CastSettings } from './cast-settings';
+import { VoicePicker } from './voice-picker';
 import {
   parseCastNames,
   scriptStats,
@@ -93,7 +94,10 @@ export function LongformPage({ mode }: { mode: Mode }) {
     words: stats.words,
     runtime: formatRuntimeClock(stats.runtimeSec),
   });
-  const { data: profiles = [] } = useProfiles();
+  const profilesQuery = useProfiles();
+  const { data: profiles = [] } = profilesQuery;
+  // Until the profiles arrive, a chosen voice is unknown, not missing.
+  const profilesLoading = !profilesQuery.isSuccess;
   const [importing, setImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -288,11 +292,6 @@ export function LongformPage({ mode }: { mode: Mode }) {
               >
                 <FingerprintIcon className="size-4 shrink-0" aria-hidden="true" />
                 {t('audiobook.default_voice')}
-                {defaultVoice && (
-                  <span className="ml-auto truncate font-normal text-foreground">
-                    {defaultVoice.name}
-                  </span>
-                )}
               </h2>
               <p
                 className={cn(
@@ -308,21 +307,15 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     : 'stories.default_voice_hint',
                 )}
               </p>
-              {!profiles.length && (
-                <p className="text-xs text-muted-foreground">{t('stories.noProfiles')}</p>
-              )}
-              {profiles.map((profile) => (
-                <Button
-                  key={profile.id}
-                  variant={draft.voice === profile.id ? 'secondary' : 'ghost'}
-                  className="w-full justify-start truncate"
-                  disabled={locked}
-                  onClick={() => set({ voice: profile.id })}
-                >
-                  <ProfileAvatar name={profile.name} className="size-6 shrink-0" />
-                  <span className="truncate">{profile.name}</span>
-                </Button>
-              ))}
+              <VoicePicker
+                value={draft.voice || null}
+                onChange={(voice) => set({ voice })}
+                profiles={profiles}
+                disabled={locked}
+                loading={profilesLoading}
+                attention={blocker === 'default_voice'}
+                aria-label={t('audiobook.default_voice')}
+              />
             </div>
             {mode === 'stories' && <StorySpeed draft={draft} disabled={locked} onChange={set} />}
             <div className="space-y-2">
@@ -368,6 +361,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               cast={draft.voiceCast}
               profiles={profiles}
               disabled={locked}
+              loading={profilesLoading}
               onChange={(voiceCast) => set({ voiceCast })}
               voiceGains={draft.voiceGains}
               onVoiceGains={(voiceGains) => set({ voiceGains })}
@@ -375,11 +369,17 @@ export function LongformPage({ mode }: { mode: Mode }) {
             />
           )}
           {mode === 'audiobook' && (
-            <ChapterPreviews
+            <BookOutline
               draft={draft}
               disabled={locked}
               canPreview={canPreview}
               onBusy={setImporting}
+              getTarget={() =>
+                audiobookInput.current && {
+                  element: audiobookInput.current,
+                  setText: (script) => set({ script }),
+                }
+              }
             />
           )}
           <ProjectSettings
@@ -692,6 +692,13 @@ export function LongformPage({ mode }: { mode: Mode }) {
                         {t('audiobook.download_cues')}
                       </Button>
                     )}
+                    {mode === 'audiobook' && (
+                      <ExportHtmlButton
+                        draft={draft}
+                        disabled={exporting}
+                        onError={setLocalError}
+                      />
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -708,6 +715,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     src={apiPath('/audio/' + encodeURIComponent(draft.output))}
                     script={draft.outputScript}
                     chapters={draft.outputChapters}
+                    output={draft.output}
                   />
                 ) : (
                   <WaveformPlayer

@@ -95,6 +95,8 @@ interface ChapterLayout {
 // Markup the parser drops before speaking: no spoken token comes from it.
 const UNSPOKEN: ReadonlySet<MarkupKind> = new Set([
   'heading',
+  // A section's `##` marks; its title is read aloud.
+  'section',
   'voice',
   'voiceReset',
   'pause',
@@ -113,53 +115,71 @@ function writtenTerm(token: string): string {
   return '\0\0' + term + '\0'.repeat(token.length - 2 - term.length);
 }
 
-/**
- * How each spoken token of each parsed chapter was written: line and
- * paragraph breaks, glued fragments (`[spell]` letters) and display text.
- * The lyrics timeline keeps only the tokens, so this walks the script beside
- * the parser. Null when the walk loses step with it (a grammar drift); the
- * reader then shows plain words.
- */
-function scriptLayout(script: string): ChapterLayout[] | null {
+interface ScriptText {
+  /** Unspoken markup turned to whitespace, for matching the parser's tokens. */
+  spoken: string;
+  /** What the reader shows per character, hidden markup as NUL. */
+  written: string;
+  /** Offsets where a performed tag starts. */
+  tags: Set<number>;
+  /** Characters of bracket tags the parser leaves in the text (performed or unknown). */
+  bracketed: boolean[];
+  /** Offsets where a chapter heading starts. */
+  headings: number[];
+}
+
+// Both strings keep the script's offsets: `spoken` for matching the parser's
+// tokens, `written` for display, markup hidden (so `[slow]so[/slow].` still
+// reads "so.").
+function scriptText(script: string): ScriptText {
   const text = script.replace(/\r\n?/g, '\n');
-  // `spoken` turns unspoken markup into whitespace for matching; `written` is
-  // what the reader shows per character, markup hidden (so `[slow]so[/slow].`
-  // still reads "so."). Both keep the script's offsets.
   let spoken = '';
   let written = '';
   const tags = new Set<number>();
+  const bracketed: boolean[] = [];
+  const headings: number[] = [];
   for (const { text: part, kind } of tokenizeMarkup(text, { headings: true })) {
+    if (kind === 'heading') headings.push(spoken.length);
     if (UNSPOKEN.has(kind)) {
       spoken += ' '.repeat(part.length);
       written += '\0'.repeat(part.length);
-      continue;
+    } else {
+      if (kind === 'expression') tags.add(spoken.length);
+      spoken += part;
+      written += kind === 'pronunciation' ? writtenTerm(part) : part;
     }
-    if (kind === 'expression') tags.add(spoken.length);
-    spoken += part;
-    written += kind === 'pronunciation' ? writtenTerm(part) : part;
+    const tag = kind === 'expression' || kind === 'unknown';
+    for (let i = 0; i < part.length; i++) bracketed.push(tag);
   }
+  return { spoken, written, tags, bracketed, headings };
+}
+
+/** How a word follows the one before it, judged by what is shown between them. */
+function gapOf(between: string): WordGap {
+  const breaks = between.split('\n').length - 1;
+  return breaks > 1 ? 'paragraph' : breaks ? 'line' : WHITESPACE.test(between) ? 'space' : 'joined';
+}
+
+/**
+ * How each spoken token of each parsed chapter was written: line and
+ * paragraph breaks, glued fragments (`[spell]` letters) and display text.
+ * The estimated timeline keeps only the tokens, so this walks the script
+ * beside the parser. Null when the walk loses step with it (a grammar
+ * drift); the reader then shows plain words.
+ */
+function scriptLayout(script: string, { spoken, written, tags }: ScriptText) {
   const layouts: ChapterLayout[] = [];
   let at = 0;
-  for (const { tokens } of scriptChapters(text)) {
+  for (const { tokens } of scriptChapters(script)) {
     const shapes: WordShape[] = [];
     for (const token of tokens) {
       const from = at;
       while (at < spoken.length && WHITESPACE.test(spoken[at])) at++;
       if (!spoken.startsWith(token, at)) return null;
-      // Judge the gap by what is shown: a space inside a hidden respelling
-      // does not part the words around it.
-      const between = written.slice(from, at);
-      const breaks = between.split('\n').length - 1;
+      // A space inside a hidden respelling does not part the words around it.
       shapes.push({
         display: written.slice(at, at + token.length).replaceAll('\0', ''),
-        gap:
-          breaks > 1
-            ? 'paragraph'
-            : breaks
-              ? 'line'
-              : WHITESPACE.test(between)
-                ? 'space'
-                : 'joined',
+        gap: gapOf(written.slice(from, at)),
         tag: tags.has(at),
       });
       at += token.length;
@@ -167,6 +187,105 @@ function scriptLayout(script: string): ChapterLayout[] | null {
     layouts.push({ tokens, shapes });
   }
   return layouts;
+}
+
+/** The shown, non-blank characters of a text, each with where it came from. */
+interface Keyed {
+  keys: string;
+  /** Per key character: its script offset, or the index of its word. */
+  at: number[];
+}
+
+interface WrittenChapter {
+  all: Keyed;
+  /** Without bracket tags: a timeline may leave performed tags out of its text. */
+  bare: Keyed;
+}
+
+/**
+ * Each heading-delimited stretch of the script as the characters a reader
+ * sees. Stretches the parser drops (blank, markup only) stay; pairing by
+ * text passes over them.
+ */
+function writtenChapters({ written, bracketed, headings }: ScriptText): WrittenChapter[] {
+  const bounds = [0, ...headings, written.length];
+  const chapters: WrittenChapter[] = [];
+  for (let c = 0; c + 1 < bounds.length; c++) {
+    const all: Keyed = { keys: '', at: [] };
+    const bare: Keyed = { keys: '', at: [] };
+    for (let i = bounds[c]; i < bounds[c + 1]; i++) {
+      const char = written[i];
+      if (char === '\0' || WHITESPACE.test(char)) continue;
+      all.keys += char;
+      all.at.push(i);
+      if (bracketed[i]) continue;
+      bare.keys += char;
+      bare.at.push(i);
+    }
+    chapters.push({ all, bare });
+  }
+  return chapters;
+}
+
+const BRACKET_TAG = /\[[^\][]*\]/g;
+
+/** The words' non-blank characters, each with the index of its word. */
+function keyedWords(words: readonly AudiobookLyricsWord[], bare: boolean): Keyed {
+  const joined = words.map((word) => word.text).join(' ');
+  const owner: number[] = [];
+  words.forEach((word, k) => {
+    for (let i = 0; i <= word.text.length; i++) owner.push(k);
+  });
+  const hidden = new Set<number>();
+  if (bare) {
+    for (const match of joined.matchAll(BRACKET_TAG)) {
+      for (let i = 0; i < match[0].length; i++) hidden.add(match.index + i);
+    }
+  }
+  const keyed: Keyed = { keys: '', at: [] };
+  for (let i = 0; i < joined.length; i++) {
+    if (hidden.has(i) || WHITESPACE.test(joined[i])) continue;
+    keyed.keys += joined[i];
+    keyed.at.push(owner[i]);
+  }
+  return keyed;
+}
+
+function isTag(word: string): boolean {
+  return tokenizeMarkup(word)[0]?.kind === 'expression';
+}
+
+/**
+ * Shapes for words taken from the render's own text (a timeline sidecar).
+ * They already read as written, so only their breaks come from the script,
+ * found by matching the two character for character. Null when this script
+ * chapter is not the text the words were spoken from.
+ */
+function alignedShapes(
+  written: string,
+  chapter: WrittenChapter,
+  words: readonly AudiobookLyricsWord[],
+): WordShape[] | null {
+  for (const bare of [false, true]) {
+    const script = bare ? chapter.bare : chapter.all;
+    const spoken = keyedWords(words, bare);
+    if (spoken.keys !== script.keys) continue;
+    // First and last script offsets of each word's characters.
+    const first: number[] = [];
+    const last: number[] = [];
+    spoken.at.forEach((word, i) => {
+      first[word] ??= script.at[i];
+      last[word] = script.at[i];
+    });
+    let after = -1;
+    return words.map((word, k) => {
+      const from = first[k];
+      const gap = from === undefined || after < 0 ? 'space' : gapOf(written.slice(after, from));
+      if (from !== undefined) after = last[k] + 1;
+      return { display: word.text, gap, tag: isTag(word.text) };
+    });
+  }
+  return null;
 }
 
 // A run of sentence-final marks — Latin, ellipsis, CJK fullwidth, Devanagari
@@ -224,38 +343,61 @@ function sameTokens(tokens: readonly string[], words: readonly AudiobookLyricsWo
 }
 
 /**
- * Group the lyrics timeline into what the reader shows: sentences (split after
- * sentence-final punctuation and at every line break, as the renderer phrases
- * them) and paragraphs (blank lines and chapter starts).
+ * Group the lyrics timeline into what the reader shows: sentences and
+ * paragraphs (blank lines and chapter starts). Where the render timed every
+ * phrase take, those phrases are the sentences, so the highlight moves
+ * exactly with the voice; elsewhere sentences split after sentence-final
+ * punctuation, as the renderer phrases them. Every line break starts one.
  */
 export function buildReaderBook(script: string, timeline: AudiobookLyricsTimeline): ReaderBook {
-  const layouts = scriptLayout(script) ?? [];
+  const text = scriptText(script);
+  const timed = timeline.chapters.some((chapter) => chapter.precision !== 'estimate');
+  const layouts = timed ? [] : (scriptLayout(script, text) ?? []);
+  const written = timed ? writtenChapters(text) : [];
   const words: ReaderWord[] = [];
   const sentences: ReaderSentence[] = [];
   let nextLayout = 0;
+  let nextWritten = 0;
+  // Failed chapters are missing from the audio and from the timeline: pair
+  // each timed chapter with the next script chapter whose text matches.
+  const shapesFor = (spoken: AudiobookLyricsWord[], estimate: boolean): WordShape[] => {
+    if (estimate) {
+      let match = nextLayout;
+      while (match < layouts.length && !sameTokens(layouts[match].tokens, spoken)) match++;
+      if (match >= layouts.length) return [];
+      nextLayout = match + 1;
+      return layouts[match].shapes;
+    }
+    for (let match = nextWritten; match < written.length; match++) {
+      const shapes = alignedShapes(text.written, written[match], spoken);
+      if (!shapes) continue;
+      nextWritten = match + 1;
+      return shapes;
+    }
+    return [];
+  };
   const chapters = timeline.chapters.map((chapter): ReaderChapter => {
     const spoken = timeline.words.slice(chapter.wordStart, chapter.wordStart + chapter.wordCount);
-    // Failed chapters are missing from the audio and from the timeline: pair
-    // each timed chapter with the next parsed one whose tokens match.
-    let match = nextLayout;
-    while (match < layouts.length && !sameTokens(layouts[match].tokens, spoken)) match++;
-    const layout = layouts[match];
-    if (layout) nextLayout = match + 1;
+    const estimate = chapter.precision === 'estimate';
+    const exact = chapter.precision === 'phrase';
+    const shapes = shapesFor(spoken, estimate);
     const paragraphs: Array<[number, number]> = [];
     // Last shown text of the open sentence: hidden fragments never end one.
     let tail = '';
     spoken.forEach((word, k) => {
-      const shape: WordShape = layout?.shapes[k] ?? {
+      const shape: WordShape = shapes[k] ?? {
         display: word.text,
         gap: 'space',
-        tag: false,
+        tag: !estimate && isTag(word.text),
       };
       const gap = k === 0 ? 'paragraph' : shape.gap;
       if (
         k === 0 ||
         gap === 'line' ||
         gap === 'paragraph' ||
-        (shape.display !== '' && tail !== '' && endsSentence(tail, shape.display))
+        (exact
+          ? word.phrase !== spoken[k - 1].phrase
+          : shape.display !== '' && tail !== '' && endsSentence(tail, shape.display))
       ) {
         if (gap === 'paragraph') paragraphs.push([sentences.length, sentences.length]);
         sentences.push({ start: words.length, end: words.length });
@@ -1145,10 +1287,21 @@ function ReaderFooter({
           <RateMenu player={player} />
         </div>
       </div>
-      <DialogDescription className="text-center text-[11px] text-muted-foreground">
-        {t('reader.estimated')}
-      </DialogDescription>
+      <TimingNote book={book} />
     </div>
+  );
+}
+
+/** Says the highlight is estimated, while the chapter playing was not timed phrase by phrase. */
+function TimingNote({ book }: { book: ReaderBook }) {
+  const { t } = useTranslation();
+  const time = useMediaState('currentTime');
+  const chapter = book.chapters[Math.max(0, chapterAt(book.chapters, time))];
+  if (!chapter || chapter.precision === 'phrase') return null;
+  return (
+    <DialogDescription className="text-center text-[11px] text-muted-foreground">
+      {t('reader.estimated')}
+    </DialogDescription>
   );
 }
 

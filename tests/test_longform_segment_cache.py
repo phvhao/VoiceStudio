@@ -226,8 +226,9 @@ def test_unchanged_chapter_never_touches_segment_files(tmp_path):
     ch = _chapter("First sentence.", "Second sentence.")
     _render_chapter_cached(ch, _counting_synth(calls), _SR, "eng", _resolve, str(tmp_path))
 
-    # Remove the whole segment layer: a chapter-level hit must not need it.
-    for p in (tmp_path / SEGMENT_SUBDIR).glob("*.wav"):
+    # Remove the whole segment layer (WAVs and their timing sidecars): a
+    # chapter-level hit must not need it.
+    for p in (tmp_path / SEGMENT_SUBDIR).glob("*"):
         os.remove(p)
     (tmp_path / SEGMENT_SUBDIR).rmdir()
 

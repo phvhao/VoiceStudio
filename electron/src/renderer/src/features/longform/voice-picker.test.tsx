@@ -187,3 +187,26 @@ it('explains when there are no voices yet', async () => {
   expectOptions();
   expect(screen.getByText(/No voice profiles installed yet/)).toBeInTheDocument();
 });
+
+it('waits for the profiles to load instead of calling the chosen voice missing', () => {
+  const { trigger, rerender, onChange } = renderPicker({
+    value: 'p-dao',
+    profiles: [],
+    loading: true,
+  });
+  expect(trigger).toHaveTextContent('Loading…');
+  expect(trigger).not.toHaveTextContent('Voice not found');
+  expect(trigger).toHaveAttribute('aria-busy', 'true');
+  expect(trigger).toBeDisabled();
+  rerender(
+    <VoicePicker
+      value="p-dao"
+      onChange={onChange}
+      profiles={profiles}
+      aria-label="Default voice"
+    />,
+  );
+  expect(trigger).toHaveTextContent('Đào Lan');
+  expect(trigger).not.toHaveAttribute('aria-busy');
+  expect(trigger).toBeEnabled();
+});

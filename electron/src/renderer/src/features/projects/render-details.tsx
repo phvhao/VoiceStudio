@@ -1,4 +1,7 @@
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { PUNCTUATION_FAMILIES } from '@shared/utils/longformOverrides';
+import { useVoiceGainText } from '../longform/cast-settings';
 
 export interface RenderSummary {
   engine?: string;
@@ -71,12 +74,53 @@ const OPTION_LABELS: Record<string, string> = {
   line_gap_ms: 'audiobook.line_gap',
   paragraph_gap_ms: 'audiobook.paragraph_gap',
   trim_edges: 'audiobook.trim_edges',
+  punctuation_pauses: 'pacing.pauses',
+  split_commas: 'pacing.split_commas',
+  verify_speech: 'pacing.verify',
   level_voices: 'leveling.auto',
+  voice_gains: 'leveling.volume',
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/** One recorded setting as a reader sees it; '' when there is nothing readable to show. */
+function optionText(
+  key: string,
+  value: unknown,
+  t: TFunction,
+  gainText: (db: number) => string,
+): string {
+  if (key === 'voice_gains' || key === 'punctuation_pauses') {
+    if (!isRecord(value)) return '';
+    return Object.entries(value)
+      .filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === 'number' && Number.isFinite(entry[1]),
+      )
+      .map(([name, amount]) => {
+        // Gains are dB by cast name, '' naming the book's default voice;
+        // pauses are milliseconds by punctuation family.
+        if (key === 'voice_gains')
+          return `${name || t('audiobook.default_voice')} ${gainText(amount)}`;
+        const mark = (PUNCTUATION_FAMILIES as readonly string[]).includes(name)
+          ? t(`pacing.mark_${name}`)
+          : name;
+        return `${mark} ${t('engines.latencyMs', { ms: amount })}`;
+      })
+      .join(', ');
+  }
+  if (typeof value === 'boolean')
+    return t(value ? 'pronunciation.enabled' : 'supportPlans.disabled');
+  if (typeof value === 'number' || typeof value === 'string') return String(value);
+  if (Array.isArray(value)) return value.filter((item) => Number.isFinite(item)).join(', ');
+  return '';
+}
 
 /** "How it was made" for one finished render; older renders have no summary. */
 export function RenderDetails({ render }: { render: RenderRecord }) {
   const { t } = useTranslation();
+  const gainText = useVoiceGainText();
   const summary = render.summary;
   if (!summary)
     return <p className="text-xs text-muted-foreground">{t('projects.render_no_details')}</p>;
@@ -84,13 +128,9 @@ export function RenderDetails({ render }: { render: RenderRecord }) {
     summary.options && typeof summary.options === 'object' ? summary.options : {},
   )
     .filter(([key]) => Object.hasOwn(OPTION_LABELS, key))
-    .map(([key, value]) => {
-      const display =
-        typeof value === 'boolean'
-          ? t(value ? 'pronunciation.enabled' : 'supportPlans.disabled')
-          : String(value);
-      return `${t(OPTION_LABELS[key])} ${display}`;
-    })
+    .map(([key, value]) => [key, optionText(key, value, t, gainText)] as const)
+    .filter(([, display]) => display)
+    .map(([key, display]) => `${t(OPTION_LABELS[key])} ${display}`)
     .join(' · ');
   const rows: [string, string][] = [
     [t('projects.render_voice'), voiceLabel(summary)],

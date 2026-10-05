@@ -6,6 +6,11 @@
  *
  * Timing sources, in order (mirrors backend/services/karaoke_ass.py):
  *
+ * 0. The book's timeline sidecar (`GET /audiobook/timeline/{output}`), when
+ *    the render wrote one: the exact start and end of every phrase take
+ *    (sentence or clause), measured while the chapter was assembled. Words
+ *    come from its phrases and are interpolated by character weight inside
+ *    each one. Chapters it could only time coarsely say so in `precision`.
  * 1. Per-chapter durations the render stream already emits (`chapter` SSE
  *    events carry `duration_s`) — no new backend work, no ASR pass. Words
  *    inside a chapter are even-split across its span, exactly like the
@@ -63,10 +68,19 @@ export function scriptChapters(script) {
  * @param {number} [opts.duration]  the audio element's total duration — the
  *   proportional fallback used when stream timings are absent or don't line
  *   up with the script (edited after the render, stopped mid-book, …).
- * @returns {{ chapters: Array<{title, start, end, wordStart, wordCount}>,
- *            words: Array<{text, start, end, chapterIndex}> }}
+ * @param {object} [opts.timeline]  the render's timeline sidecar. When it
+ *   holds any chapter it wins over both estimates, and the words are the
+ *   ones the audio speaks — the script may have changed since.
+ * @returns {{ chapters: Array<{title, start, end, wordStart, wordCount, precision}>,
+ *            words: Array<{text, start, end, chapterIndex, phrase?}>,
+ *            phrases?: Array<{start, end, wordStart, wordCount, chapterIndex, voice}> }}
  */
-export function buildLyricsTimeline(script, { chapters = null, duration = 0 } = {}) {
+export function buildLyricsTimeline(
+  script,
+  { chapters = null, duration = 0, timeline = null } = {},
+) {
+  const sidecar = readTimeline(timeline);
+  if (sidecar) return sidecarLyrics(sidecar);
   const parsed = scriptChapters(script);
   const empty = { chapters: [], words: [] };
   if (!parsed.length) return empty;
@@ -118,7 +132,135 @@ function pushChapter(outChapters, words, parsedChapter, streamTitle, start, end)
     end,
     wordStart,
     wordCount: split.length,
+    precision: 'estimate',
   });
+}
+
+const PRECISIONS = new Set(['phrase', 'span', 'chapter']);
+const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * The usable part of a timeline sidecar (format version 1), or null when it
+ * holds no chapter. Defensive, since it is a file on disk: entries without
+ * finite times are dropped, times are clamped to run forward, and an unknown
+ * precision reads as `"chapter"` (nothing inside the chapter trusted).
+ */
+export function readTimeline(timeline) {
+  if (!timeline || timeline.version !== 1 || !Array.isArray(timeline.chapters)) return null;
+  const chapters = [];
+  let at = 0;
+  for (const chapter of timeline.chapters) {
+    if (!chapter || !finite(chapter.start) || !finite(chapter.end)) continue;
+    const start = Math.max(at, chapter.start);
+    const end = Math.max(start, chapter.end);
+    const phrases = [];
+    let from = start;
+    for (const phrase of Array.isArray(chapter.phrases) ? chapter.phrases : []) {
+      if (!phrase || typeof phrase.text !== 'string') continue;
+      if (!finite(phrase.start) || !finite(phrase.end)) continue;
+      const phraseStart = Math.min(end, Math.max(from, phrase.start));
+      const phraseEnd = Math.min(end, Math.max(phraseStart, phrase.end));
+      phrases.push({
+        text: phrase.text,
+        start: phraseStart,
+        end: phraseEnd,
+        voice: typeof phrase.voice === 'string' ? phrase.voice : null,
+      });
+      from = phraseEnd;
+    }
+    // Its `## Section` headings, where each is heard.
+    const sections = (Array.isArray(chapter.sections) ? chapter.sections : [])
+      .filter((section) => section && typeof section.title === 'string' && finite(section.start))
+      .map((section) => ({
+        title: section.title,
+        level: section.level === 3 ? 3 : 2,
+        start: Math.min(end, Math.max(start, section.start)),
+      }));
+    chapters.push({
+      title: typeof chapter.title === 'string' ? chapter.title : '',
+      start,
+      end,
+      precision: PRECISIONS.has(chapter.precision) ? chapter.precision : 'chapter',
+      phrases,
+      sections,
+    });
+    at = end;
+  }
+  return chapters.length ? { chapters } : null;
+}
+
+// Letters, marks and digits carry the speech; punctuation takes no time.
+const SPOKEN_CHAR = /[\p{L}\p{M}\p{N}]/gu;
+
+/**
+ * Words of one timed phrase over `[start, end]`, each owning a share of it
+ * proportional to its letters. A punctuation-only token (a dash, a lone
+ * quote) spans no time: it starts where the next word starts, so the word —
+ * not the mark — stays lit.
+ */
+export function interpolateWords(text, start, end) {
+  const tokens = String(text || '')
+    .trim()
+    .split(WS)
+    .filter(Boolean);
+  const weights = tokens.map((token) => token.match(SPOKEN_CHAR)?.length ?? 0);
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  if (!total) return evenSplitWords(text, start, end);
+  const per = Math.max(0, end - start) / total;
+  let at = 0;
+  return tokens.map((token, i) => {
+    const word = { text: token, start: start + at * per, end: start + (at + weights[i]) * per };
+    at += weights[i];
+    return word;
+  });
+}
+
+function sidecarLyrics({ chapters }) {
+  const outChapters = [];
+  const words = [];
+  const phrases = [];
+  chapters.forEach(({ title, start, end, precision, phrases: timed, sections }) => {
+    const chapterIndex = outChapters.length;
+    const wordStart = words.length;
+    // Nothing inside the chapter is known: today's even split over it.
+    const units =
+      precision === 'chapter'
+        ? [{ text: timed.map((p) => p.text).join(' '), start, end, voice: null, even: true }]
+        : timed;
+    for (const unit of units) {
+      const phrase = phrases.length;
+      const split = unit.even
+        ? evenSplitWords(unit.text, unit.start, unit.end)
+        : interpolateWords(unit.text, unit.start, unit.end);
+      if (!split.length) continue;
+      phrases.push({
+        start: unit.start,
+        end: unit.end,
+        wordStart: words.length,
+        wordCount: split.length,
+        chapterIndex,
+        voice: unit.voice,
+      });
+      for (const w of split) words.push({ ...w, chapterIndex, phrase });
+    }
+    const wordCount = words.length - wordStart;
+    // Each section from the first word heard at or after its heading.
+    const chapterWords = words.slice(wordStart);
+    const at = (time) => {
+      const index = chapterWords.findIndex((word) => word.start >= time - 1e-6);
+      return wordStart + (index < 0 ? wordCount : index);
+    };
+    outChapters.push({
+      title,
+      start,
+      end,
+      wordStart,
+      wordCount,
+      precision,
+      sections: sections.map((section) => ({ ...section, wordStart: at(section.start) })),
+    });
+  });
+  return { chapters: outChapters, words, phrases };
 }
 
 /**

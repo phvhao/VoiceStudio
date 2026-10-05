@@ -130,7 +130,7 @@
     ]
   },
   {
-    "name": "h2_is_body_not_chapter",
+    "name": "h2_opens_section_not_chapter",
     "input": "# One\nintro\n## Still One\nmore",
     "default_voice": "v1",
     "expected": [
@@ -139,7 +139,23 @@
         "spans": [
           {
             "voice_id": "v1",
-            "text": "intro\n## Still One\nmore",
+            "text": "intro",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "Still One",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Still One",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "more",
             "pause_ms_after": 0,
             "speed": null
           }
@@ -148,7 +164,7 @@
     ]
   },
   {
-    "name": "h3_h6_are_body",
+    "name": "h3_section_h4_h6_are_body",
     "input": "# One\n### deep\n#### deeper\nx",
     "default_voice": "v1",
     "expected": [
@@ -157,7 +173,16 @@
         "spans": [
           {
             "voice_id": "v1",
-            "text": "### deep\n#### deeper\nx",
+            "text": "deep",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "deep",
+            "section_level": 3,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "#### deeper\nx",
             "pause_ms_after": 0,
             "speed": null
           }
@@ -1435,7 +1460,7 @@
   },
   {
     "name": "internal_newline_preserved",
-    "input": "# One\nline a\nline b\n## still one\nline c",
+    "input": "# One\nline a\nline b\n#### still one\nline c",
     "default_voice": "v1",
     "expected": [
       {
@@ -1443,7 +1468,7 @@
         "spans": [
           {
             "voice_id": "v1",
-            "text": "line a\nline b\n## still one\nline c",
+            "text": "line a\nline b\n#### still one\nline c",
             "pause_ms_after": 0,
             "speed": null
           }
@@ -1595,6 +1620,348 @@
           {
             "voice_id": "v1",
             "text": "Two.",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_keeps_voice",
+    "input": "# One\n[voice:A] a\n## Part\nb",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "One",
+        "spans": [
+          {
+            "voice_id": "A",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "A",
+            "text": "Part",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Part",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "A",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_heading_tags_parse",
+    "input": "## Part [voice:B] two\nb",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Part",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Part [voice:B] two",
+            "section_level": 2
+          },
+          {
+            "voice_id": "B",
+            "text": "two",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "B",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_in_intro_chapter",
+    "input": "## Prologue\nintro\n# One\nbody",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Prologue",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Prologue",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "intro",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      },
+      {
+        "title": "One",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "body",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_heading_only_chapter",
+    "input": "# One\n## Only",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "One",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Only",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Only",
+            "section_level": 2
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_needs_title",
+    "input": "##\nx\n## \ny\n##y",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "##\nx\n## \ny\n##y",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_deeper_marks_are_body",
+    "input": "##### five\n###### six",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "##### five\n###### six",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_title_from_next_speaking_span",
+    "input": "## [pause 1s]\ntext",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "",
+            "pause_ms_after": 1000,
+            "speed": null
+          },
+          {
+            "voice_id": "v1",
+            "text": "text",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "[pause 1s]",
+            "section_level": 2
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_after_pause_no_join",
+    "input": "a [pause 1s]\n## T\nb",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 1000,
+            "speed": null
+          },
+          {
+            "voice_id": "v1",
+            "text": "T",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "T",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_last_span_no_join",
+    "input": "a\n## End",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "End",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "End",
+            "section_level": 2
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_crlf",
+    "input": "a\r\n## T\r\nb",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "T",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "T",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_inline_markup_title",
+    "input": "### [slow]Slow[/slow] down\nbody",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Slow",
+            "pause_ms_after": 0,
+            "speed": 0.85,
+            "join": "continue",
+            "section": "[slow]Slow[/slow] down",
+            "section_level": 3
+          },
+          {
+            "voice_id": "v1",
+            "text": "down",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "body",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "section_leading_space_and_tab",
+    "input": "  ##\tSpaced  \nbody",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Spaced",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Spaced",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "body",
             "pause_ms_after": 0,
             "speed": null
           }

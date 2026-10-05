@@ -12,7 +12,9 @@ import { ProfileAvatar } from '@/components/profile-avatar';
 import type { Profile } from '@/lib/api/types';
 import { cn } from '@/lib/utils';
 
-type VoiceProfile = Pick<Profile, 'id' | 'name' | 'kind' | 'image_url'>;
+/** A profile as the picker needs it; a row without `kind` reads as a clone, as the backend reads it. */
+export type VoiceProfile = Pick<Profile, 'id' | 'name'> &
+  Partial<Pick<Profile, 'kind' | 'image_url'>>;
 
 interface VoiceOption {
   value: string;
@@ -88,6 +90,7 @@ export function VoicePicker({
   onChange,
   profiles,
   disabled = false,
+  loading = false,
   defaultOption,
   attention = false,
   placeholder,
@@ -99,6 +102,11 @@ export function VoicePicker({
   onChange(id: string | null): void;
   profiles: VoiceProfile[];
   disabled?: boolean;
+  /**
+   * The profiles are still loading: the chosen voice cannot be looked up yet,
+   * so the trigger waits instead of calling it missing.
+   */
+  loading?: boolean;
   /** Offer a first option meaning "inherit the default voice" (value null). */
   defaultOption?: { label: string; detail?: string };
   /** Nothing chosen and a choice is required: amber attention ring on the trigger. */
@@ -146,10 +154,11 @@ export function VoicePicker({
       // selected name, which would filter the list while it is closed.
       defaultInputValue=""
       autoHighlight
-      disabled={disabled}
+      disabled={disabled || loading}
     >
       <Combobox.Trigger
         aria-label={label}
+        aria-busy={loading || undefined}
         data-attention={attention ? '' : undefined}
         className={cn(
           'flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-left text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-50 data-attention:border-amber-500/70 data-attention:ring-2 data-attention:ring-amber-500/25 dark:bg-input/30 dark:hover:bg-input/50',
@@ -159,13 +168,15 @@ export function VoicePicker({
       >
         {current ? (
           <OptionContent option={current} />
-        ) : value === null ? (
+        ) : value === null || loading ? (
           <>
             <span
               aria-hidden="true"
               className="size-6 shrink-0 rounded-full border border-dashed border-muted-foreground/50"
             />
-            <span className="min-w-0 flex-1 truncate">{placeholderText}</span>
+            <span className="min-w-0 flex-1 truncate">
+              {loading ? t('common.loading') : placeholderText}
+            </span>
           </>
         ) : (
           <>

@@ -104,16 +104,15 @@ def _decode_epub_entry(raw: bytes) -> str:
 def chapterize_plaintext(text: str) -> str:
     """Insert ``# `` headings ahead of obvious chapter-title lines.
 
-    No-op if the text already has Markdown H1 headings (the user has structured
-    it). Otherwise short standalone lines beginning with a chapter keyword
-    (``Chapter 3``, ``Prologue`` …) become headings; body text is preserved with
-    line endings normalized to LF. Text with no detectable breaks falls through
-    as a single chapter.
+    Line endings come back normalized to LF on every path. Text that already
+    has Markdown H1 headings (the user has structured it) is otherwise left as
+    it is; elsewhere short standalone lines beginning with a chapter keyword
+    (``Chapter 3``, ``Prologue`` …) become headings. Text with no detectable
+    breaks falls through as a single chapter.
     """
-    text = text or ""
-    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     if _H1_RE.search(normalized):
-        return text
+        return normalized
     out = []
     for line in normalized.split("\n"):
         s = line.strip()
@@ -237,7 +236,9 @@ class _TextExtractor(HTMLParser):
         self._parts.append(data)
 
     def text(self) -> str:
-        raw = "".join(self._parts)
+        # A document saved with CRLF or bare-CR line ends keeps them in its
+        # text nodes: make them LF before splitting into lines.
+        raw = "".join(self._parts).replace("\r\n", "\n").replace("\r", "\n")
         # Collapse runs of blank lines / trailing spaces into tidy paragraphs.
         lines = [ln.strip() for ln in raw.split("\n")]
         out: list[str] = []

@@ -14,6 +14,9 @@ import { TAGS } from './constants';
 const VOICE_RE = /\[voice:([^\][]*)\]/g;
 // H1 chapter heading (mirrors _HEADING_RE): `# <non-space>…`, multiline.
 const HEADING_RE = /^[ \t]*#[ \t]+(\S.*)$/gm;
+// The `##`/`###` marks of a section line (mirrors _SECTION_RE): `$1` keeps the
+// indent, and the title after them is spoken.
+const SECTION_MARKS_RE = /^([ \t]*)#{2,3}(?=[ \t]+\S)/gm;
 // Any bracket token — used to strip markup before the word count and to
 // enumerate tokens for validation. Non-greedy, no nested brackets.
 const BRACKET_RE = /\[[^\][]*\]/g;
@@ -32,7 +35,8 @@ export const AUDIOBOOK_WPM = 155;
 
 /**
  * Distinct `[voice:NAME]` names present in the script, in first-seen order.
- * Empty `[voice:]` (reset-to-default) is skipped. Names are trimmed.
+ * Names are trimmed. `[voice:]` and `[voice:default]` (any case) are skipped:
+ * both hand the text back to the default voice, so neither is a castable name.
  */
 export function parseCastNames(text) {
   if (!text) return [];
@@ -43,11 +47,17 @@ export function parseCastNames(text) {
   while ((m = re.exec(text)) !== null) {
     const name = (m[1] || '').trim();
     if (re.lastIndex === m.index) re.lastIndex++; // zero-width guard
-    if (!name || seen.has(name)) continue;
+    if (isDefaultVoiceName(name) || seen.has(name)) continue;
     seen.add(name);
     names.push(name);
   }
   return names;
+}
+
+/** True for a `[voice:…]` value that means the default voice: empty, or `default` in any case. */
+export function isDefaultVoiceName(name) {
+  const value = (name || '').trim();
+  return !value || value.toLowerCase() === 'default';
 }
 
 /** Text with every bracket markup token removed (for a spoken-word count). */
@@ -71,8 +81,13 @@ export function scriptStats(text) {
   const norm = (text || '').replace(/\r\n?/g, '\n');
   const headings = norm.match(new RegExp(HEADING_RE.source, HEADING_RE.flags)) || [];
   // Spoken words only: drop `# heading` lines (titles aren't narrated as body,
-  // mirroring the parser) AND bracket markup, then whitespace-split.
-  const spoken = stripMarkup(norm.replace(new RegExp(HEADING_RE.source, HEADING_RE.flags), ' '));
+  // mirroring the parser), the marks of `## section` lines (their titles are
+  // read aloud) AND bracket markup, then whitespace-split.
+  const spoken = stripMarkup(
+    norm
+      .replace(new RegExp(HEADING_RE.source, HEADING_RE.flags), ' ')
+      .replace(new RegExp(SECTION_MARKS_RE.source, SECTION_MARKS_RE.flags), '$1'),
+  );
   const words = spoken.split(/\s+/).filter(Boolean).length;
   const chapters = Math.max(1, headings.length);
   const runtimeSec = words > 0 ? (words / AUDIOBOOK_WPM) * 60 : 0;

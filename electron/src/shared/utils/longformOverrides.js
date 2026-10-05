@@ -1,3 +1,5 @@
+import { isDefaultVoiceName } from './audiobookScript';
+
 /**
  * Silence (ms) after each punctuation family when text is read sentence by
  * sentence. Mirrors backend/services/chunked_tts.py DEFAULT_PUNCTUATION_PAUSES
@@ -41,14 +43,13 @@ export const MAX_VOICE_GAIN_DB = 12;
 
 /**
  * The key a voice's volume is stored and sent under: its `[voice:NAME]` name,
- * or `''` for the book's default voice. `[voice:default]` reads in the default
- * voice unless the cast gives that name a voice of its own; the server levels
- * by the same rule (backend/services/voice_leveling.py span_voice_name).
+ * or `''` for the book's default voice. `[voice:]` and `[voice:default]` (any
+ * case) read in the default voice — the app never casts that name — and the
+ * server levels them by the same rule (backend/services/voice_leveling.py
+ * span_voice_name).
  */
-export function voiceGainKey(name, cast) {
-  const key = (name || '').trim();
-  const castDefault = cast && Object.hasOwn(cast, 'default') && cast.default;
-  return key === 'default' && !castDefault ? '' : key;
+export function voiceGainKey(name) {
+  return isDefaultVoiceName(name) ? '' : name.trim();
 }
 
 /** A volume in dB as stored: within ±MAX_VOICE_GAIN_DB; anything that is not a finite number is 0. */

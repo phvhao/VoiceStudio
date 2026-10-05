@@ -11,6 +11,10 @@ then mux the chapter WAVs into a chapterized **m4b** (FFMETADATA1 chapters via
 pipeline. ffmpeg-gated — without ffmpeg the job reports an error event and
 stops (the m4b is the only output format).
 
+``GET /audiobook/timeline/{output}`` — the rendered timeline of a finished
+book: where each phrase is heard, measured while the chapters were joined
+(``services.audiobook.book_timeline``), for the reader's highlight.
+
 ``GET /audiobook/jobs`` + ``POST /audiobook/resume/{job_id}`` — durable
 crash-resume: an interrupted render persists its plan + params to a
 ``resume.json`` manifest in the job work dir, so it can be resumed later (the
@@ -43,6 +47,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 
 from services.audiobook import (
     ExpressiveOptions,
+    book_timeline,
     punctuation_pause_pairs,
     parse_audiobook_script,
     synthesize_chapter,
@@ -55,7 +60,10 @@ from services.longform_render import (
     build_concat_list,
     build_ffmetadata,
     build_render_cmd,
+    load_chapter_timeline,
     prune_cache_dir,
+    read_json_file,
+    write_json_atomic,
     write_lf_text,
 )
 from services import longform_resume  # pure (no torch) — durable resume manifest
@@ -68,6 +76,17 @@ router = APIRouter()
 # An exact-match allowlist is the strongest barrier (and the one CodeQL's
 # path-injection query recognizes) — anything else is rejected outright.
 _COVER_NAME_RE = re.compile(r"^[0-9a-f]{12}\.(?:jpg|jpeg|png)$")
+# A finished render as _render_longform_sse names it: ``<job type>_<job id>``
+# (the id already reduced to [A-Za-z0-9_-]) + its format. Same exact-match
+# barrier as the cover name.
+_OUTPUT_NAME_RE = re.compile(r"^[a-z]{1,32}_[A-Za-z0-9_-]{1,64}\.(?:m4b|mp3)$")
+#: The rendered timeline of a finished book: ``<output>.timeline.json`` next to it.
+TIMELINE_SIDECAR_SUFFIX = ".timeline.json"
+#: A finished book's HTML export: ``<output>.html.zip`` next to it, rebuilt on
+#: every export and removed with the timeline when a new file takes the name.
+HTML_EXPORT_SUFFIX = ".html.zip"
+# A day-long book is a few MB of timeline; anything far past that is not one.
+_TIMELINE_MAX_BYTES = 64 * 1024 * 1024
 
 
 def _safe_cover_path(cover_path: str | None) -> str | None:
@@ -650,6 +669,34 @@ def _generic_extra_kwargs(opts: ExpressiveOptions) -> dict:
     return kw
 
 
+def _voice_resolver(default_voice: str | None, voice_map: dict | None = None,
+                    lease: "voice_leases.VoiceFileLease | None" = None):
+    """``resolve(voice_id)`` → the profile refs a span's voice token reads,
+    cached per token and per profile; ``lease`` holds each reference file."""
+    cache: dict = {}
+    token_cache: dict = {}
+
+    def resolve(voice_id):
+        # Translate the span token ([voice:NAME] / exact id / None) to a profile
+        # id first (#1217) — the cast fix lives here, not in the parser, so the
+        # parser stays a pure text→plan and exact ids keep working. Cache the
+        # translation so a book of hundreds of same-name spans does one DB check.
+        if voice_id not in token_cache:
+            token_cache[voice_id] = _map_span_voice(voice_id, default_voice, voice_map)
+        key = token_cache[voice_id]
+        if key not in cache:
+            cache[key] = _resolve_voice(key)
+            voice_leases.hold(lease, cache[key].get("ref_audio"))
+        return cache[key]
+
+    return resolve
+
+
+def _omnivoice_sample_rate(model) -> int:
+    """The rate VoiceStudio-model chapters render (and are cached) at."""
+    return getattr(model, "sampling_rate", 24000)
+
+
 def _build_synth(
     default_voice: str | None,
     language: str | None = None,
@@ -679,22 +726,7 @@ def _build_synth(
     from services.tts_backend import OmniVoiceBackend, active_backend_id, get_backend_class
 
     opts = opts or ExpressiveOptions()
-    cache: dict = {}
-    token_cache: dict = {}
-
-    def resolve(voice_id):
-        # Translate the span token ([voice:NAME] / exact id / None) to a profile
-        # id first (#1217) — the cast fix lives here, not in the parser, so the
-        # parser stays a pure text→plan and exact ids keep working. Cache the
-        # translation so a book of hundreds of same-name spans does one DB check.
-        if voice_id not in token_cache:
-            token_cache[voice_id] = _map_span_voice(voice_id, default_voice, voice_map)
-        key = token_cache[voice_id]
-        if key not in cache:
-            cache[key] = _resolve_voice(key)
-            voice_leases.hold(lease, cache[key].get("ref_audio"))
-        return cache[key]
-
+    resolve = _voice_resolver(default_voice, voice_map, lease)
     engine_id = active_backend_id()
     cls = get_backend_class(engine_id)
     if cls is OmniVoiceBackend:
@@ -742,7 +774,7 @@ async def _prepare_synth(
     if info["mode"] == "omnivoice":
         lang = info["language"]
         model = await info["get_model"]()
-        sr = getattr(model, "sampling_rate", 24000)
+        sr = _omnivoice_sample_rate(model)
 
         from services.tts_backend import generate_with_cached_ref
 
@@ -764,61 +796,45 @@ async def _prepare_synth(
     return info["synth"], info["sample_rate"], resolve, engine_id
 
 
-def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, lexicon=None,
-                           language=None, opts=None, voice_map=None, default_voice=None):
-    """Render one chapter, content-addressed so a re-run reuses it (resume).
+@dataclasses.dataclass
+class _ChapterKeys:
+    """What one chapter's cache is keyed by (see :func:`_chapter_cache_keys`)."""
 
-    Returns ``(wav_path, duration_s, was_cached, seg_stats)``. Two cache
-    layers:
+    #: The chapter's spans as synthesis reads them (normalized text).
+    spans: list
+    voice_sigs: dict
+    legacy_voice_sigs: list
+    #: The segment layer's extra signature.
+    seg_extra_sig: str
+    #: The voice each span is leveled under.
+    voice_names: list
+    #: The chapter WAV under the current key, then under every legacy one.
+    wav_path: str
+    legacy_paths: list
+    content_id: str
+    inputs: dict
 
-    * Outer — the WAV at ``cache_dir/<key>.wav`` where ``key`` is
-      :func:`chapter_cache_key` over the chapter's spans + sample rate +
-      engine + each voice's resolved signature (+ the lexicon, so a lexicon
-      edit re-renders). A fully-unchanged chapter hits here and never touches
-      segment files. With invisible watermarking active the key also carries a
-      watermark tag (#1169) — pre-#1169 chapter caches (unmarked audio)
-      deliberately miss once and re-render marked; with watermarking off the
-      derivation is unchanged and released-version caches keep hitting.
-      ``seg_stats`` is ``None``.
-    * Inner — on a chapter miss, each spoken span goes through the
-      :class:`services.longform_render.SegmentCache` under
-      ``cache_dir/segments``: cached segments load from disk, only the
-      edited/missing ones synthesize, and each fresh segment persists the
-      moment it renders (an interrupted chapter resumes from them).
-      ``seg_stats`` is ``{"total": spoken_spans, "cached": reused}``.
 
-    Span text is normalized (``services.text_normalization``) up front — BEFORE
-    either cache key and BEFORE ``synthesize_chapter``'s lexicon pass, so the
-    per-project dictionary operates on normalized text and toggling / changing
-    normalization output naturally invalidates cached chapters and segments.
-
-    Voice leveling (``opts.level_voices`` / ``opts.voice_gains``) keys only the
-    outer layer: it re-balances finished takes, so the segments stay as
-    rendered and a leveling change re-assembles the chapter from them.
-    ``default_voice`` tells which spans the default voice reads for it.
-
-    Runs in the GPU-pool executor.
-    """
+def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=None,
+                        language=None, opts=None, voice_map=None,
+                        default_voice=None) -> _ChapterKeys:
+    """Derive where a chapter's rendered audio is cached — the single
+    derivation the render (:func:`_render_chapter_cached`) and the outline's
+    status (:func:`_chapter_cache_state`) both read, so the two can never
+    disagree about whether a chapter is rendered. Renders nothing; ``resolve``
+    reads voice profiles only."""
     import json
-    import wave
 
-    from services.audio_io import atomic_save_wav
     from services.audiobook import ExpressiveOptions, Span, voice_map_signature
     from services.longform_render import (
-        SegmentCache,
-        adopt_cached_file,
         chapter_cache_key,
         chapter_content_id,
-        explain_chapter_miss,
-        has_chapter_inputs,
-        record_chapter_inputs,
         remember_voices_root,
-        wav_is_complete,
     )
     from core.config import VOICES_DIR
     from services.pronunciation import normalize_lexicon
     from services.text_normalization import normalize_for_tts
-    from services.watermark import mark_synthetic, will_mark
+    from services.watermark import will_mark
 
     opts = opts or ExpressiveOptions()
 
@@ -939,8 +955,71 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
         inputs[f"{label} reference text"] = v.get("ref_text")
         inputs[f"{label} instruct"] = v.get("instruct")
         inputs[f"{label} seed"] = v.get("seed")
+    return _ChapterKeys(spans=spans, voice_sigs=voice_sigs, legacy_voice_sigs=legacy_voice_sigs,
+                        seg_extra_sig=seg_extra_sig, voice_names=voice_names,
+                        wav_path=wav_path, legacy_paths=legacy_paths,
+                        content_id=content_id, inputs=inputs)
 
-    for candidate in dict.fromkeys((wav_path, *legacy_paths)):
+
+def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, lexicon=None,
+                           language=None, opts=None, voice_map=None, default_voice=None):
+    """Render one chapter, content-addressed so a re-run reuses it (resume).
+
+    Returns ``(wav_path, duration_s, was_cached, seg_stats)``. Two cache
+    layers:
+
+    * Outer — the WAV at ``cache_dir/<key>.wav`` where ``key`` is
+      :func:`chapter_cache_key` over the chapter's spans + sample rate +
+      engine + each voice's resolved signature (+ the lexicon, so a lexicon
+      edit re-renders). A fully-unchanged chapter hits here and never touches
+      segment files. With invisible watermarking active the key also carries a
+      watermark tag (#1169) — pre-#1169 chapter caches (unmarked audio)
+      deliberately miss once and re-render marked; with watermarking off the
+      derivation is unchanged and released-version caches keep hitting.
+      ``seg_stats`` is ``None``.
+    * Inner — on a chapter miss, each spoken span goes through the
+      :class:`services.longform_render.SegmentCache` under
+      ``cache_dir/segments``: cached segments load from disk, only the
+      edited/missing ones synthesize, and each fresh segment persists the
+      moment it renders (an interrupted chapter resumes from them).
+      ``seg_stats`` is ``{"total": spoken_spans, "cached": reused}``.
+
+    Span text is normalized (``services.text_normalization``) up front — BEFORE
+    either cache key and BEFORE ``synthesize_chapter``'s lexicon pass, so the
+    per-project dictionary operates on normalized text and toggling / changing
+    normalization output naturally invalidates cached chapters and segments.
+
+    Voice leveling (``opts.level_voices`` / ``opts.voice_gains``) keys only the
+    outer layer: it re-balances finished takes, so the segments stay as
+    rendered and a leveling change re-assembles the chapter from them.
+    ``default_voice`` tells which spans the default voice reads for it.
+
+    Runs in the GPU-pool executor.
+    """
+    import wave
+
+    from services.audio_io import atomic_save_wav
+    from services.audiobook import ExpressiveOptions
+    from services.longform_render import (
+        SegmentCache,
+        adopt_cached_file,
+        explain_chapter_miss,
+        has_chapter_inputs,
+        record_chapter_inputs,
+        remove_timeline_sidecar,
+        wav_is_complete,
+        write_chapter_timeline,
+    )
+    from services.watermark import mark_synthetic
+
+    opts = opts or ExpressiveOptions()
+    keys = _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, lexicon=lexicon,
+                               language=language, opts=opts, voice_map=voice_map,
+                               default_voice=default_voice)
+    spans, voice_sigs, voice_names = keys.spans, keys.voice_sigs, keys.voice_names
+    wav_path, content_id, inputs = keys.wav_path, keys.content_id, keys.inputs
+
+    for candidate in dict.fromkeys((wav_path, *keys.legacy_paths)):
         if not os.path.exists(candidate):
             continue
         # A header that promises more audio than the file holds is a write a
@@ -967,17 +1046,19 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
                     "audio file is gone (evicted or deleted)", str(chapter.title)[:80])
 
     seg_cache = SegmentCache(cache_dir, sample_rate=sr, engine_id=engine_id,
-                             voice_sig=voice_sigs, extra_sig=seg_extra_sig,
+                             voice_sig=voice_sigs, extra_sig=keys.seg_extra_sig,
                              vary_repeats=opts.vary_repeats,
-                             legacy_voice_sigs=legacy_voice_sigs)
+                             legacy_voice_sigs=keys.legacy_voice_sigs)
     verifier = None
     if opts.verify_speech:
         from services.speech_verify import SpeechVerifier
 
         verifier = SpeechVerifier(sr)
+    timing: list = []
     audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
                                     segment_cache=seg_cache, verifier=verifier,
-                                    voice_names=voice_names, **opts.join_kwargs())
+                                    voice_names=voice_names, timing=timing,
+                                    **opts.join_kwargs())
     # Invisible provenance mark on the assembled chapter (#1169), tensor stage,
     # before the WAV lands in the cache — this single site covers every
     # longform front door (/audiobook, /longform/render [Stories],
@@ -989,8 +1070,11 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     # unmarked on failure).
     audio = trace_call("watermark", mark_synthetic, audio, sr, context="longform.chapter")
     # Durable: a power-off right after this chapter must not leave a torn
-    # file under its key (#2279).
+    # file under its key (#2279). Its timing sidecar follows the audio, and an
+    # older one under this key goes first, so it never describes other audio.
+    remove_timeline_sidecar(wav_path)
     atomic_save_wav(wav_path, audio, sr, durable=True)
+    write_chapter_timeline(wav_path, timing[0] if timing else None)
     record_chapter_inputs(cache_dir, content_id, inputs)
     stats = {"total": seg_cache.hits + seg_cache.misses, "cached": seg_cache.hits}
     if verifier is not None:
@@ -1203,6 +1287,109 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
     }
 
 
+def _cache_name(wav_path: str) -> str:
+    """A chapter's cache key as a book records it: its cached WAV's name."""
+    return os.path.splitext(os.path.basename(wav_path))[0]
+
+
+def _local_sample_rate(engine_id: str) -> int | None:
+    """The rate a local render of ``engine_id`` caches chapters at, read
+    without loading a model; ``None`` when only a loaded model knows it."""
+    from services.tts_backend import OmniVoiceBackend, get_backend_class, output_sample_rate
+
+    try:
+        cls = get_backend_class(engine_id)
+    except ValueError:
+        return None
+    if cls is OmniVoiceBackend:
+        from services import model_manager
+
+        return _omnivoice_sample_rate(getattr(model_manager, "model", None))
+    return output_sample_rate(engine_id)
+
+
+def _chapter_cache_state(chapter, *, decision, default_voice, language, opts, voice_map,
+                         lexicon, cache_dir) -> tuple[str | None, bool | None]:
+    """``(cache key, cached)`` of one chapter, looked up exactly as
+    :func:`_run_chapter` would: the remote cache when the job would run
+    remotely, else the local chapter cache through :func:`_chapter_cache_keys`.
+    Renders and loads nothing; ``cached`` is ``None`` when the local engine's
+    sample rate is unknown until its model loads."""
+    from services.longform_render import wav_is_complete
+    from services.tts_backend import active_backend_id
+
+    opts = _chapter_opts(opts, chapter, default_voice, voice_map)
+    engine_id = active_backend_id()
+    if decision.remote:
+        _, path = _remote_chapter_call(
+            chapter, engine_id=engine_id, default_voice=default_voice, voice_map=voice_map,
+            language=language, lexicon=lexicon, opts=opts, cache_dir=cache_dir)
+        return _cache_name(path), wav_is_complete(path)
+    sr = _local_sample_rate(engine_id)
+    if sr is None:
+        return None, None
+    keys = _chapter_cache_keys(chapter, sr, engine_id, _voice_resolver(default_voice, voice_map),
+                               cache_dir, lexicon=lexicon, language=language, opts=opts,
+                               voice_map=voice_map, default_voice=default_voice)
+    cached = any(os.path.exists(path) and wav_is_complete(path)
+                 for path in dict.fromkeys((keys.wav_path, *keys.legacy_paths)))
+    return _cache_name(keys.wav_path), cached
+
+
+class AudiobookOutlineRequest(ExpressiveMixin):
+    """The same inputs as a render (and a chapter preview), so the outline
+    looks each chapter up under the key that render would use."""
+
+    text: str
+    default_voice: str | None = None
+    language: str | None = None
+    lexicon: dict | None = None
+    voice_map: dict[str, str] | None = None
+    # The last finished book (a render's output name): chapters whose key it
+    # does not hold have changed since it.
+    output: str | None = None
+
+
+@router.post("/audiobook/outline")
+async def audiobook_outline(req: AudiobookOutlineRequest) -> dict:
+    """Where each chapter of a script stands, index-aligned with
+    ``/audiobook/plan``: ``rendered`` (its audio is cached for the current
+    script and settings, or the last book holds it as it is now), ``changed``
+    (the last book holds another version of it, or none), or ``not_rendered``.
+    ``cached`` is the cache lookup itself (``None`` when it cannot be told
+    without loading the engine) and ``in_book`` whether the last book holds
+    this version (``None`` without a book that recorded its chapters)."""
+    from core.config import OUTPUTS_DIR
+    from services import gpu_gateway
+
+    plan = parse_audiobook_script(req.text, default_voice=req.default_voice)
+    cache_dir = os.path.join(OUTPUTS_DIR, LONGFORM_CACHE_SUBDIR)
+    os.makedirs(cache_dir, exist_ok=True)
+    resolved_lang = _resolve_default_language(req.language, req.default_voice)
+    opts = _expressive_opts(req)
+    decision = gpu_gateway.decide("audiobook")
+    book = _read_book_timeline(req.output) if req.output else None
+    book_keys = None
+    if book is not None:
+        keys = [c.get("key") for c in book.get("chapters") or [] if isinstance(c, dict)]
+        book_keys = {k for k in keys if isinstance(k, str)} if any(keys) else None
+
+    def check() -> list:
+        return [_chapter_cache_state(
+            chapter, decision=decision, default_voice=req.default_voice,
+            language=resolved_lang, opts=opts, voice_map=req.voice_map,
+            lexicon=req.lexicon, cache_dir=cache_dir) for chapter in plan.chapters]
+
+    chapters = []
+    for chapter, (key, cached) in zip(plan.chapters, await asyncio.to_thread(check)):
+        in_book = None if book_keys is None or key is None else key in book_keys
+        status = ("rendered" if in_book or (in_book is None and cached)
+                  else "changed" if in_book is False else "not_rendered")
+        chapters.append({"title": chapter.title, "status": status, "cached": cached,
+                         "in_book": in_book})
+    return {"chapters": chapters, "book": book is not None}
+
+
 async def _render_longform_sse(
     plan,
     *,
@@ -1331,6 +1518,9 @@ async def _render_longform_sse(
         total = len(plan.chapters)
         chapter_files: list[str] = []
         chapters_meta: list[tuple[str, int]] = []
+        # (chapter, exact duration, timing, cache key) of every chapter in the
+        # file, for the rendered timeline the reader follows.
+        rendered_timing: list[tuple] = []
         cached_n = 0
         failed: list[int] = []
         # Kept so the terminal "all chapters failed" event can name the cause
@@ -1390,6 +1580,8 @@ async def _render_longform_sse(
                                              include_diagnostic=False)})
                 continue
             chapter_files.append(wav_path)
+            rendered_timing.append((chapter, dur, load_chapter_timeline(wav_path),
+                                    _cache_name(wav_path)))
             dur_ms = int(round(dur * 1000))
             chapters_meta.append((chapter.title, dur_ms))
             cached_n += 1 if was_cached else 0
@@ -1473,6 +1665,9 @@ async def _render_longform_sse(
         ext = "mp3" if (fmt or "").lower() == "mp3" else "m4b"
         out_name = f"{job_type}_{job_id}.{ext}"
         out_path = os.path.join(OUTPUTS_DIR, out_name)
+        # A timeline or HTML export left by an earlier file of this name
+        # describes that file.
+        _remove_book_derivatives(out_path)
 
         # Two-pass loudness master (#28): for a known preset, measure the
         # concatenated program first, then feed the measured values back into the
@@ -1514,6 +1709,13 @@ async def _render_longform_sse(
         done = {"type": "done", "output": out_name,
                 "chapters": len(chapter_files), "duration_s": round(total_s, 2),
                 "cached_chapters": cached_n, "failed_chapters": failed}
+        # Where each sentence of the file is heard, for the reader (additive:
+        # served by GET /audiobook/timeline/{output}; old clients ignore it).
+        if await asyncio.to_thread(
+                _write_book_timeline, out_path, out_name, rendered_timing,
+                default_voice=default_voice, voice_map=voice_map, language=resolved_lang,
+                lexicon=lexicon, opts=opts):
+            done["timeline"] = True
         # Say what this render IS, so the library can show more than a filename
         # (#2233). Additive keys; best-effort — a summary never fails a render.
         if title:
@@ -1559,6 +1761,122 @@ async def _render_longform_sse(
         yield _emit({"type": "error", "error": "render failed (see backend log)"})
     finally:
         voice_lease.release()
+
+
+def _write_book_timeline(out_path: str, out_name: str, chapters: list, **kwargs) -> bool:
+    """Write the finished book's rendered timeline next to it, atomically
+    (temp file + replace). Best-effort: a book without one reads with
+    estimated timing, so a failure here never fails the render."""
+    try:
+        doc = book_timeline(out_name, chapters, **kwargs)
+    except Exception:  # noqa: BLE001 — the timeline is a reading aid
+        logger.warning("longform: could not build the rendered timeline", exc_info=True)
+        return False
+    return write_json_atomic(out_path + TIMELINE_SIDECAR_SUFFIX, doc)
+
+
+def _book_path(output: str | None, suffix: str = "") -> str | None:
+    """``OUTPUTS_DIR/<output><suffix>`` for a finished render's own name, else
+    ``None``. Exact-match name allowlist plus a realpath barrier: nothing but
+    a render's own files in OUTPUTS_DIR is ever reached (CodeQL path-injection)."""
+    from core.config import OUTPUTS_DIR
+
+    if not _OUTPUT_NAME_RE.fullmatch(output or ""):
+        return None
+    root = os.path.realpath(OUTPUTS_DIR)
+    path = os.path.realpath(os.path.join(root, output + suffix))
+    return path if os.path.dirname(path) == root else None
+
+
+def _read_book_timeline(output: str | None) -> dict | None:
+    """The rendered timeline of a finished book, or ``None`` (none kept, or
+    unreadable, or written for another file)."""
+    path = _book_path(output, TIMELINE_SIDECAR_SUFFIX)
+    doc = read_json_file(path, max_bytes=_TIMELINE_MAX_BYTES) if path else None
+    return doc if isinstance(doc, dict) and doc.get("output") == output else None
+
+
+def _remove_book_derivatives(out_path: str) -> None:
+    """Remove what was derived from a finished book — its timeline and its
+    HTML export — before a new file takes the name. Best-effort."""
+    for suffix in (TIMELINE_SIDECAR_SUFFIX, HTML_EXPORT_SUFFIX):
+        with contextlib.suppress(OSError):
+            os.remove(out_path + suffix)
+
+
+@router.get("/audiobook/timeline/{output}")
+def audiobook_timeline(output: str) -> dict:
+    """The rendered timeline of a finished book in the outputs folder: where
+    each phrase is heard (see ``services.audiobook.book_timeline``). 404 when
+    the book has none — rendered before timelines were kept — so the reader
+    falls back to estimated timing."""
+    doc = _read_book_timeline(output)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="No timeline for that output")
+    return doc
+
+
+_LANG_TAG_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,3}$")
+
+
+class AudiobookHtmlExportRequest(BaseModel):
+    output: str
+    title: str = Field(default="", max_length=500)
+    # Book tags as the render took them ({author, narrator, …}).
+    metadata: dict[str, str | None] | None = None
+    cover_path: str | None = None
+    # The script the book was rendered from and each of its chapters' length
+    # in seconds (None: failed, so not in the file). Read only for a book
+    # rendered without a timeline, to estimate one.
+    text: str | None = None
+    chapter_durations: list[float | None] | None = None
+    # The page's language (an HTML lang tag) and its words in that language.
+    lang: str = Field(default="en", max_length=35)
+    labels: dict[str, str] | None = None
+
+
+@router.post("/audiobook/export/html")
+async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
+    """Export a finished book as a web page: ``<output>.html.zip`` beside it
+    (served under ``/audio``) holding ``index.html`` — one self-contained
+    page that reads the book along with its audio — ``audio/<book>`` and the
+    cover. Rebuilt on every export; a new render of the name removes it."""
+    from core.config import OUTPUTS_DIR
+    from services.audiobook_html import (
+        audio_name,
+        estimated_timeline,
+        render_page,
+        write_export_zip,
+    )
+    from services.ffmpeg_utils import probe_duration
+
+    audio_path = _book_path(req.output)
+    zip_path = _book_path(req.output, HTML_EXPORT_SUFFIX)
+    if audio_path is None or zip_path is None or not os.path.isfile(audio_path):
+        raise HTTPException(status_code=404, detail="No such audiobook")
+    timeline = _read_book_timeline(req.output)
+    if timeline is None and req.text:
+        durations = req.chapter_durations
+        total = None
+        if durations is None:
+            total = await probe_duration(audio_path, allowed_root=OUTPUTS_DIR)
+        timeline = estimated_timeline(req.output, req.text, chapter_durations=durations,
+                                      duration=total)
+    meta = req.metadata or {}
+    chapters = (timeline or {}).get("chapters") or []
+    title = (req.title.strip() or (meta.get("title") or "").strip()
+             or (chapters[0].get("title") if chapters else "") or req.output)
+    cover = _safe_cover_path(req.cover_path)
+    cover_entry = f"cover{os.path.splitext(cover)[1].lower()}" if cover else None
+    entry = f"audio/{audio_name(req.output)}"
+    page = render_page(
+        title=title, timeline=timeline, audio_src=entry, labels=req.labels,
+        author=(meta.get("author") or "").strip(), narrator=(meta.get("narrator") or "").strip(),
+        cover_src=cover_entry, lang=req.lang if _LANG_TAG_RE.fullmatch(req.lang) else "en",
+        duration=float((timeline or {}).get("duration") or 0))
+    size = await asyncio.to_thread(write_export_zip, zip_path, page=page, audio_path=audio_path,
+                                   audio_entry=entry, cover_path=cover, cover_entry=cover_entry)
+    return {"output": os.path.basename(zip_path), "bytes": size}
 
 
 async def _public_longform_stream(plan, **render_kwargs):

@@ -7,7 +7,7 @@ import {
   type MarkupEditorEvents,
   type MarkupEditorHandle,
 } from './markup-editor-context';
-import { MARKUP_STYLES, MarkupTextarea, laneSegments } from './markup-textarea';
+import { MARKUP_STYLES, MarkupTextarea, laneSegments, revealOffset } from './markup-textarea';
 import { DEFAULT_VOICE_ACCENT, VOICE_ACCENTS, VOICE_RESET_CHIP } from './voice-palette';
 
 type EditorProps = Omit<ComponentProps<typeof MarkupTextarea>, 'value' | 'onValueChange'>;
@@ -121,6 +121,28 @@ describe('overlay', () => {
     expect(lines(container)[1].querySelector('span')).not.toBeNull();
     act(() => script().blur());
     expect(lines(container)[1]).not.toHaveAttribute('data-active');
+  });
+
+  it('draws a section heading as a lighter band, its tags still tags', () => {
+    const { container } = render(
+      <Editor initial={'# One\n## Part [voice:Mara] two\nText'} headings activeLine gutter />,
+    );
+    const [chapter, section, body] = lines(container);
+    expect(chapter).not.toHaveAttribute('data-section');
+    expect(section).toHaveAttribute('data-section');
+    expect(section).not.toHaveAttribute('data-chapter');
+    expect(body).not.toHaveAttribute('data-section');
+    const kinds = [...section.querySelectorAll('mark')].map((mark) => mark.dataset.kind);
+    expect(kinds).toEqual(['section', 'voice']);
+  });
+
+  it('reveals a line inside the editor, caret included', () => {
+    render(<Editor initial={'# One\nText\n## Two\nMore'} headings activeLine gutter />);
+    const offset = script().value.indexOf('## Two');
+    act(() => revealOffset(script(), offset));
+    expect(script()).toHaveFocus();
+    expect(script().selectionStart).toBe(offset);
+    expect(script().scrollTop).toBe(0); // jsdom has no layout: the top line stays
   });
 
   it('only paints, so the overlay cannot drift from the caret', () => {

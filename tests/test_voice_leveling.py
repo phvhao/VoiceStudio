@@ -93,6 +93,10 @@ def test_span_voice_name_follows_the_cast_rules():
     # [voice:default] is the default voice — unless the cast gives the name one.
     assert span_voice_name("default", "p-default", cast) == ""
     assert span_voice_name("default", "p-default", {"default": "p-x"}) == "default"
+    # In any case, as the editor and Cast read it (isDefaultVoiceName).
+    assert span_voice_name("Default", "p-default", cast) == ""
+    assert span_voice_name("DEFAULT", "p-default", cast) == ""
+    assert span_voice_name("Default", "p-default", {"Default": "p-x"}) == "Default"
 
 
 def test_voice_gain_pairs_store_one_canonical_form():

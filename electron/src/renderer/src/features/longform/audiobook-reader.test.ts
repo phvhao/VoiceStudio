@@ -133,6 +133,122 @@ describe('buildReaderBook', () => {
   });
 });
 
+// A timeline sidecar: one chapter entry per `[title, precision, phrase texts]`,
+// each phrase two seconds with a second of silence after it.
+function timedBook(
+  script: string,
+  chapters: Array<[string, 'phrase' | 'span' | 'chapter', string[]]>,
+): ReaderBook {
+  let at = 0;
+  const timeline = {
+    version: 1,
+    chapters: chapters.map(([title, precision, texts]) => {
+      const start = at;
+      const phrases = texts.map((text) => {
+        const phrase = { text, start: at, end: at + 2, voice: null };
+        at += 3;
+        return phrase;
+      });
+      return { title, start, end: at, precision, phrases };
+    }),
+  };
+  return buildReaderBook(script, buildLyricsTimeline(script, { timeline }));
+}
+
+describe('buildReaderBook — timeline sidecar', () => {
+  it('makes every phrase take a sentence, where punctuation alone would not split', () => {
+    const reader = timedBook('# One\nDr. Watson came, slowly. Then left.', [
+      ['One', 'phrase', ['Dr. Watson came,', 'slowly.', 'Then left.']],
+    ]);
+    expect(sentences(reader)).toEqual(['Dr. Watson came,', 'slowly.', 'Then left.']);
+    expect(reader.words[reader.sentences[1].start]).toMatchObject({ start: 3, gap: 'space' });
+    expect(reader.chapters[0].precision).toBe('phrase');
+  });
+
+  it('keeps line breaks, paragraphs and chapters from the script', () => {
+    const reader = timedBook('# One\nAlpha beta.\nGamma.\n\nNew one.\n# Two\nLast.', [
+      ['One', 'phrase', ['Alpha beta.', 'Gamma.', 'New one.']],
+      ['Two', 'phrase', ['Last.']],
+    ]);
+    expect(sentences(reader)).toEqual(['Alpha beta.', 'Gamma.', 'New one.', 'Last.']);
+    expect(reader.words[reader.sentences[1].start].gap).toBe('line');
+    expect(reader.chapters.map((chapter) => chapter.paragraphs)).toEqual([
+      [
+        [0, 2],
+        [2, 3],
+      ],
+      [[3, 4]],
+    ]);
+  });
+
+  it('matches through markup, whether or not the render kept performed tags', () => {
+    const script =
+      '# One\n[voice:Mara] Say [spell]SQL[/spell] [pause 1s] now [laughter] — [[gif|jif]] [slow]please[/slow].\n[voice:]Done.';
+    for (const said of ['Say S Q L now [laughter] — gif please.', 'Say SQL now — gif please.']) {
+      const reader = timedBook(script, [['One', 'phrase', [said, 'Done.']]]);
+      // Spelled letters read as written in the script.
+      expect(sentences(reader)).toEqual([said.replace('S Q L', 'SQL'), 'Done.']);
+      expect(reader.words[reader.sentences[1].start].gap).toBe('line');
+      expect(reader.words.some((word) => word.tag)).toBe(said.includes('[laughter]'));
+    }
+  });
+
+  it('reads a section title as its own line, without its marks', () => {
+    const script = '# One\nAlpha.\n\n## Part [voice:Mara] two\nBeta.';
+    const reader = timedBook(script, [['One', 'phrase', ['Alpha.', 'Part', 'two', 'Beta.']]]);
+    expect(sentences(reader)).toEqual(['Alpha.', 'Part', 'two', 'Beta.']);
+    expect(reader.words.map((word) => [word.display, word.gap])).toEqual([
+      ['Alpha.', 'paragraph'],
+      ['Part', 'paragraph'],
+      ['two', 'space'],
+      ['Beta.', 'line'],
+    ]);
+    // Without a timeline the estimate walks the same words.
+    expect(book(script, [4]).words.map((word) => word.display)).toEqual([
+      'Alpha.',
+      'Part',
+      'two',
+      'Beta.',
+    ]);
+  });
+
+  it('pairs chapters with their script text when a failed chapter is missing', () => {
+    const reader = timedBook('# One\nAlpha.\n# Two\nBeta.\n# Three\nGamma.\n\nDelta.', [
+      ['One', 'phrase', ['Alpha.']],
+      ['Three', 'phrase', ['Gamma.', 'Delta.']],
+    ]);
+    expect(reader.chapters.map((chapter) => chapter.title)).toEqual(['One', 'Three']);
+    expect(reader.chapters[1].paragraphs).toEqual([
+      [1, 2],
+      [2, 3],
+    ]);
+  });
+
+  it('joins a phrase cut inside an unspaced run back onto the one before it', () => {
+    const reader = timedBook('# One\n\u4f60\u597d\u3002\u6211\u5f88\u597d\u3002', [
+      ['One', 'phrase', ['\u4f60\u597d\u3002', '\u6211\u5f88\u597d\u3002']],
+    ]);
+    expect(reader.sentences).toHaveLength(2);
+    expect(reader.words[1].gap).toBe('joined');
+  });
+
+  it('shows what the audio says, phrase by phrase, when the script has changed since', () => {
+    const reader = timedBook('# One\nSomething else entirely.', [
+      ['One', 'phrase', ['Alpha beta.', 'Gamma.']],
+    ]);
+    expect(sentences(reader)).toEqual(['Alpha beta.', 'Gamma.']);
+    expect(reader.chapters[0].paragraphs).toEqual([[0, 2]]);
+  });
+
+  it('splits coarsely timed chapters into sentences by punctuation', () => {
+    const reader = timedBook('# One\nAlpha beta. Gamma.\nDelta.', [
+      ['One', 'span', ['Alpha beta. Gamma.', 'Delta.']],
+    ]);
+    expect(sentences(reader)).toEqual(['Alpha beta.', 'Gamma.', 'Delta.']);
+    expect(reader.chapters[0].precision).toBe('span');
+  });
+});
+
 describe('chapter steps', () => {
   // The second chapter has no words: without stream timings it spans no time.
   const chapters = [{ start: 0 }, { start: 10 }, { start: 10 }, { start: 25 }];

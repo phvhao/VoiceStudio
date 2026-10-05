@@ -48,6 +48,7 @@ export const HIGHLIGHT_LIMIT = 200_000;
 // and `data-current` the one holding the caret, while tools listen.
 export const MARKUP_STYLES: Record<Exclude<MarkupKind, 'text'>, string> = {
   heading: 'rounded-sm bg-primary/12 ring-1 ring-primary/25',
+  section: 'rounded-sm bg-primary/6 ring-1 ring-primary/15',
   voice:
     'rounded-sm bg-sky-500/18 ring-1 ring-sky-500/40 data-hover:bg-sky-500/30 data-hover:ring-sky-500/70 data-current:ring-2',
   voiceReset:
@@ -98,10 +99,13 @@ const GUTTER = 'ps-16';
 // The number is painted from `data-line`, so it is not part of the overlay's
 // text. It inherits the text's line height and sits on the line's first row.
 const NUMBERED_LINE =
-  'relative before:absolute before:top-0 before:-start-15 before:w-10 before:text-end before:text-[11px] before:text-muted-foreground/55 before:tabular-nums before:content-[attr(data-line)] data-active:before:text-foreground data-chapter:before:text-primary';
+  'relative before:absolute before:top-0 before:-start-15 before:w-10 before:text-end before:text-[11px] before:text-muted-foreground/55 before:tabular-nums before:content-[attr(data-line)] data-active:before:text-foreground data-chapter:before:text-primary data-section:before:text-primary/70';
 const ACTIVE_BAND = 'absolute inset-0 -z-10 bg-current text-foreground/[0.04]';
 const CHAPTER_BAND = 'absolute inset-0 -z-10 bg-current text-primary/[0.07]';
 const CHAPTER_ACCENT = 'absolute inset-y-0 -start-16 w-0.5 bg-primary/60';
+// A section heading: the chapter's band and accent, lighter.
+const SECTION_BAND = 'absolute inset-0 -z-10 bg-current text-primary/[0.035]';
+const SECTION_ACCENT = 'absolute inset-y-0 -start-16 w-0.5 bg-primary/30';
 // A band is as tall as its line and as wide as the editor: the spread shadow
 // paints it across the gutter and the padding (ink overflow, so the overlay
 // gains nothing to scroll) and the clip keeps it to the line's height.
@@ -152,6 +156,8 @@ function markClass(
       return '';
     case 'heading':
       return chapterBands ? MARK : KIND_CLASSES.heading;
+    case 'section':
+      return chapterBands ? MARK : KIND_CLASSES.section;
     case 'voice':
       return voices
         ? (CHIP_CLASSES.get(voiceAccent(voiceName(segment.text), voices)) ?? KIND_CLASSES.voice)
@@ -523,6 +529,28 @@ function useVoiceLane(
   return lane;
 }
 
+/**
+ * Put the caret at `offset` and scroll the editor — never the page — so its
+ * line sits in the upper third. The line is found in the overlay, which wraps
+ * exactly like the textarea; past `HIGHLIGHT_LIMIT` there is none, so it is
+ * placed by its line number.
+ */
+export function revealOffset(element: HTMLTextAreaElement, offset: number) {
+  element.focus({ preventScroll: true });
+  element.setSelectionRange(offset, offset);
+  const text = element.value;
+  let line = 0;
+  for (let at = text.indexOf('\n'); at !== -1 && at < offset; at = text.indexOf('\n', at + 1))
+    line++;
+  const rows = element.parentElement?.querySelector('[data-slot="markup-lines"]');
+  const row = rows?.children[line];
+  const top =
+    row instanceof HTMLElement
+      ? row.offsetTop
+      : line * (Number.parseFloat(getComputedStyle(element).lineHeight) || 24);
+  element.scrollTop = Math.max(0, top - element.clientHeight / 3);
+}
+
 interface LineProps {
   index: number;
   segments: LineSegment[];
@@ -534,6 +562,8 @@ interface LineProps {
   band: boolean;
   /** A chapter heading drawn as a full-width band. */
   chapter: boolean;
+  /** A section heading, drawn as a lighter band. */
+  section: boolean;
   /** Line-relative start of the tag holding the caret, else -1. */
   current: number;
 }
@@ -554,17 +584,29 @@ const sameSegments = (a: readonly LineSegment[], b: readonly LineSegment[]) =>
  * without touching this one.
  */
 const MarkupLine = memo(
-  function MarkupLine({ index, segments, numbered, active, band, chapter, current }: LineProps) {
+  function MarkupLine({
+    index,
+    segments,
+    numbered,
+    active,
+    band,
+    chapter,
+    section,
+    current,
+  }: LineProps) {
     let offset = 0;
     return (
       <div
         data-line={numbered ? index + 1 : undefined}
         data-active={active ? '' : undefined}
         data-chapter={chapter ? '' : undefined}
+        data-section={section ? '' : undefined}
         className={numbered ? NUMBERED_LINE : 'relative'}
       >
         {chapter && <span className={CHAPTER_BAND} style={FULL_WIDTH} />}
         {chapter && numbered && <span className={CHAPTER_ACCENT} />}
+        {section && <span className={SECTION_BAND} style={FULL_WIDTH} />}
+        {section && numbered && <span className={SECTION_ACCENT} />}
         {band && active && <span className={ACTIVE_BAND} style={FULL_WIDTH} />}
         {segments.length
           ? segments.map((segment, position) => {
@@ -595,6 +637,7 @@ const MarkupLine = memo(
     a.active === b.active &&
     a.band === b.band &&
     a.chapter === b.chapter &&
+    a.section === b.section &&
     a.current === b.current &&
     sameSegments(a.segments, b.segments),
 );
@@ -642,7 +685,7 @@ export function MarkupTextarea({
   value: string;
   onValueChange(value: string): void;
   textareaRef?: Ref<HTMLTextAreaElement>;
-  /** Highlight `# Chapter` lines (Audiobook manuscripts). */
+  /** Highlight `# Chapter` and `## Section` lines (Audiobook manuscripts). */
   headings?: boolean;
   /** Grow with the content instead of scrolling inside. */
   autoGrow?: boolean;
@@ -874,6 +917,7 @@ export function MarkupTextarea({
                 active={editing?.line === index}
                 band={activeLine}
                 chapter={activeLine && headings && segments[0]?.kind === 'heading'}
+                section={activeLine && headings && segments[0]?.kind === 'section'}
                 current={editing?.line === index ? editing.token : -1}
               />
             ))}

@@ -26,11 +26,12 @@ describe('voice leveling request', () => {
 });
 
 describe('voice volumes', () => {
-  it('keys the default voice and [voice:default] as one voice unless the cast names it', () => {
-    expect(voiceGainKey('', {})).toBe('');
-    expect(voiceGainKey(' Mara ', {})).toBe('Mara');
-    expect(voiceGainKey('default', { Mara: 'p1' })).toBe('');
-    expect(voiceGainKey('default', { default: 'p2' })).toBe('default');
+  it('keys the default voice and [voice:default], in any case, as one voice', () => {
+    expect(voiceGainKey('')).toBe('');
+    expect(voiceGainKey(' Mara ')).toBe('Mara');
+    expect(voiceGainKey('default')).toBe('');
+    expect(voiceGainKey(' Default ')).toBe('');
+    expect(voiceGainKey('DEFAULT')).toBe('');
   });
 
   it('clamps volumes to ±12 dB and drops voices set back to 0 dB', () => {

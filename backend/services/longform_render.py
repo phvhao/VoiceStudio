@@ -87,11 +87,15 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
     ``segments/`` share ONE byte budget — the cap holds no matter which layer
     grew. Bookkeeping (including the voices-root index needed to find legacy
     WAVs after a data-dir move) is counted but never evicted. Metadata alone may
-    exceed the budget. Best-effort: returns ``(remaining_bytes, removed_count)`` and never
-    raises (a missing dir / unstattable file is just skipped). Call it *before*
-    writing a job's files so the fresh ones are never the eviction target.
+    exceed the budget. A WAV's timing sidecar (:func:`timeline_sidecar_path`)
+    goes with it, and a sidecar whose WAV is gone is removed — it describes
+    audio that no longer exists. Best-effort: returns ``(remaining_bytes,
+    removed_count)`` (WAVs only) and never raises (a missing dir / unstattable
+    file is just skipped). Call it *before* writing a job's files so the fresh
+    ones are never the eviction target.
     """
     entries: list[tuple[float, int, str]] = []
+    sidecars: dict[str, int] = {}
     total = 0
     for root, _dirs, names in os.walk(cache_dir):
         for name in names:
@@ -103,9 +107,25 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
                 mtime = os.path.getmtime(p)
             except OSError:
                 continue
-            if not name.lower().endswith(".json"):
+            if name.lower().endswith(TIMELINE_SUFFIX):
+                sidecars[p] = size
+            elif not name.lower().endswith(".json"):
                 entries.append((mtime, size, p))
             total += size
+
+    def drop_sidecar(path: str) -> None:
+        nonlocal total
+        if path not in sidecars:
+            return
+        try:
+            os.remove(path)
+        except OSError:
+            return
+        total -= sidecars.pop(path)
+
+    described = {timeline_sidecar_path(p) for _mtime, _size, p in entries}
+    for orphan in [p for p in sidecars if p not in described]:
+        drop_sidecar(orphan)
     if total <= max_bytes:
         return (total, 0)
     entries.sort()  # oldest first
@@ -119,7 +139,201 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
             removed += 1
         except OSError:
             continue
+        drop_sidecar(timeline_sidecar_path(p))
     return (total, removed)
+
+
+# ── Timing sidecars (rendered timeline) ─────────────────────────────────────
+#
+# Where each phrase of a render sits in its audio, kept next to the audio it
+# describes: a segment WAV, a chapter WAV, the finished book. Samples are
+# relative to that file, and ``samples`` names the file's length, so timing
+# left over from another take under the same key is never believed.
+
+#: Suffix of a cache WAV's timing sidecar: ``<key>.wav`` → ``<key>.timeline.json``.
+TIMELINE_SUFFIX = ".timeline.json"
+TIMELINE_VERSION = 1
+#: RIFF chunk a remote worker appends to a chapter WAV to carry its timing:
+#: the result channel holds one file, so the timing rides inside it. Players,
+#: libsndfile and ffmpeg skip chunks they do not know.
+TIMELINE_CHUNK_ID = b"vstl"
+_TIMELINE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def timeline_sidecar_path(audio_path: str) -> str:
+    """The timing sidecar of a cache WAV: same name, ``.timeline.json``."""
+    return os.path.splitext(audio_path)[0] + TIMELINE_SUFFIX
+
+
+def remove_timeline_sidecar(audio_path: str) -> None:
+    """Forget the timing of ``audio_path`` before its audio is replaced."""
+    try:
+        os.remove(timeline_sidecar_path(audio_path))
+    except OSError:
+        pass
+
+
+def write_json_atomic(path: str, doc: dict) -> bool:
+    """Write ``doc`` to ``path`` through a temp file + replace, so a reader
+    never sees half a file. Best-effort: ``False`` when it could not."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def read_json_file(path: str, max_bytes: int = _TIMELINE_MAX_BYTES):
+    """Parsed JSON of a small file, or ``None`` (missing, too big, corrupt)."""
+    try:
+        if os.path.getsize(path) > max_bytes:
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _valid_ranges(units, start: int, end: int) -> bool:
+    """``[[index, start, end], …]`` in order, inside ``start``..``end``."""
+    if not isinstance(units, list):
+        return False
+    previous = start
+    for unit in units:
+        if (not isinstance(unit, list) or len(unit) != 3
+                or not all(type(v) is int for v in unit)):
+            return False
+        if not (unit[0] >= 0 and previous <= unit[1] < unit[2] <= end):
+            return False
+        previous = unit[2]
+    return True
+
+
+def valid_segment_timing(doc, samples: int) -> Optional[list]:
+    """The phrase ranges of a segment sidecar, or ``None`` when it is not one
+    for audio of ``samples`` samples."""
+    if (not isinstance(doc, dict) or doc.get("version") != TIMELINE_VERSION
+            or doc.get("samples") != samples
+            or not _valid_ranges(doc.get("units"), 0, samples)):
+        return None
+    return doc["units"]
+
+
+def valid_chapter_timing(doc, samples: Optional[int] = None) -> Optional[dict]:
+    """``doc`` when it is a chapter timing document — for audio of ``samples``
+    samples, when given — else ``None``. Its spans are ``{"span", "start",
+    "end", "units"}``, ``units`` ``None`` where only the span is known."""
+    if not isinstance(doc, dict) or doc.get("version") != TIMELINE_VERSION:
+        return None
+    total, rate, spans = doc.get("samples"), doc.get("sample_rate"), doc.get("spans")
+    if (type(total) is not int or type(rate) is not int or rate <= 0
+            or not isinstance(spans, list) or not isinstance(doc.get("phrases"), bool)):
+        return None
+    if samples is not None and total != samples:
+        return None
+    previous = 0
+    for span in spans:
+        if not isinstance(span, dict):
+            return None
+        index, start, end, units = (span.get("span"), span.get("start"),
+                                    span.get("end"), span.get("units"))
+        if (type(index) is not int or index < 0 or type(start) is not int
+                or type(end) is not int or not previous <= start < end <= total):
+            return None
+        if units is not None and not _valid_ranges(units, start, end):
+            return None
+        previous = end
+    return doc
+
+
+def _riff_chunks(f, size: int):
+    """``(id, data offset, length)`` of each chunk of an open RIFF/WAVE file."""
+    f.seek(0)
+    head = f.read(12)
+    if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return
+    pos = 12
+    while pos + 8 <= size:
+        f.seek(pos)
+        hdr = f.read(8)
+        if len(hdr) < 8:
+            return
+        length = int.from_bytes(hdr[4:8], "little")
+        yield hdr[:4], pos + 8, length
+        pos += 8 + length + (length & 1)
+
+
+def embed_timeline_chunk(wav: bytes, doc: dict) -> bytes:
+    """``wav`` with ``doc`` appended as a :data:`TIMELINE_CHUNK_ID` chunk and
+    its RIFF size updated. Anything but a plain RIFF/WAVE file comes back
+    unchanged (its chapter is then timed as a whole)."""
+    if len(wav) < 12 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return wav
+    data = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(data) > _TIMELINE_MAX_BYTES:
+        return wav
+    chunk = TIMELINE_CHUNK_ID + len(data).to_bytes(4, "little") + data
+    if len(data) & 1:
+        chunk += b"\0"  # RIFF chunks are word-aligned
+    riff = len(wav) + len(chunk) - 8
+    if riff >= 2 ** 32:
+        return wav
+    return b"RIFF" + riff.to_bytes(4, "little") + wav[8:] + chunk
+
+
+def read_embedded_timeline(path: str):
+    """The document :func:`embed_timeline_chunk` put in ``path``, or ``None``."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            for cid, offset, length in _riff_chunks(f, size):
+                if cid != TIMELINE_CHUNK_ID:
+                    continue
+                if length > _TIMELINE_MAX_BYTES or offset + length > size:
+                    return None
+                f.seek(offset)
+                return json.loads(f.read(length).decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _wav_frames(path: str) -> Optional[int]:
+    try:
+        import soundfile as sf
+
+        return int(sf.info(path).frames)
+    except Exception:  # noqa: BLE001 — unreadable audio has no timing
+        return None
+
+
+def write_chapter_timeline(wav_path: str, doc: Optional[dict]) -> None:
+    """Keep a cached chapter's timing next to its WAV. Best-effort: a chapter
+    without one is timed as a whole."""
+    if valid_chapter_timing(doc) is not None:
+        write_json_atomic(timeline_sidecar_path(wav_path), doc)
+
+
+def load_chapter_timeline(wav_path: str) -> Optional[dict]:
+    """The timing of a chapter WAV: its sidecar, else the chunk a remote
+    worker embedded in it. ``None`` when neither exists or matches the audio
+    (a chapter rendered before timing was kept)."""
+    frames = _wav_frames(wav_path)
+    if frames is None:
+        return None
+    for read in (lambda: read_json_file(timeline_sidecar_path(wav_path)),
+                 lambda: read_embedded_timeline(wav_path)):
+        doc = valid_chapter_timing(read(), frames)
+        if doc is not None:
+            return doc
+    return None
 
 
 # ── Chapter cache key (resume) ──────────────────────────────────────────────
@@ -195,6 +409,15 @@ def adopt_cached_file(legacy_path: str, path: str) -> str:
         os.replace(legacy_path, path)
     except OSError:
         return legacy_path
+    # Its timing describes the same audio, so it moves too; a sidecar already
+    # under the new key described other audio and goes.
+    legacy_timing = timeline_sidecar_path(legacy_path)
+    try:
+        if not os.path.exists(legacy_timing):
+            raise FileNotFoundError(legacy_timing)
+        os.replace(legacy_timing, timeline_sidecar_path(path))
+    except OSError:
+        remove_timeline_sidecar(path)
     # Persist the new directory entry, or a power-off can undo the move and
     # the chapter re-renders after all.
     flush_dir(os.path.dirname(path))
@@ -524,9 +747,28 @@ class SegmentCache:
         try:
             from services.audio_io import atomic_save_wav
             os.makedirs(self.dir, exist_ok=True)
-            atomic_save_wav(self._path(span, nonce), audio, self.sample_rate, durable=True)
+            path = self._path(span, nonce)
+            # The old take's timing must not outlive it.
+            remove_timeline_sidecar(path)
+            atomic_save_wav(path, audio, self.sample_rate, durable=True)
         except Exception:
             pass
+
+    def load_timing(self, span, nonce: int = 0, *, samples: int) -> Optional[list]:
+        """Where each phrase sits in the cached segment of ``span`` —
+        ``[[phrase index, start, end], …]`` in samples — or ``None`` when its
+        sidecar is missing, unreadable or from another take (``samples`` is
+        the length of the audio :meth:`load` returned). Segments cached before
+        timing was kept have none, so their span is timed as a whole."""
+        return valid_segment_timing(
+            read_json_file(timeline_sidecar_path(self._path(span, nonce))), samples)
+
+    def store_timing(self, span, units: list, nonce: int = 0, *, samples: int) -> None:
+        """Keep the phrase ranges of a segment just stored. Best-effort."""
+        doc = {"version": TIMELINE_VERSION, "samples": int(samples),
+               "units": [[int(k), int(a), int(b)] for k, a, b in units]}
+        if valid_segment_timing(doc, samples) is not None:
+            write_json_atomic(timeline_sidecar_path(self._path(span, nonce)), doc)
 
 
 # ── Loudness normalization ──────────────────────────────────────────────────

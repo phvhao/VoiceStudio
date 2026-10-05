@@ -62,11 +62,25 @@ The Audiobook script editor numbers its lines and draws a thin lane beside
 them in the color of the voice reading each line, so you can see where a
 `[voice:NAME]` switch takes effect without reading the tags. Every name keeps
 the same color in the editor, the **Cast** panel and the toolbar's voice
-picker; `[voice:]` (back to the default voice) is outlined in gray. The line
-with the cursor is shaded, `# Chapter` lines show as bands, and the status bar
-underneath shows the line and column, the voice in effect at the cursor and the
-profile cast to read it (for example *Voice: Mara, read by Lan*), and the
-script's length.
+picker; `[voice:]` and `[voice:default]` (back to the default voice) are
+outlined in gray. The line with the cursor is shaded, `# Chapter` lines show
+as bands (`## Section` and `### Section` lines as lighter ones), and the
+status bar underneath shows the line and column, the voice in effect at the
+cursor and the profile cast to read it (for example *Voice: Mara, read by
+Lan*), and the script's length.
+
+`# Title` starts a chapter (a chapter of the finished file). `## Title` and
+`### Title` start a section inside it: the title is read aloud without the
+marks, as a paragraph of its own, by whichever voice is reading there — a
+section never resets the voice. `####` and deeper lines are ordinary text.
+
+The **Contents** panel beside the editor lists the chapters and their
+sections with their word count and estimated length. Click one to move the
+cursor to its heading; its menu renames it, adds a chapter or section after
+it, or removes the heading and keeps the text (all undoable with Ctrl+Z). Each
+chapter says whether its audio is **Rendered** for the script and settings as
+they are now, **Changed** since the last audiobook, or **Not rendered**; its
+play button renders that chapter on its own, and the full book reuses it.
 
 In Audiobook and Stories, click a tag — or put the cursor on it and press
 **Alt+Enter** — to open a card for it:
@@ -123,8 +137,25 @@ audio. The current sentence and word are highlighted as the book plays and the
 text scrolls to follow; scroll yourself and following pauses until you press
 **Back to the current line** or seek. Click any word to play from there, or
 jump with the chapter menu. **Space** plays or pauses and **←/→** skip 5
-seconds. Word timing is estimated from the text, so the highlight can run
-slightly ahead of or behind the voice.
+seconds.
+
+A render records where each sentence lands in the audio, so the highlight
+moves to a sentence exactly when the voice reaches it and stays there through
+the pause after it; within a sentence, each word's share of the time follows
+its length. The reader follows the words as they were rendered, so editing the
+script afterwards does not throw it off. Books rendered before this, and
+chapters reused from an older cache, fall back to timing estimated from the
+text; the reader says when the chapter playing is estimated, and its highlight
+can run slightly ahead of or behind the voice.
+
+**Export HTML** saves the book as a web page: a ZIP holding `index.html`, the
+audio (`.m4a` for an M4B book, so every browser plays it) and the cover. Unpack
+it and open `index.html` in any browser, offline — the page makes no network
+request. It shows the title, author and cover, a contents list of chapters and
+sections that jumps the audio, and the full text with the sentence being read
+highlighted and the current word tinted; play/pause, seek, speed, **Space** and
+**←/→** work as in the reader, and it follows the system's light or dark mode.
+Its labels are in the app's language.
 
 ## Recovering an interrupted audiobook
 

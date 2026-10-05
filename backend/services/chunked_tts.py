@@ -361,7 +361,7 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
 
 
 def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
-                 texts=None, trim_edges: bool = False, sink=None):
+                 texts=None, trim_edges: bool = False, sink=None, ranges=None):
     """Join phrase renders with each boundary's chosen silence.
 
     The engine's own lead-in/tail is trimmed at every phrase boundary so the
@@ -370,6 +370,10 @@ def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
     ``pauses_ms[i]`` is the silence after phrase ``i``. Dropped (empty)
     renders are reported the way :func:`join_rendered_chunks` reports them;
     ``None`` when nothing rendered.
+
+    ``ranges`` (a list the caller owns) receives ``(i, start, end)`` for every
+    phrase that made it into the join: where phrase ``i`` sits in the joined
+    audio, in samples, after its trims.
     """
     import torch
 
@@ -381,6 +385,7 @@ def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
     if not kept:
         return None
     parts = []
+    cursor = 0
     for position, i in enumerate(kept):
         first, last = position == 0, position == len(kept) - 1
         audio = trim_edge_silence(rendered[i], sample_rate,
@@ -391,7 +396,11 @@ def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
             if samples > 0:
                 parts.append(torch.zeros(*audio.shape[:-1], samples,
                                          dtype=audio.dtype, device=audio.device))
+                cursor += samples
         parts.append(audio)
+        if ranges is not None:
+            ranges.append((i, cursor, cursor + audio.shape[-1]))
+        cursor += audio.shape[-1]
     if len(parts) == 1:
         return parts[0]
     return concatenate_audio_chunks(parts, sample_rate, crossfade_ms=0)
@@ -600,8 +609,13 @@ def report_dropped_chunks(dropped: list, total: int, texts=None, sink=None) -> N
 
 def join_rendered_chunks(rendered: list, sample_rate: int, *,
                          crossfade_ms: int = DEFAULT_CROSSFADE_MS,
-                         texts=None, sink=None, trim_edges: bool = False):
+                         texts=None, sink=None, trim_edges: bool = False,
+                         ranges=None):
     """Join what a multi-chunk render produced, reporting whatever it lost.
+
+    ``ranges`` (a list the caller owns) receives ``(i, start, end)`` for every
+    chunk in the join, in samples; two crossfaded chunks meet in the middle of
+    their overlap.
 
     ``None`` when nothing rendered — the caller's dead-render handling owns
     that case, and returning a silence buffer instead would hide it.
@@ -624,6 +638,11 @@ def join_rendered_chunks(rendered: list, sample_rate: int, *,
         # The engine's own lead-in/tail would otherwise become a hole at every
         # chunk boundary; the caller adds the gaps it actually wants.
         kept = [trim_edge_silence(r, sample_rate) for r in kept]
+    if ranges is not None and kept:
+        indices = [i for i in range(len(rendered)) if i not in dropped_indices]
+        ranges.extend((i, start, end) for i, (start, end) in zip(
+            indices, chunk_ranges([r.shape[-1] for r in kept],
+                                  int(sample_rate * crossfade_ms / 1000))))
     if not kept:
         if dropped:
             report_dropped_chunks(dropped, len(rendered), texts, sink)
@@ -638,6 +657,45 @@ def join_rendered_chunks(rendered: list, sample_rate: int, *,
         report_dropped_chunks(dropped, len(rendered), texts, sink)
     return concatenate_audio_chunks(kept, sample_rate,
                                     crossfade_ms=crossfade_ms)
+
+
+def _crossfade_overlaps(lengths: list, crossfade_samples: int) -> list:
+    """Samples each chunk after the first shares with what precedes it.
+
+    Capped by the chunk and by the length joined SO FAR, so a run of chunks
+    shorter than the crossfade blends back across a boundary — the exact
+    arithmetic :func:`concatenate_audio_chunks` joins with.
+    """
+    joined = lengths[0] if lengths else 0
+    overlaps: list[int] = []
+    for length in lengths[1:]:
+        overlap = max(0, min(crossfade_samples, joined, length))
+        overlaps.append(overlap)
+        joined += length - overlap
+    return overlaps
+
+
+def chunk_ranges(lengths: list, crossfade_samples: int) -> list:
+    """``(start, end)`` of each chunk in the audio :func:`concatenate_audio_chunks`
+    makes from chunks of these ``lengths`` (all non-empty). Two chunks that
+    crossfade meet in the middle of their overlap, so the ranges tile the
+    joined audio without overlapping."""
+    if not lengths:
+        return []
+    overlaps = _crossfade_overlaps(lengths, crossfade_samples)
+    starts = [0]
+    for length, overlap in zip(lengths, overlaps):
+        starts.append(starts[-1] + length - overlap)
+    total = starts[-1] + lengths[-1]
+    out = []
+    for k in range(len(lengths)):
+        start = starts[k] + (overlaps[k - 1] // 2 if k else 0)
+        end = (starts[k + 1] + overlaps[k] // 2) if k < len(overlaps) else total
+        # A chunk shorter than the crossfade can blend back past its
+        # predecessor's start; keep the ranges in order all the same.
+        start = max(start, out[-1][1]) if out else start
+        out.append((start, max(start, end)))
+    return out
 
 
 @_render_timed('join')
@@ -698,12 +756,8 @@ def concatenate_audio_chunks(chunks: list, sample_rate: int,
     # boundary, and a version that faded chunk-against-chunk would quietly
     # produce different audio there.
     lengths = [chunk.shape[-1] for chunk in chunks]
-    joined = lengths[0]
-    overlaps: list[int] = []
-    for length in lengths[1:]:
-        overlap = max(0, min(crossfade_samples, joined, length))
-        overlaps.append(overlap)
-        joined += length - overlap
+    overlaps = _crossfade_overlaps(lengths, crossfade_samples)
+    joined = sum(lengths) - sum(overlaps)
 
     out = torch.empty(*first.shape[:-1], joined, dtype=first.dtype, device=first.device)
     out[..., :lengths[0]] = first

@@ -118,7 +118,28 @@ def test_existing_markdown_headings_after_preamble_stay_verbatim(newline):
     from services.longform_import import chapterize_plaintext
 
     manuscript = newline.join(["Prologue", "# First", "Body."])
-    assert chapterize_plaintext(manuscript) == manuscript
+    # The headings are the user's own and stay as written; the line endings
+    # come back as LF like every other import, never a stray \r in the editor.
+    assert chapterize_plaintext(manuscript) == "Prologue\n# First\nBody."
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_import_endpoint_normalizes_line_endings_of_a_structured_script(newline):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from api.routers.audiobook import router
+
+    app = FastAPI()
+    app.include_router(router)
+    script = newline.join(["# One", "[voice:Mara] Hello.", "", "# Two", "The end."])
+    response = TestClient(app).post(
+        "/audiobook/import", files={"file": ("book.md", script.encode(), "text/markdown")}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "text": "# One\n[voice:Mara] Hello.\n\n# Two\nThe end.",
+        "chapters": 2,
+    }
 
 
 # ── EPUB ────────────────────────────────────────────────────────────────────
@@ -221,6 +242,19 @@ def test_epub_strips_html_tags():
     assert "ignore()" not in script
     assert "<b>" not in script
     assert "Hello" in script and "world." in script
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_epub_text_carries_no_carriage_returns(newline):
+    document = newline.join([
+        "<html><body><h1>One</h1>",
+        "<pre>First line.",
+        "Second line.</pre>",
+        "</body></html>",
+    ])
+    script = epub_to_chapter_script(_make_epub_raw([document.encode("utf-8")]))
+    assert "\r" not in script
+    assert script == "# One\n\nFirst line.\nSecond line."
 
 
 def test_epub_bad_zip_raises_valueerror():

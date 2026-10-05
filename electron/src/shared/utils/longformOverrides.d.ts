@@ -47,7 +47,7 @@ export const DEFAULT_OVERRIDES: Overrides;
 /** dB of volume per voice: `[voice:NAME]` name → gain, `''` for the default voice. */
 export type VoiceGains = Record<string, number>;
 export const MAX_VOICE_GAIN_DB: number;
-export function voiceGainKey(name: string, cast?: Record<string, string> | null): string;
+export function voiceGainKey(name: string): string;
 export function clampVoiceGain(db: unknown): number;
 export function voiceGain(gains: VoiceGains | null | undefined, key: string): number;
 export function setVoiceGain(

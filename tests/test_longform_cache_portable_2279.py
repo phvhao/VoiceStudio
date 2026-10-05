@@ -226,7 +226,7 @@ def test_torn_chapter_wav_rerenders(data_dirs, cut):
     _p, _d, cached, _s = _render(_chapter("Torn."), _synth(calls), _SR, "eng",
                                  _resolver(old), str(cache))
     assert cached is False
-    seg = next((cache / _mod("services.longform_render").SEGMENT_SUBDIR).iterdir())
+    seg = next((cache / _mod("services.longform_render").SEGMENT_SUBDIR).glob("*.wav"))
     with open(seg, "r+b") as f:
         f.truncate(os.path.getsize(seg) - cut)
     with open(wav, "r+b") as f:

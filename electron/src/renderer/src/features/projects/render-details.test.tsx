@@ -49,7 +49,9 @@ it('shows how the render was made, and says so plainly when an old render has no
   expect(screen.getByText('Jake (fine-tune)')).toBeVisible();
   expect(screen.getByText('9 chapters · 18 lines · 9322 words')).toBeVisible();
   expect(
-    screen.getByText('Gap between lines 250 · Seed 7 · Even out voice volume Enabled'),
+    screen.getByText(
+      'Gap between lines 250 · Seed 7 · Even out voice volume Enabled · Volume Mara +3 dB',
+    ),
   ).toBeVisible();
   expect(screen.getByText('MP3')).toBeVisible();
   view.unmount();
@@ -78,4 +80,46 @@ it('ignores inherited object names in persisted settings', () => {
   );
   expect(screen.getByText('Seed 7')).toBeVisible();
   expect(screen.queryByText(/unsafe/)).not.toBeInTheDocument();
+});
+
+it('spells out every recorded setting, leveling and reading included', () => {
+  render(
+    <RenderDetails
+      render={{
+        ...record,
+        summary: {
+          options: {
+            level_voices: false,
+            voice_gains: { '': -2, Mara: 3.5 },
+            punctuation_pauses: { sentence: 300, comma: 120 },
+            split_commas: true,
+            verify_speech: true,
+          },
+        },
+      }}
+    />,
+  );
+  const settings = screen.getByText(/^Even out voice volume/).textContent;
+  expect(settings).toBe(
+    [
+      'Even out voice volume Disabled',
+      'Volume Default voice -2 dB, Mara +3.5 dB',
+      'Pause after each mark End of sentence or line 300 ms, Comma 120 ms',
+      'Pause at every comma Enabled',
+      'Check the reading and redo mistakes Enabled',
+    ].join(' · '),
+  );
+});
+
+it('drops a setting it cannot show readably rather than print an object', () => {
+  render(
+    <RenderDetails
+      render={{
+        ...record,
+        summary: { options: { seed: 7, voice_gains: 'loud', punctuation_pauses: { x: 'y' } } },
+      }}
+    />,
+  );
+  expect(screen.getByText('Seed 7')).toBeVisible();
+  expect(screen.queryByText(/object|loud/)).not.toBeInTheDocument();
 });

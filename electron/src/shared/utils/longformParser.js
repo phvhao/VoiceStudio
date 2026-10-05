@@ -7,16 +7,21 @@
  * tests/test_longform_parser.py and electron/src/shared/test/longformParser.test.js).
  * Do not "improve" one side without the other — the corpus will fail.
  *
- * Grammar precedence (outer→inner):  # chapter → [voice:] → [pause] → SSML-lite.
+ * Grammar precedence (outer→inner):
+ *   # chapter → ## section → [voice:] → [pause] → SSML-lite.
  */
 import { parseSsmlLite, spellOut } from './ssmlLite';
 
 export const PAUSE_DEFAULT_MS = 350;
 export const PAUSE_MAX_MS = 10000;
 
-// H1 only (## … narrate as body); title starts with \S so `# ` (no title) is
-// body. Moved-equivalent of audiobook.py _HEADING_RE. Global+multiline.
+// H1 only; title starts with \S so `# ` (no title) is body. Moved-equivalent
+// of audiobook.py _HEADING_RE. Global+multiline.
 const HEADING_RE = /^[ \t]*#[ \t]+(\S.*)$/gm;
+// `## Title` / `### Title` opens a section inside a chapter (mirrors
+// _SECTION_RE): read aloud without its marks, as a paragraph of its own, in the
+// voice reading there. `####`… stay ordinary text.
+const SECTION_RE = /^[ \t]*(#{2,3})[ \t]+(\S.*)$/gm;
 // [voice:NAME] — content excludes BOTH brackets (mirrors _VOICE_RE).
 const VOICE_RE = /\[voice:([^\][]*)\]/g;
 // Pause dialect mirroring omnivoice.utils.text._PAUSE_RE. JS has no atomic
@@ -71,10 +76,13 @@ function parsePauseMarkers(text) {
   return segments;
 }
 
-/** Mirror of the voice-split in _parse_chapter_body → [[voiceId, runText], …]. */
-function parseVoiceRuns(body, defaultVoice) {
+/**
+ * Mirror of _voice_runs: split `body` at its [voice:NAME] tags, starting in
+ * `voice` → [[[voiceId, runText], …], the voice in effect at its end].
+ */
+function parseVoiceRuns(body, defaultVoice, voice = defaultVoice) {
   const runs = [];
-  let curVoice = defaultVoice;
+  let curVoice = voice;
   let last = 0;
   const re = new RegExp(VOICE_RE.source, VOICE_RE.flags);
   let m;
@@ -86,7 +94,7 @@ function parseVoiceRuns(body, defaultVoice) {
     if (re.lastIndex === m.index) re.lastIndex++;
   }
   runs.push([curVoice, body.slice(last)]);
-  return runs;
+  return [runs, curVoice];
 }
 
 // A blank line (paragraph break) — mirrors _BLANK_LINE_RE in longform_parser.py.
@@ -98,8 +106,13 @@ const BLANK_LINE_RE = /\n[ \t\r]*\n/;
  * _parse_chapter_body.
  */
 export function parseChapterBody(body, { defaultVoice = null, defaultSpeed = null } = {}) {
+  return runsToSpans(parseVoiceRuns(body, defaultVoice)[0], defaultSpeed);
+}
+
+/** Mirror of _runs_to_spans: pause→SSML layering of voice runs into spans. */
+function runsToSpans(runs, defaultSpeed) {
   const spans = [];
-  for (const [voice, runText] of parseVoiceRuns(body, defaultVoice)) {
+  for (const [voice, runText] of runs) {
     for (const [spanText, pauseMs] of parsePauseMarkers(runText)) {
       const t = (spanText || '').trim();
       if (!t && pauseMs === 0) continue;
@@ -143,6 +156,55 @@ export function parseChapterBody(body, { defaultVoice = null, defaultSpeed = nul
   return spans;
 }
 
+/**
+ * Mirror of _parse_sectioned_body: one Audiobook chapter body with its
+ * `##`/`###` section headings. A heading line is parsed like any other text,
+ * without its marks; the first of its spans that speaks carries `section`
+ * (the title as written) and `section_level`, and it is a paragraph of its own
+ * (`join: 'paragraph'` on the span before it and on its last span). The voice
+ * runs on across it.
+ */
+function parseSectionedBody(body, { defaultVoice = null, defaultSpeed = null } = {}) {
+  const spans = [];
+  let voice = defaultVoice;
+  let pending = null;
+  const breaks = new Set();
+  const add = (text, heading = null) => {
+    const [runs, next] = parseVoiceRuns(text, defaultVoice, voice);
+    voice = next;
+    const block = runsToSpans(runs, defaultSpeed);
+    if (heading) {
+      if (spans.length) breaks.add(spans.length - 1);
+      pending = heading;
+    }
+    for (const span of block) {
+      if (pending && span.text) {
+        span.section = pending[0];
+        span.section_level = pending[1];
+        pending = null;
+      }
+      spans.push(span);
+    }
+    if (heading && block.length) breaks.add(spans.length - 1);
+  };
+  const re = new RegExp(SECTION_RE.source, SECTION_RE.flags);
+  let last = 0;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    add(body.slice(last, m.index));
+    add(m[2], [m[2].trim(), m[1].length]);
+    last = m.index + m[0].length;
+    if (re.lastIndex === m.index) re.lastIndex++;
+  }
+  add(body.slice(last));
+  for (const i of [...breaks].sort((a, b) => a - b)) {
+    const span = spans[i];
+    if (i < spans.length - 1 && span.text && !span.pause_ms_after && !('join' in span))
+      span.join = 'paragraph';
+  }
+  return spans;
+}
+
 /** Mirror of parse_script_to_spans → [{ title, spans:[{voice_id,text,pause_ms_after,speed}] }]. */
 export function parseScriptToSpans(text, { defaultVoice = null, defaultSpeed = null } = {}) {
   if (!text) return [];
@@ -170,7 +232,7 @@ export function parseScriptToSpans(text, { defaultVoice = null, defaultSpeed = n
 
   const chapters = [];
   for (const [title, body] of raw) {
-    const spans = parseChapterBody(body, { defaultVoice, defaultSpeed });
+    const spans = parseSectionedBody(body, { defaultVoice, defaultSpeed });
     if (!spans.length) continue;
     chapters.push({ title: title || `Chapter ${chapters.length + 1}`, spans });
   }

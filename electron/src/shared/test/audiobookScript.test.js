@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isDefaultVoiceName,
   parseCastNames,
   scriptStats,
   formatRuntimeClock,
@@ -15,6 +16,12 @@ describe('parseCastNames', () => {
   });
   it('skips the empty [voice:] reset and trims names', () => {
     expect(parseCastNames('[voice:] plain [voice: Mara ] x')).toEqual(['Mara']);
+  });
+  it('skips [voice:default] in any case: it is the default voice, not a name to cast', () => {
+    const script = '[voice:Mara] a [voice:default] b [voice: Default ] c [voice:DEFAULT] d';
+    expect(parseCastNames(script)).toEqual(['Mara']);
+    expect(['', ' ', 'default', ' Default ', 'DEFAULT', null].every(isDefaultVoiceName)).toBe(true);
+    expect(isDefaultVoiceName('Defaults')).toBe(false);
   });
   it('is empty for a script with no voice tags', () => {
     expect(parseCastNames('# Chapter\nJust narration.')).toEqual([]);
@@ -35,6 +42,12 @@ describe('scriptStats', () => {
   it('treats a title-less script as one chapter', () => {
     expect(scriptStats('just some words').chapters).toBe(1);
   });
+  it('counts a section title as spoken words, not its marks or a chapter', () => {
+    const { chapters, words } = scriptStats('# One\n## Part two\nBody.\n  ### Deep\n#### four');
+    expect(chapters).toBe(1);
+    // "Part two" (2) + "Body." + "Deep" + "#### four" (2): `####` stays text.
+    expect(words).toBe(6);
+  });
 });
 
 describe('formatRuntimeClock', () => {
@@ -54,6 +67,11 @@ describe('validateScript', () => {
     expect(validateScript(script, { mappedNames: ['Mara'], profileIds: [] })).toEqual([]);
     // …and an exact profile-id match also clears it.
     expect(validateScript(script, { mappedNames: [], profileIds: ['Mara'] })).toEqual([]);
+  });
+  it('never calls the default voice an unknown voice', () => {
+    expect(validateScript('[voice:default] hi [voice:Default] there [voice:] again', {})).toEqual(
+      [],
+    );
   });
   it('flags empty chapters and unrecognized tags', () => {
     const script = '# Empty\n\n# Full\nSome [wobble] words [pause 1s] and [slow]slow[/slow].';

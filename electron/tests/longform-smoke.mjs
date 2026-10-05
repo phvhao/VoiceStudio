@@ -37,8 +37,13 @@ try {
     route.fulfill({ json: { path: '/covers/fixture.png' } }),
   );
   let previewBody;
-  await page.route('**/api/audiobook/plan', (route) =>
-    route.fulfill({ json: { chapters: [{ title: 'Chapter one', char_count: 25 }] } }),
+  await page.route('**/api/audiobook/outline', (route) =>
+    route.fulfill({
+      json: {
+        book: false,
+        chapters: [{ title: 'Chapter one', status: 'not_rendered', cached: false, in_book: null }],
+      },
+    }),
   );
   await page.route('**/api/audiobook/preview', (route) => {
     previewBody = route.request().postDataJSON();
@@ -54,16 +59,14 @@ try {
   assert(await page.getByRole('button', { name: 'Create audiobook', exact: true }).isDisabled());
   await page
     .locator('[data-slot=secondary-sidebar]')
-    .getByRole('button', { name: 'Narrator fixture', exact: true })
+    .getByRole('combobox', { name: 'Default voice', exact: true })
     .click();
+  await page.getByRole('option', { name: 'Narrator fixture', exact: true }).click();
   await page
     .getByRole('textbox', { name: 'Script', exact: true })
     .fill('# Chapter one\n[voice:Mara] Hello from this book.');
-  await page.getByText('Mara', { exact: true }).click();
-  await page
-    .getByRole('group', { name: 'Cast: Mara', exact: true })
-    .getByRole('button', { name: 'Actor fixture', exact: true })
-    .click();
+  await page.getByRole('combobox', { name: 'Voice for Mara', exact: true }).click();
+  await page.getByRole('option', { name: 'Actor fixture', exact: true }).click();
   await page.getByText('Cover & details', { exact: true }).click();
   await page.getByLabel('Author', { exact: true }).fill('Test author');
   await page
@@ -78,7 +81,6 @@ try {
   await page.getByLabel(/Say it as/).fill('sequel');
   await page.getByText('Production overrides', { exact: true }).click();
   await page.getByLabel('Seed', { exact: true }).fill('0');
-  await page.getByRole('button', { name: 'Preview plan', exact: true }).click();
   await page.getByRole('button', { name: 'Preview chapter: Chapter one', exact: true }).click();
   await page.getByRole('button', { name: 'Play', exact: true }).waitFor();
   assert.deepEqual(previewBody.voice_map, { Mara: 'actor' });

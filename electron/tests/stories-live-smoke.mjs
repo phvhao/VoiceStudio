@@ -22,7 +22,8 @@ try {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(base + '/#/stories');
   const side = page.locator('[data-slot=secondary-sidebar]');
-  await side.getByRole('button', { name: narrator.name, exact: true }).click();
+  await side.getByRole('combobox', { name: 'Default voice', exact: true }).click();
+  await page.getByRole('option', { name: narrator.name, exact: true }).click();
   await page.getByRole('button', { name: /Add (?:First )?Line/, exact: true }).click();
   await page.getByRole('textbox', { name: /Enter dialogue/ }).fill('Welcome to our short story.');
   await side.getByText(/assign a voice to each character/).click();
