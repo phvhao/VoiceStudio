@@ -1867,6 +1867,8 @@
     "listen_part": "Nghe đoạn này",
     "select_part": "Chọn đoạn này",
     "card_pause": "Khoảng lặng {{duration}}.",
+    "pause_length": "Độ dài khoảng lặng",
+    "pause_custom_seconds": "Độ dài khoảng lặng tùy chỉnh, tính bằng giây",
     "apply": "Áp dụng",
     "card_expression": "Âm thanh phát ra tại vị trí này.",
     "card_delivery": "Thay đổi cách đọc phần chữ giữa {{open}} và {{close}}.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "Mục lục",
     "empty": "Bắt đầu một chương bằng một dòng như # Chương 1.",
-    "node_meta": "{{words}} từ · {{runtime}}",
+    "node_meta_one": "{{words}} từ · {{runtime}}",
+    "node_meta_other": "{{words}} từ · {{runtime}}",
     "status_rendered": "Đã tạo",
     "status_changed": "Đã đổi",
     "status_not_rendered": "Chưa tạo",

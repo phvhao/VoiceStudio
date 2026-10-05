@@ -44,11 +44,22 @@ it('sends the book, how it was rendered and the page words in the app language',
     // Exact lengths; a failed chapter is not in the file.
     chapter_durations: [1.234, null],
     lang: 'vi',
+    direction: 'ltr',
+    // The book's own language: the draft reads "Auto", so it is not known.
+    book_lang: '',
   });
   expect(body.labels).toMatchObject({
     play: t('book.html_play'),
     contents: t('book.contents'),
     keys: t('book.html_keys'),
+    chapter_n: t('audiobook.chapter_n', { n: '{n}' }),
+  });
+  expect(body.labels.chapter_n).toContain('{n}');
+  // An Arabic UI exporting an English book.
+  expect(htmlExportBody({ ...book, language: 'English' }, t, 'ar', 'rtl')).toMatchObject({
+    lang: 'ar',
+    direction: 'rtl',
+    book_lang: 'en',
   });
   expect(Object.values(body.labels).every((label) => label && !label.startsWith('book.'))).toBe(
     true,
@@ -62,12 +73,12 @@ it('sends the book, how it was rendered and the page words in the app language',
 
 it('exports and saves the page through the native save dialog', async () => {
   mock.bridge = {};
-  mock.api.mockResolvedValue({ output: 'audiobook_abc.m4b.html.zip', bytes: 10 });
+  mock.api.mockResolvedValue({ id: '0123456789abcdef0123456789abcdef', bytes: 10 });
   render(<ExportHtmlButton draft={book} onError={() => {}} />);
   fireEvent.click(screen.getByRole('button', { name: t('book.export_html') }));
   await waitFor(() =>
     expect(mock.save).toHaveBeenCalledWith(
-      '/api/audio/audiobook_abc.m4b.html.zip',
+      '/api/audiobook/export/html/0123456789abcdef0123456789abcdef',
       'Night <Train>.zip',
     ),
   );

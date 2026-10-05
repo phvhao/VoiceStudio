@@ -32,6 +32,8 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import time
 import uuid
 
 from collections.abc import Awaitable, Callable
@@ -40,7 +42,8 @@ from core import voice_leases
 from core.render_trace import call as trace_call, stage as trace_stage
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -82,9 +85,17 @@ _COVER_NAME_RE = re.compile(r"^[0-9a-f]{12}\.(?:jpg|jpeg|png)$")
 _OUTPUT_NAME_RE = re.compile(r"^[a-z]{1,32}_[A-Za-z0-9_-]{1,64}\.(?:m4b|mp3)$")
 #: The rendered timeline of a finished book: ``<output>.timeline.json`` next to it.
 TIMELINE_SIDECAR_SUFFIX = ".timeline.json"
-#: A finished book's HTML export: ``<output>.html.zip`` next to it, rebuilt on
-#: every export and removed with the timeline when a new file takes the name.
+#: Where earlier versions left a book's HTML export: ``<output>.html.zip``
+#: next to it. Exports wait in the temp folder now; one found here is removed.
 HTML_EXPORT_SUFFIX = ".html.zip"
+#: HTML exports wait in this folder of the system temp folder, outside the
+#: outputs, until the app downloads them: each holds a full copy of the book's
+#: audio, so it is served once and removed.
+HTML_EXPORT_DIRNAME = "voicestudio-html-exports"
+_HTML_EXPORT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+#: An export nobody downloaded (its save dialog was cancelled) is removed by
+#: the next export once it is this old.
+_HTML_EXPORT_STALE_S = 60 * 60
 # A day-long book is a few MB of timeline; anything far past that is not one.
 _TIMELINE_MAX_BYTES = 64 * 1024 * 1024
 
@@ -1446,7 +1457,8 @@ async def _render_longform_sse(
         longform_resume.write_manifest(longform_resume.build_manifest(
             job_id=job_id, job_type=job_type, title=title,
             plan_chapters=[
-                {"title": c.title, "spans": [s.to_dict() for s in c.spans]}
+                {"title": c.title, "spans": [s.to_dict() for s in c.spans],
+                 **({"untitled": True} if getattr(c, "untitled", False) else {})}
                 for c in plan.chapters
             ],
             params={
@@ -1830,30 +1842,57 @@ class AudiobookHtmlExportRequest(BaseModel):
     # rendered without a timeline, to estimate one.
     text: str | None = None
     chapter_durations: list[float | None] | None = None
-    # The page's language (an HTML lang tag) and its words in that language.
+    # The app's language (an HTML lang tag) and direction, and the page's
+    # words in that language.
     lang: str = Field(default="en", max_length=35)
+    direction: Literal["ltr", "rtl"] = "ltr"
     labels: dict[str, str] | None = None
+    # The language of the book's text (an HTML lang tag); "" when not known.
+    book_lang: str = Field(default="", max_length=35)
+
+
+def _html_export_dir() -> str:
+    return os.path.join(tempfile.gettempdir(), HTML_EXPORT_DIRNAME)
+
+
+def _remove_quietly(path: str) -> None:
+    with contextlib.suppress(OSError):
+        os.remove(path)
+
+
+def _prune_html_exports(directory: str) -> None:
+    """Remove the exports in ``directory`` nobody downloaded. Best-effort."""
+    cutoff = time.time() - _HTML_EXPORT_STALE_S
+    with contextlib.suppress(OSError), os.scandir(directory) as entries:
+        for entry in entries:
+            with contextlib.suppress(OSError):
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
 
 
 @router.post("/audiobook/export/html")
 async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
-    """Export a finished book as a web page: ``<output>.html.zip`` beside it
-    (served under ``/audio``) holding ``index.html`` — one self-contained
-    page that reads the book along with its audio — ``audio/<book>`` and the
-    cover. Rebuilt on every export; a new render of the name removes it."""
+    """Export a finished book as a web page: a ZIP holding ``index.html`` —
+    one self-contained page that reads the book along with its audio —
+    ``audio/<book>`` and the cover. It waits in the temp folder under ``id``
+    until ``GET /audiobook/export/html/{id}`` downloads it, once."""
     from core.config import OUTPUTS_DIR
     from services.audiobook_html import (
         audio_name,
+        chapter_title,
         estimated_timeline,
+        labels_for,
         render_page,
         write_export_zip,
     )
     from services.ffmpeg_utils import probe_duration
 
     audio_path = _book_path(req.output)
-    zip_path = _book_path(req.output, HTML_EXPORT_SUFFIX)
-    if audio_path is None or zip_path is None or not os.path.isfile(audio_path):
+    legacy_zip = _book_path(req.output, HTML_EXPORT_SUFFIX)
+    if audio_path is None or legacy_zip is None or not os.path.isfile(audio_path):
         raise HTTPException(status_code=404, detail="No such audiobook")
+    # An earlier version kept the export beside the book, a second copy of it.
+    _remove_quietly(legacy_zip)
     timeline = _read_book_timeline(req.output)
     if timeline is None and req.text:
         durations = req.chapter_durations
@@ -1864,19 +1903,37 @@ async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
                                       duration=total)
     meta = req.metadata or {}
     chapters = (timeline or {}).get("chapters") or []
+    labels = labels_for(req.labels)
     title = (req.title.strip() or (meta.get("title") or "").strip()
-             or (chapters[0].get("title") if chapters else "") or req.output)
+             or (chapter_title(chapters[0], 1, labels) if chapters else "") or req.output)
     cover = _safe_cover_path(req.cover_path)
     cover_entry = f"cover{os.path.splitext(cover)[1].lower()}" if cover else None
     entry = f"audio/{audio_name(req.output)}"
     page = render_page(
-        title=title, timeline=timeline, audio_src=entry, labels=req.labels,
+        title=title, timeline=timeline, audio_src=entry, labels=labels,
         author=(meta.get("author") or "").strip(), narrator=(meta.get("narrator") or "").strip(),
         cover_src=cover_entry, lang=req.lang if _LANG_TAG_RE.fullmatch(req.lang) else "en",
+        direction=req.direction,
+        book_lang=req.book_lang if _LANG_TAG_RE.fullmatch(req.book_lang) else "",
         duration=float((timeline or {}).get("duration") or 0))
+    directory = _html_export_dir()
+    os.makedirs(directory, exist_ok=True)
+    _prune_html_exports(directory)
+    export_id = uuid.uuid4().hex
+    zip_path = os.path.join(directory, f"{export_id}.zip")
     size = await asyncio.to_thread(write_export_zip, zip_path, page=page, audio_path=audio_path,
                                    audio_entry=entry, cover_path=cover, cover_entry=cover_entry)
-    return {"output": os.path.basename(zip_path), "bytes": size}
+    return {"id": export_id, "bytes": size}
+
+
+@router.get("/audiobook/export/html/{export_id}")
+def audiobook_export_html_download(export_id: str) -> FileResponse:
+    """Download an HTML export once: it is removed once it has been sent."""
+    path = os.path.join(_html_export_dir(), f"{export_id}.zip")
+    if not _HTML_EXPORT_ID_RE.fullmatch(export_id) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="No such export")
+    return FileResponse(path, media_type="application/zip",
+                        background=BackgroundTask(_remove_quietly, path))
 
 
 async def _public_longform_stream(plan, **render_kwargs):
@@ -1972,7 +2029,8 @@ async def longform_render(req: LongformRenderRequest, request: Request = None):
                       join=s.join)
                  for s in c.spans if ((s.text and s.text.strip()) or s.pause_ms_after > 0)]
         if spans:
-            chapters.append(Chapter(title=c.title or f"Chapter {i + 1}", spans=spans))
+            chapters.append(Chapter(title=c.title or f"Chapter {i + 1}", spans=spans,
+                                    untitled=not c.title))
     plan = AudiobookPlan(chapters=chapters)
     return StreamingResponse(
         _public_longform_stream(
@@ -2054,7 +2112,8 @@ async def resume_longform(job_id: str, request: Request = None):
 
     chapters = [
         Chapter(title=c.get("title", ""),
-                spans=[Span(**s) for s in c.get("spans", [])])
+                spans=[Span(**s) for s in c.get("spans", [])],
+                untitled=bool(c.get("untitled")))
         for c in manifest["plan"]
     ]
     plan = AudiobookPlan(chapters=chapters)

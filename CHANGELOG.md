@@ -35,11 +35,11 @@ metadata and the backend fallback mirror it.
 - Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books
 - Audiobook `## Section` and `### Section` lines open sections inside a chapter: the title is read aloud without the marks and never resets the voice; chapters containing such lines re-render once
 - A Contents panel beside the Audiobook editor lists chapters and sections, jumps to a heading, renames, adds or removes headings, shows whether each chapter is rendered or changed since the last book, and renders one chapter on its own
-- Export HTML saves a finished audiobook as an offline web page with its audio: contents, the full text following the voice, speed and keyboard controls
+- Export HTML saves a finished audiobook as an offline web page with its audio: contents, the full text following the voice, speed and keyboard controls; no second copy of the book stays in the outputs folder
 - The reader moves to each sentence exactly when the voice reaches it in newly rendered books and follows the words as rendered; older books keep estimated timing and say so
 - The Audiobook default voice and every Cast name are picked from the searchable voice picker, and a Cast name can go back to the default voice
 - Render details name every reading setting: per-voice volume, per-mark pauses, comma splitting and the speech check
-- [voice:default] reads in the book's default voice in any case: Cast no longer lists it, its volume is the default voice's, and the editor colors it as the default voice
+- [voice:default] reads in the book's default voice in any case: Cast no longer lists it, its volume is the default voice's, and the editor colors it as the default voice; a [voice:Default] a saved draft already cast keeps its voice
 - Plain-text and EPUB imports with CRLF or CR line endings no longer leave stray carriage returns in chapter text
 
 ## [0.5.7] — 2026-10-05

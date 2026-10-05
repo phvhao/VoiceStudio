@@ -1867,6 +1867,8 @@
     "listen_part": "Bu kısmı dinle",
     "select_part": "Bu kısmı seç",
     "card_pause": "{{duration}} sessizlik.",
+    "pause_length": "Duraklama süresi",
+    "pause_custom_seconds": "Özel duraklama süresi, saniye cinsinden",
     "apply": "Uygula",
     "card_expression": "Bu noktada seslendirilen bir ses efekti.",
     "card_delivery": "{{open}} ile {{close}} arasındaki kelimelerin nasıl okunacağını değiştirir.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "İçindekiler",
     "empty": "Bir bölüme # Bölüm 1 gibi bir satırla başlayın.",
-    "node_meta": "{{words}} kelime · {{runtime}}",
+    "node_meta_one": "{{words}} kelime · {{runtime}}",
+    "node_meta_other": "{{words}} kelime · {{runtime}}",
     "status_rendered": "Oluşturuldu",
     "status_changed": "Değişti",
     "status_not_rendered": "Oluşturulmadı",

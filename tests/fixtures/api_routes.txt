@@ -58,6 +58,7 @@ GET /archetypes/{archetype_id}/preview/state
 GET /audio/{audio_id}.ogg
 GET /audio/{audio_id}.opus
 GET /audio/{audio_id}/quality
+GET /audiobook/export/html/{export_id}
 GET /audiobook/jobs
 GET /audiobook/timeline/{output}
 GET /batch/download/{job_id}/{lang}

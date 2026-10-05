@@ -1867,6 +1867,8 @@
     "listen_part": "이 부분 듣기",
     "select_part": "이 부분 선택",
     "card_pause": "{{duration}} 동안의 무음.",
+    "pause_length": "쉼 길이",
+    "pause_custom_seconds": "사용자 지정 쉼 길이(초)",
     "apply": "적용",
     "card_expression": "이 위치에서 내는 소리.",
     "card_delivery": "{{open}}~{{close}} 사이 단어의 읽기 방식을 바꿉니다.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "목차",
     "empty": "# 1장 같은 줄로 챕터를 시작하세요.",
-    "node_meta": "{{words}}단어 · {{runtime}}",
+    "node_meta_one": "{{words}}단어 · {{runtime}}",
+    "node_meta_other": "{{words}}단어 · {{runtime}}",
     "status_rendered": "렌더링됨",
     "status_changed": "변경됨",
     "status_not_rendered": "렌더링 안 됨",

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
-import { CastSettings, VoiceGainControl } from './cast-settings';
+import { CastSettings, VoiceGainControl, showsCastPanel } from './cast-settings';
 
 const profiles = [
   { id: 'p-hao', name: 'Hao PV' },
@@ -133,4 +133,13 @@ it('locks the volume while rendering', () => {
   render(<VoiceGainControl name="Mara" value={2} disabled onChange={vi.fn()} />);
   expect(volumeOf('Mara')).toBeDisabled();
   expect(resetOf('Mara')).toBeDisabled();
+});
+
+it('keeps the Stories cast panel while the default voice has a volume only it sets', () => {
+  expect(showsCastPanel('audiobook', [], {})).toBe(true);
+  expect(showsCastPanel('stories', [], {})).toBe(false);
+  expect(showsCastPanel('stories', ['Mara'], {})).toBe(true);
+  // The inline name that showed the panel is gone; its default-voice volume still renders.
+  expect(showsCastPanel('stories', [], { '': -6 })).toBe(true);
+  expect(showsCastPanel('stories', [], { '': 0, Mara: 3 })).toBe(false);
 });

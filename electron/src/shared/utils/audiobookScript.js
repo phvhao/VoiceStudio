@@ -33,12 +33,42 @@ const REACTION_TOKENS = new Set(TAGS.map((s) => s.toLowerCase()));
 /** ~ words a listener hears per minute at an audiobook narration pace. */
 export const AUDIOBOOK_WPM = 155;
 
+// Scripts written without spaces between words (Chinese, Japanese, Thai, Lao,
+// Khmer, Burmese): a whitespace split reads a whole sentence as one word.
+const UNSPACED_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+const UNSPACED_CHAR_RE = new RegExp(UNSPACED_RE.source, 'gu');
+let wordSegmenter;
+
+/** The words in one whitespace-free run: dictionary word breaks where words have no spaces. */
+function runWords(run) {
+  if (!UNSPACED_RE.test(run)) return 1;
+  if (wordSegmenter === undefined)
+    wordSegmenter =
+      typeof Intl !== 'undefined' && Intl.Segmenter
+        ? new Intl.Segmenter(undefined, { granularity: 'word' })
+        : null;
+  if (!wordSegmenter) return (run.match(UNSPACED_CHAR_RE) || []).length;
+  let words = 0;
+  for (const segment of wordSegmenter.segment(run)) if (segment.isWordLike) words++;
+  return words;
+}
+
+/** Spoken words in `text`: whitespace-separated, and word breaks inside unspaced scripts. */
+function countWords(text) {
+  let words = 0;
+  for (const run of text.split(/\s+/)) if (run) words += runWords(run);
+  return words;
+}
+
 /**
  * Distinct `[voice:NAME]` names present in the script, in first-seen order.
  * Names are trimmed. `[voice:]` and `[voice:default]` (any case) are skipped:
  * both hand the text back to the default voice, so neither is a castable name.
+ * Except a `default` name `cast` already gives a voice: older versions let
+ * `[voice:Default]` be cast like any name, and a saved cast keeps reading so.
  */
-export function parseCastNames(text) {
+export function parseCastNames(text, cast = {}) {
   if (!text) return [];
   const seen = new Set();
   const names = [];
@@ -47,7 +77,8 @@ export function parseCastNames(text) {
   while ((m = re.exec(text)) !== null) {
     const name = (m[1] || '').trim();
     if (re.lastIndex === m.index) re.lastIndex++; // zero-width guard
-    if (isDefaultVoiceName(name) || seen.has(name)) continue;
+    const kept = Boolean(name) && Object.hasOwn(cast, name) && Boolean(cast[name]);
+    if ((isDefaultVoiceName(name) && !kept) || seen.has(name)) continue;
     seen.add(name);
     names.push(name);
   }
@@ -74,7 +105,8 @@ function speakInlineOverrides(text) {
 
 /**
  * Live script stats: chapters (`# ` H1 count, ≥1 so a title-less script still
- * reads as one chapter), spoken word count (whitespace split, markup stripped),
+ * reads as one chapter), spoken word count (markup stripped; Chinese, Japanese
+ * and Thai are split at their word breaks, having no spaces between words),
  * and an estimated runtime in seconds at {@link AUDIOBOOK_WPM}.
  */
 export function scriptStats(text) {
@@ -82,13 +114,13 @@ export function scriptStats(text) {
   const headings = norm.match(new RegExp(HEADING_RE.source, HEADING_RE.flags)) || [];
   // Spoken words only: drop `# heading` lines (titles aren't narrated as body,
   // mirroring the parser), the marks of `## section` lines (their titles are
-  // read aloud) AND bracket markup, then whitespace-split.
+  // read aloud) AND bracket markup, then count the words.
   const spoken = stripMarkup(
     norm
       .replace(new RegExp(HEADING_RE.source, HEADING_RE.flags), ' ')
       .replace(new RegExp(SECTION_MARKS_RE.source, SECTION_MARKS_RE.flags), '$1'),
   );
-  const words = spoken.split(/\s+/).filter(Boolean).length;
+  const words = countWords(spoken);
   const chapters = Math.max(1, headings.length);
   const runtimeSec = words > 0 ? (words / AUDIOBOOK_WPM) * 60 : 0;
   return { chapters, words, runtimeSec };

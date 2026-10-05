@@ -7,7 +7,13 @@ import {
   type MarkupEditorEvents,
   type MarkupEditorHandle,
 } from './markup-editor-context';
-import { MARKUP_STYLES, MarkupTextarea, laneSegments, revealOffset } from './markup-textarea';
+import {
+  HIGHLIGHT_LIMIT,
+  MARKUP_STYLES,
+  MarkupTextarea,
+  laneSegments,
+  revealOffset,
+} from './markup-textarea';
 import { DEFAULT_VOICE_ACCENT, VOICE_ACCENTS, VOICE_RESET_CHIP } from './voice-palette';
 
 type EditorProps = Omit<ComponentProps<typeof MarkupTextarea>, 'value' | 'onValueChange'>;
@@ -143,6 +149,27 @@ describe('overlay', () => {
     expect(script()).toHaveFocus();
     expect(script().selectionStart).toBe(offset);
     expect(script().scrollTop).toBe(0); // jsdom has no layout: the top line stays
+  });
+
+  it('reveals a line of a book too long to highlight by where it wraps', () => {
+    // Long paragraphs wrap over several rows each: counting lines would land
+    // chapters away. jsdom has no layout, so the copy that wraps reports a top.
+    const paragraph = 'word '.repeat(120).trim();
+    const text = Array.from({ length: 400 }, (_, i) => `# Ch ${i}\n${paragraph}`).join('\n');
+    expect(text.length).toBeGreaterThan(HIGHLIGHT_LIMIT);
+    render(<Editor initial={text} headings />);
+    const offset = text.indexOf('# Ch 300');
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(
+      function (this: HTMLElement) {
+        const before = this.parentElement?.textContent ?? '';
+        // Six rows of 28px per paragraph, one per heading.
+        return before.startsWith('# Ch 0') ? 300 * (6 + 1) * 28 : 0;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
+    act(() => revealOffset(script(), offset));
+    expect(script().selectionStart).toBe(offset);
+    expect(script().scrollTop).toBe(300 * 7 * 28 - 200);
   });
 
   it('only paints, so the overlay cannot drift from the caret', () => {

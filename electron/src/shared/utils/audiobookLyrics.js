@@ -47,11 +47,13 @@ export function evenSplitWords(text, start, end) {
  * its display tokens: `[{ title, tokens }]`. Control tokens (voice / pause /
  * SSML-lite) are stripped — they shape delivery, nobody hears them — while
  * reaction tags (`[laughs]`…) stay: the engine performs those, so they get a
- * highlight window like any word. Returns `[]` for a blank script.
+ * highlight window like any word. A chapter the script gave no title has
+ * title '', for the reader to name in its own language. Returns `[]` for a
+ * blank script.
  */
 export function scriptChapters(script) {
-  return parseScriptToSpans(String(script || '')).map(({ title, spans }) => ({
-    title,
+  return parseScriptToSpans(String(script || '')).map(({ title, spans, untitled }) => ({
+    title: untitled ? '' : title,
     tokens: spans.flatMap((span) => span.text.split(WS).filter(Boolean)),
   }));
 }
@@ -127,7 +129,9 @@ function pushChapter(outChapters, words, parsedChapter, streamTitle, start, end)
   const chapterIndex = outChapters.length;
   for (const w of split) words.push({ ...w, chapterIndex });
   outChapters.push({
-    title: streamTitle || parsedChapter.title,
+    // The render names an untitled chapter in English ("Chapter 1"): leave it
+    // to the reader, which names it in the app's language.
+    title: parsedChapter.title && (streamTitle || parsedChapter.title),
     start,
     end,
     wordStart,
@@ -177,7 +181,9 @@ export function readTimeline(timeline) {
         start: Math.min(end, Math.max(start, section.start)),
       }));
     chapters.push({
-      title: typeof chapter.title === 'string' ? chapter.title : '',
+      // An untitled chapter carries the file's English "Chapter N": the
+      // reader names it in the app's language instead.
+      title: typeof chapter.title === 'string' && !chapter.untitled ? chapter.title : '',
       start,
       end,
       precision: PRECISIONS.has(chapter.precision) ? chapter.precision : 'chapter',

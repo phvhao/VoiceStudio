@@ -41,8 +41,37 @@ describe('evenSplitWords', () => {
 describe('scriptChapters', () => {
   it('splits on H1 headings and keeps intro text as its own chapter', () => {
     const chs = scriptChapters('Intro line.\n# One\nAlpha beta.\n# Two\nGamma.');
-    expect(chs.map((c) => c.title)).toEqual(['Chapter 1', 'One', 'Two']);
+    // The untitled opening is left for the reader to name in the app's language.
+    expect(chs.map((c) => c.title)).toEqual(['', 'One', 'Two']);
     expect(chs[1].tokens).toEqual(['Alpha', 'beta.']);
+  });
+
+  it("never names an untitled chapter in the render's English", () => {
+    const script = 'Intro line.\n# One\nAlpha.';
+    const timed = buildLyricsTimeline(script, {
+      chapters: [
+        { title: 'Chapter 1', status: 'done', duration_s: 1 },
+        { title: 'One', status: 'done', duration_s: 1 },
+      ],
+    });
+    expect(timed.chapters.map((c) => c.title)).toEqual(['', 'One']);
+    const sidecar = buildLyricsTimeline(script, {
+      timeline: {
+        version: 1,
+        chapters: [
+          {
+            title: 'Chapter 1',
+            untitled: true,
+            start: 0,
+            end: 1,
+            precision: 'chapter',
+            phrases: [],
+          },
+          { title: 'One', start: 1, end: 2, precision: 'chapter', phrases: [] },
+        ],
+      },
+    });
+    expect(sidecar.chapters.map((c) => c.title)).toEqual(['', 'One']);
   });
 
   it('strips control tokens but keeps reaction tags as highlightable words', () => {

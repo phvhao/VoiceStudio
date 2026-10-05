@@ -5,7 +5,9 @@ import { expect, it, vi } from 'vitest';
 // overflowed its box and painted over the generation progress panel and the
 // footer while an audiobook rendered.
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
+}));
 vi.mock('@/components/waveform-player', () => ({ WaveformPlayer: () => null }));
 vi.mock('./story-preview', () => ({ previewStoryLine: vi.fn() }));
 vi.mock('./story-stems', () => ({ StoryStems: () => null }));

@@ -1867,6 +1867,8 @@
     "listen_part": "この部分を試聴",
     "select_part": "この部分を選択",
     "card_pause": "{{duration}} の無音。",
+    "pause_length": "ポーズの長さ",
+    "pause_custom_seconds": "カスタムのポーズの長さ（秒）",
     "apply": "適用",
     "card_expression": "この位置で発せられる音。",
     "card_delivery": "{{open}} と {{close}} の間の言葉の読み方を変えます。",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "目次",
     "empty": "「# 第1章」のような行で章を始めます。",
-    "node_meta": "{{words}} 語 · {{runtime}}",
+    "node_meta_one": "{{words}} 語 · {{runtime}}",
+    "node_meta_other": "{{words}} 語 · {{runtime}}",
     "status_rendered": "レンダリング済み",
     "status_changed": "変更あり",
     "status_not_rendered": "未レンダリング",

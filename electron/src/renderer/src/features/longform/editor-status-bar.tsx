@@ -46,6 +46,7 @@ export function EditorStatusBar({
   names,
   voiceCast,
   profiles,
+  loading = false,
   defaultVoiceName,
   stats,
   className,
@@ -58,6 +59,8 @@ export function EditorStatusBar({
   names: readonly string[];
   voiceCast: Record<string, string>;
   profiles: { id: string; name: string }[];
+  /** The profiles are still loading: a cast voice is unknown, not missing. */
+  loading?: boolean;
   /** The book's default voice, when one is chosen. */
   defaultVoiceName?: string | null;
   stats?: string;
@@ -79,7 +82,7 @@ export function EditorStatusBar({
     const direct = mapped ? undefined : profiles.find((profile) => profile.id === voice);
     const profile = mapped
       ? (profiles.find((candidate) => candidate.id === mapped)?.name ??
-        t('modelSettings.unavailable'))
+        t(loading ? 'common.loading' : 'modelSettings.unavailable'))
       : (direct?.name ?? defaultVoice);
     return t('editor.status_voice', {
       name: direct ? profile : t('editor.status_cast', { name: voice, profile }),

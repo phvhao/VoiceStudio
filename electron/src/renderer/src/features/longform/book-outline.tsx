@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -82,8 +82,10 @@ export function BookOutline({
   onBusy: (busy: boolean) => void;
   getTarget: () => MarkupTarget | null;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
+  const formatCount = (value: number) =>
+    value.toLocaleString(i18n.resolvedLanguage || i18n.language);
   const outline = useMemo(() => scriptOutline(draft.script), [draft.script]);
   const request = JSON.stringify(outlineRequest(draft));
   const [settled, setSettled] = useState(request);
@@ -96,6 +98,9 @@ export function BookOutline({
     queryFn: ({ signal }) =>
       apiJson<OutlineStatus>('/audiobook/outline', { method: 'POST', body: settled, signal }),
     enabled: Boolean(draft.script.trim()),
+    // The key holds the whole script and only the latest one is shown: an
+    // answer for an earlier draft is never needed again, so none is kept.
+    gcTime: 0,
   });
   // Statuses are index-aligned with the plan of the request they answered.
   const statuses = settled === request ? status.data?.chapters : undefined;
@@ -106,12 +111,21 @@ export function BookOutline({
     onRendered: () => void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] }),
   });
   const [renaming, setRenaming] = useState<number | null>(null);
+  // The row whose title takes the focus back once its rename field is gone.
+  const refocus = useRef<number | null>(null);
 
+  /** Make an edit in the editor, which then has the focus; false when there is none to make. */
   const edit = (make: (text: string) => MarkupEdit | null) => {
     const target = getTarget();
-    if (!target || disabled) return;
+    if (!target || disabled) return false;
     const result = make(target.element.value);
     if (result) applyMarkupEdit(target, () => result);
+    return result !== null;
+  };
+  /** Close the rename field; unless an edit took the focus, its row's title gets it back. */
+  const stopRenaming = (start: number, edited = false) => {
+    if (!edited) refocus.current = start;
+    setRenaming(null);
   };
   const reveal = (node: OutlineNode) => {
     const element = getTarget()?.element;
@@ -127,7 +141,7 @@ export function BookOutline({
     const title = titleOf(node, chapter, index);
     const state = node.level === 1 && chapter.plan !== null ? statuses?.[chapter.plan] : undefined;
     const editing = renaming === node.start && node.title !== null;
-    const actions: Array<{ key: string; icon: ReactNode; label: string; run(): void }> = [];
+    const actions: NodeAction[] = [];
     if (node.title !== null)
       actions.push({
         key: 'rename',
@@ -171,55 +185,72 @@ export function BookOutline({
           node.level === 3 && 'ps-7',
         )}
       >
-        {editing ? (
-          <Input
-            autoFocus
-            defaultValue={node.title ?? ''}
-            aria-label={t('book.rename_title', { title })}
-            className="h-7 min-w-0 flex-1 text-sm"
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') setRenaming(null);
-              if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
-              const value = event.currentTarget.value;
-              setRenaming(null);
-              edit((text) => renameHeading(text, node.start, value));
-            }}
-            onBlur={() => setRenaming(null)}
-          />
-        ) : (
-          <button
-            type="button"
-            className={cn(
-              'min-w-0 flex-1 truncate rounded-sm px-1 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-              node.level === 1 ? 'text-sm font-medium' : 'text-[13px] text-foreground/85',
-            )}
-            title={title}
-            onClick={() => reveal(node)}
-          >
-            {title}
-          </button>
-        )}
-        <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-          {t('book.node_meta', {
-            words: node.words,
-            runtime: formatRuntimeClock(node.runtimeSec),
-          })}
-        </span>
-        {node.level === 1 &&
-          (chapter.plan === null ? (
-            <StatusBadge className={STATUS_CLASSES.not_rendered}>
-              {t('book.status_empty')}
-            </StatusBadge>
+        {/* The title takes the row's width; its length and status sit on a
+            line of their own under it, so a narrow sidebar still shows it. */}
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <Input
+              autoFocus
+              defaultValue={node.title ?? ''}
+              aria-label={t('book.rename_title', { title })}
+              className="h-7 w-full text-sm"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') stopRenaming(node.start);
+                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                const value = event.currentTarget.value;
+                stopRenaming(
+                  node.start,
+                  edit((text) => renameHeading(text, node.start, value)),
+                );
+              }}
+              onBlur={() => setRenaming(null)}
+            />
           ) : (
-            state && (
-              <StatusBadge
-                className={STATUS_CLASSES[state.status]}
-                title={t(STATUS_LABELS[state.status][1])}
-              >
-                {t(STATUS_LABELS[state.status][0])}
-              </StatusBadge>
-            )
-          ))}
+            <button
+              ref={(element) => {
+                if (!element || refocus.current !== node.start) return;
+                refocus.current = null;
+                element.focus();
+              }}
+              type="button"
+              className={cn(
+                'block w-full truncate rounded-sm px-1 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+                node.level === 1 ? 'text-sm font-medium' : 'text-[13px] text-foreground/85',
+              )}
+              title={title}
+              onClick={() => reveal(node)}
+            >
+              {title}
+            </button>
+          )}
+          <p
+            data-slot="outline-meta"
+            className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1 text-[11px] text-muted-foreground tabular-nums"
+          >
+            <span>
+              {t('book.node_meta', {
+                count: node.words,
+                words: formatCount(node.words),
+                runtime: formatRuntimeClock(node.runtimeSec),
+              })}
+            </span>
+            {node.level === 1 &&
+              (chapter.plan === null ? (
+                <StatusBadge className={STATUS_CLASSES.not_rendered}>
+                  {t('book.status_empty')}
+                </StatusBadge>
+              ) : (
+                state && (
+                  <StatusBadge
+                    className={STATUS_CLASSES[state.status]}
+                    title={t(STATUS_LABELS[state.status][1])}
+                  >
+                    {t(STATUS_LABELS[state.status][0])}
+                  </StatusBadge>
+                )
+              ))}
+          </p>
+        </div>
         {node.level === 1 && chapter.plan !== null && (
           <Button
             variant="ghost"
@@ -232,31 +263,7 @@ export function BookOutline({
             <PlayIcon />
           </Button>
         )}
-        <Menu.Root>
-          <Menu.Trigger
-            disabled={disabled}
-            className={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
-            aria-label={t('book.more', { title })}
-          >
-            <EllipsisIcon />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner sideOffset={4} align="end" className="z-50">
-              {/* Every action moves the focus on: to the editor, or the title field. */}
-              <Menu.Popup
-                finalFocus={false}
-                className="min-w-52 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
-              >
-                {actions.map((action) => (
-                  <Menu.Item key={action.key} className={MENU_ITEM} onClick={action.run}>
-                    <span className="[&>svg]:size-4">{action.icon}</span>
-                    {action.label}
-                  </Menu.Item>
-                ))}
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+        <NodeMenu label={t('book.more', { title })} disabled={disabled} actions={actions} />
       </div>
     );
   };
@@ -289,6 +296,59 @@ export function BookOutline({
       )}
       <ChapterPreview preview={preview} />
     </details>
+  );
+}
+
+interface NodeAction {
+  key: string;
+  icon: ReactNode;
+  label: string;
+  run(): void;
+}
+
+/** A row's "…" menu of heading edits. */
+function NodeMenu({
+  label,
+  disabled,
+  actions,
+}: {
+  label: string;
+  disabled: boolean;
+  actions: NodeAction[];
+}) {
+  const popupRef = useRef<HTMLDivElement>(null);
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        disabled={disabled}
+        className={buttonVariants({ variant: 'ghost', size: 'icon-xs' })}
+        aria-label={label}
+      >
+        <EllipsisIcon />
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner sideOffset={4} align="end" className="z-50">
+          <Menu.Popup
+            ref={popupRef}
+            // An action that moved the focus on (to the editor, or the title
+            // field) keeps it there; a close that would lose it (Escape, or an
+            // edit with nothing to change) hands it back to the trigger.
+            finalFocus={() => {
+              const active = document.activeElement;
+              return !active || active === document.body || !!popupRef.current?.contains(active);
+            }}
+            className="min-w-52 rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg outline-none"
+          >
+            {actions.map((action) => (
+              <Menu.Item key={action.key} className={MENU_ITEM} onClick={action.run}>
+                <span className="[&>svg]:size-4">{action.icon}</span>
+                {action.label}
+              </Menu.Item>
+            ))}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }
 

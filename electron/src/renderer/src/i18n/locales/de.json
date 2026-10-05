@@ -1867,6 +1867,8 @@
     "listen_part": "Diesen Teil anhören",
     "select_part": "Diesen Teil markieren",
     "card_pause": "Eine Stille von {{duration}}.",
+    "pause_length": "Pausenlänge",
+    "pause_custom_seconds": "Eigene Pausenlänge in Sekunden",
     "apply": "Übernehmen",
     "card_expression": "Ein Laut, der an dieser Stelle ausgeführt wird.",
     "card_delivery": "Ändert, wie die Wörter zwischen {{open}} und {{close}} gelesen werden.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "Inhalt",
     "empty": "Beginnen Sie ein Kapitel mit einer Zeile wie # Kapitel 1.",
-    "node_meta": "{{words}} Wörter · {{runtime}}",
+    "node_meta_one": "{{words}} Wort · {{runtime}}",
+    "node_meta_other": "{{words}} Wörter · {{runtime}}",
     "status_rendered": "Gerendert",
     "status_changed": "Geändert",
     "status_not_rendered": "Nicht gerendert",

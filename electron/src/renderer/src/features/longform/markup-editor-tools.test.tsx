@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import i18n from '@/i18n';
+import i18n, { setAppLanguage } from '@/i18n';
 import { parseCastNames } from '@shared/utils/audiobookScript';
 import type { VoiceGains } from '@shared/utils/longformOverrides';
 import { MarkupEditorTools } from './markup-editor-tools';
@@ -21,11 +21,13 @@ function Editor({
   gains = {},
   headings = false,
   lineVoices = false,
+  loading = false,
   onVoiceCast,
   onVoiceGains,
   onListenRange,
 }: {
   initial: string;
+  loading?: boolean;
   cast?: Record<string, string>;
   gains?: VoiceGains;
   headings?: boolean;
@@ -46,6 +48,7 @@ function Editor({
       headings={headings}
       lineVoices={lineVoices}
       profiles={profiles}
+      loading={loading}
       scriptNames={names}
       voiceCast={voiceCast}
       onVoiceCast={(next) => {
@@ -108,12 +111,35 @@ describe('tag card', () => {
     focus();
     clickAt(8);
     const pause = await card('[pause 1s]');
-    expect(within(pause).getByText('A silence of 1 s.')).toBeVisible();
+    expect(within(pause).getByText('A silence of 1s.')).toBeVisible();
     expect(within(pause).getByRole('button', { name: /Medium/ })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
+    // The chips change this pause's length; nothing is inserted.
+    expect(within(pause).getByRole('group', { name: 'Pause length' })).toBeVisible();
+    expect(
+      within(pause).getByRole('spinbutton', { name: 'Custom pause length, in seconds' }),
+    ).toBeVisible();
     expect(script()).toHaveFocus();
+  });
+
+  it('writes pause lengths in the app language, unit included', async () => {
+    await act(() => setAppLanguage('vi'));
+    try {
+      render(<Editor initial="Wait [pause 1.5s] here" />);
+      focus();
+      clickAt(8);
+      const pause = await screen.findByRole('dialog', {
+        name: i18n.t('editor.card_label', { tag: '[pause 1.5s]' }),
+      });
+      expect(
+        within(pause).getByText(i18n.t('editor.card_pause', { duration: '1,5 giây' })),
+      ).toBeVisible();
+      expect(within(pause).getByRole('spinbutton').closest('label')).toHaveTextContent(/giây$/);
+    } finally {
+      await act(() => setAppLanguage('en'));
+    }
   });
 
   it('moves into the card from the keyboard and hands the focus back on Escape', async () => {
@@ -142,6 +168,58 @@ describe('tag card', () => {
     await card('[pau5se 1s]');
     fireEvent.scroll(script());
     await waitFor(noCard);
+  });
+
+  it('leaves the focus in the field a press outside the card moved it to', async () => {
+    // Chromium honours `focus({ preventScroll })`, which is when Base UI
+    // returns the focus after a press outside; jsdom never reads the option.
+    const focusElement = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLElement,
+      options?: FocusOptions,
+    ) {
+      void options?.preventScroll;
+      focusElement.call(this, options);
+    });
+    render(
+      <>
+        <Editor initial="Wait [pause 1s] here" />
+        <input aria-label="Other line" />
+      </>,
+    );
+    focus();
+    clickAt(8);
+    await card('[pause 1s]');
+    const other = screen.getByRole('textbox', { name: 'Other line' });
+    fireEvent.pointerDown(other);
+    fireEvent.mouseDown(other);
+    act(() => other.focus());
+    fireEvent.pointerUp(other);
+    fireEvent.mouseUp(other);
+    fireEvent.click(other);
+    await waitFor(noCard);
+    await nextFrame();
+    await act(() => Promise.resolve());
+    expect(other).toHaveFocus();
+  });
+
+  it('keeps the focus elsewhere when the card closes on its own', async () => {
+    render(
+      <>
+        <Editor initial="Wait [pause 1s] here" />
+        <input aria-label="Cast name" />
+      </>,
+    );
+    focus();
+    clickAt(8);
+    await card('[pause 1s]');
+    const other = screen.getByRole('textbox', { name: 'Cast name' });
+    act(() => other.focus());
+    fireEvent.scroll(script());
+    await waitFor(noCard);
+    await nextFrame();
+    await act(() => Promise.resolve());
+    expect(other).toHaveFocus();
   });
 
   it('changes a pause to a preset or to its own length, and removes it', async () => {
@@ -298,6 +376,17 @@ describe('voice card', () => {
     ).toBeVisible();
   });
 
+  it('does not call a cast voice gone while the profiles load', async () => {
+    render(<Editor initial="[voice:Mara] Hello." cast={{ Mara: 'p-mara' }} loading />);
+    focus();
+    clickAt(3);
+    const voice = await card('[voice:Mara]');
+    expect(within(voice).queryByText(/voice cast to this name was deleted/)).toBeNull();
+    expect(
+      within(voice).getByRole('combobox', { name: i18n.t('editor.read_by') }),
+    ).toHaveTextContent(i18n.t('common.loading'));
+  });
+
   it('switches this tag to another name, a profile, or the default voice', async () => {
     const onVoiceCast = vi.fn();
     render(
@@ -368,6 +457,30 @@ describe('voice card', () => {
     const reset = await card('[voice:]');
     expect(within(reset).getByText(/this line’s own voice/)).toBeVisible();
     expect(within(reset).queryByRole('slider')).toBeNull();
+  });
+
+  it('says `[voice:default]` reads the default voice even where lines have their own', async () => {
+    // The render reads it in the default voice, not the line's (longformParser).
+    const onVoiceGains = vi.fn();
+    render(
+      <Editor
+        initial="[voice:Mara] Hi. [voice:Default] Back."
+        lineVoices
+        onVoiceGains={onVoiceGains}
+      />,
+    );
+    focus();
+    clickAt('[voice:Mara] Hi. [voi'.length);
+    const reset = await card('[voice:Default]');
+    expect(within(reset).getByText(i18n.t('editor.card_voice_reset'))).toBeVisible();
+    expect(within(reset).queryByText(/this line’s own voice/)).toBeNull();
+    fireEvent.change(
+      within(reset).getByRole('slider', {
+        name: i18n.t('leveling.volume_of', { name: i18n.t('audiobook.default_voice') }),
+      }),
+      { target: { value: '-3' } },
+    );
+    expect(onVoiceGains).toHaveBeenLastCalledWith({ '': -3 });
   });
 
   it('listens to and selects the part the voice reads', async () => {

@@ -31,8 +31,8 @@ import { PacingSettings, SpeechCheckReport } from './pacing-settings';
 import { BookOutline } from './book-outline';
 import { ExportHtmlButton } from './html-export';
 import { castVoice } from './cast-map';
-import { CastSettings } from './cast-settings';
-import { VoicePicker } from './voice-picker';
+import { CastSettings, showsCastPanel } from './cast-settings';
+import { ProfilesFailure, VoicePicker, profileListState } from './voice-picker';
 import {
   parseCastNames,
   scriptStats,
@@ -62,6 +62,7 @@ import { saveExport } from '@/lib/export-history';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { LANG_CODES } from '@shared/utils/languages';
 import {
+  bookLanguageTag,
   editLongform,
   dismissLongformError,
   renderLongform,
@@ -87,7 +88,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
   const draft = session.drafts[mode];
   const text =
     mode === 'audiobook' ? draft.script : draft.lines.map((line) => line.text).join('\n');
-  const names = useMemo(() => parseCastNames(text), [text]);
+  const names = useMemo(() => parseCastNames(text, draft.voiceCast), [text, draft.voiceCast]);
   const stats = useMemo(() => scriptStats(text), [text]);
   const statsLine = t('audiobook.stats', {
     chapters: stats.chapters,
@@ -95,9 +96,9 @@ export function LongformPage({ mode }: { mode: Mode }) {
     runtime: formatRuntimeClock(stats.runtimeSec),
   });
   const profilesQuery = useProfiles();
-  const { data: profiles = [] } = profilesQuery;
-  // Until the profiles arrive, a chosen voice is unknown, not missing.
-  const profilesLoading = !profilesQuery.isSuccess;
+  // Until the profiles arrive, a chosen voice is unknown, not missing; a
+  // failed load says so, with a retry, instead of loading for ever.
+  const { profiles, loading: profilesLoading } = profileListState(profilesQuery);
   const [importing, setImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -316,6 +317,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 attention={blocker === 'default_voice'}
                 aria-label={t('audiobook.default_voice')}
               />
+              <ProfilesFailure query={profilesQuery} />
             </div>
             {mode === 'stories' && <StorySpeed draft={draft} disabled={locked} onChange={set} />}
             <div className="space-y-2">
@@ -353,7 +355,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
           {mode === 'stories' && (
             <StoryCast draft={draft} profiles={profiles} disabled={locked} onChange={set} />
           )}
-          {(mode === 'audiobook' || inlineNames.length > 0) && (
+          {showsCastPanel(mode, inlineNames, draft.voiceGains) && (
             <CastSettings
               title={mode === 'stories' ? t('stories.inline_voices') : undefined}
               names={mode === 'audiobook' ? names : inlineNames}
@@ -513,6 +515,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   }
                   disabled={locked}
                   profiles={profiles}
+                  loading={profilesLoading}
                   scriptNames={names}
                   voiceCast={draft.voiceCast}
                   onVoiceCast={(voiceCast) => set({ voiceCast })}
@@ -582,6 +585,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   disabled={locked}
                   headings
                   profiles={profiles}
+                  loading={profilesLoading}
                   scriptNames={names}
                   voiceCast={draft.voiceCast}
                   onVoiceCast={(voiceCast) => set({ voiceCast })}
@@ -618,6 +622,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   names={names}
                   voiceCast={draft.voiceCast}
                   profiles={profiles}
+                  loading={profilesLoading}
                   defaultVoiceName={defaultVoice?.name}
                   stats={statsLine}
                 />
@@ -626,6 +631,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               <StoryEditor
                 draft={draft}
                 profiles={profiles}
+                profilesLoading={profilesLoading}
                 disabled={locked}
                 canSynthesize={ttsBlocker === null}
                 onChange={set}
@@ -654,7 +660,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
             {session.storageError && (
               <div role="alert" className="text-sm text-destructive">
                 {t('common.error')}
-                <Link to="/settings/logs" className="ml-3 underline">
+                <Link to="/settings/logs" className="ms-3 underline">
                   {t('settings.logs')}
                 </Link>
               </div>
@@ -716,6 +722,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     script={draft.outputScript}
                     chapters={draft.outputChapters}
                     output={draft.output}
+                    lang={bookLanguageTag(draft.language)}
                   />
                 ) : (
                   <WaveformPlayer

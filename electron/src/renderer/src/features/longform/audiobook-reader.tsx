@@ -83,6 +83,8 @@ export interface ReaderBook {
   chapters: ReaderChapter[];
   words: ReaderWord[];
   sentences: ReaderSentence[];
+  /** The language of the book's text, which the app's own may not be; '' unknown. */
+  lang?: string;
 }
 
 type WordShape = Pick<ReaderWord, 'display' | 'gap' | 'tag'>;
@@ -486,6 +488,36 @@ export function followScroll(
   return Math.abs(target - scroll) < 1 ? null : target;
 }
 
+/**
+ * `followScroll` along one line of text, in either direction: where to set
+ * the line's `scrollLeft` to bring the word at `offsetLeft…+width` into view
+ * (null while it is in view), and whether the line is scrolled off its start.
+ * Right to left, the line starts at its right edge and Chromium's
+ * `scrollLeft` runs from 0 down to minus the overflow.
+ */
+export function followLine(
+  word: { offsetLeft: number; offsetWidth: number },
+  line: { scrollLeft: number; clientWidth: number; scrollWidth: number },
+  rtl: boolean,
+): { left: number | null; scrolled: boolean } {
+  const { offsetLeft, offsetWidth } = word;
+  const { clientWidth, scrollWidth } = line;
+  // Distances from the line's start edge, and how far it is scrolled from it.
+  const start = rtl ? clientWidth - (offsetLeft + offsetWidth) : offsetLeft;
+  const scroll = rtl ? -line.scrollLeft : line.scrollLeft;
+  const target = followScroll(
+    start,
+    start + offsetWidth,
+    scroll,
+    clientWidth,
+    scrollWidth - clientWidth,
+  );
+  return {
+    left: target === null ? null : rtl && target ? -target : target,
+    scrolled: (target ?? scroll) > 0,
+  };
+}
+
 /** `M:SS`, or `H:MM:SS` for a book an hour or longer. */
 export function playbackClock(seconds: number, hours = false): string {
   const total = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
@@ -603,7 +635,10 @@ export function SeekBar({
   const now = Number.isFinite(time) ? Math.max(0, Math.min(time, total)) : 0;
   const hours = total >= 3600;
   return (
+    // A timeline runs left to right in every language: the thumb, the fill and
+    // the chapter marks all measure from the left.
     <div
+      dir="ltr"
       className={cn(
         'relative flex h-5 min-w-0 items-center rounded-full has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40',
         className,
@@ -827,7 +862,7 @@ const ChapterMenu = memo(function ChapterMenu({
                     onSeek();
                   }}
                 >
-                  <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  <span className="w-6 shrink-0 text-end text-xs tabular-nums text-muted-foreground">
                     {index + 1}
                   </span>
                   <span className="min-w-0 flex-1 truncate">{chapterTitle(t, book, index)}</span>
@@ -856,7 +891,7 @@ function ReaderHeader({
   const { t } = useTranslation();
   const { chapter } = usePlayhead(book);
   return (
-    <div className="flex items-center gap-3 border-b border-border/50 py-3 pr-3 pl-5">
+    <div className="flex items-center gap-3 border-b border-border/50 py-3 pe-3 ps-5">
       <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
         <BookOpenTextIcon className="size-4" />
       </span>
@@ -992,7 +1027,7 @@ const ReaderChapterSection = memo(function ReaderChapterSection({
       <h3 className="mb-3">
         <button
           type="button"
-          className="rounded-md text-left font-heading text-lg font-semibold outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="rounded-md text-start font-heading text-lg font-semibold outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => onPlayFrom(chapter.start)}
         >
           {chapterTitle(t, book, index)}
@@ -1214,13 +1249,16 @@ function ReaderTranscript({
         }}
       >
         {book.words.length ? (
-          <Transcript
-            book={book}
-            activeWord={activeWord}
-            activeRef={activeRef}
-            onPlayFrom={playFrom}
-            onPlayWord={playWord}
-          />
+          // The book's own language and direction, which the app's may not be.
+          <div lang={book.lang} dir="auto">
+            <Transcript
+              book={book}
+              activeWord={activeWord}
+              activeRef={activeRef}
+              onPlayFrom={playFrom}
+              onPlayWord={playWord}
+            />
+          </div>
         ) : (
           <p className="py-16 text-center text-sm text-muted-foreground">{t('reader.empty')}</p>
         )}

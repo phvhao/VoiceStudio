@@ -8,8 +8,60 @@ const browser = await chromium.launch({
 });
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  // Self-contained like the other renderer smokes: past first-run setup, with
+  // the backend status calls stubbed, so it needs no backend on OMNIVOICE_PORT.
+  await page.addInitScript(() => {
+    localStorage.setItem('voicestudio.setup.complete.v1', '1');
+    localStorage.setItem('voicestudio.language', 'en');
+  });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  await page.route('**/api/health', (route) => route.fulfill({ json: { status: 'ok' } }));
+  await page.route('**/api/setup/status', (route) =>
+    route.fulfill({ json: { models_ready: true, missing: [] } }),
+  );
+  await page.route('**/api/models/install/status', (route) =>
+    route.fulfill({ json: { jobs: [] } }),
+  );
+  await page.route('**/api/engines', (route) =>
+    route.fulfill({
+      json: {
+        tts: {
+          active: 'omnivoice',
+          active_model: 'longform-model',
+          backends: [{ id: 'omnivoice', name: 'OmniVoice', available: true }],
+        },
+      },
+    }),
+  );
+  await page.route('**/api/models', (route) =>
+    route.fulfill({
+      json: {
+        target: 'local',
+        models: [
+          {
+            repo_id: 'longform-model',
+            label: 'Long-form model',
+            role: 'tts',
+            size_gb: 1,
+            installed: true,
+            supported: true,
+          },
+        ],
+      },
+    }),
+  );
+  await page.route('**/api/workers/target**', (route) =>
+    route.fulfill({
+      json: {
+        target: 'local',
+        op: 'tts',
+        active: { remote: false, label: 'Local device', reason: '' },
+        remote_operations: [],
+        targets: [],
+      },
+    }),
+  );
   const bodies = [];
   await page.route('**/api/profiles', (route) =>
     route.fulfill({
@@ -145,15 +197,22 @@ try {
   await page
     .getByRole('button', { name: 'Renamed book fixture', exact: true })
     .waitFor({ state: 'detached' });
-  await page
+  // Stories is a group in the workspace navigation: an inline list, or a
+  // flyout while the rail is compact beside the audiobook sidebar.
+  const storiesGroup = page
     .getByRole('navigation', { name: 'Workspaces', exact: true })
-    .getByRole('link', { name: 'Stories Editor', exact: true })
+    .getByRole('button', { name: 'Stories', exact: true });
+  if ((await storiesGroup.getAttribute('aria-expanded')) !== 'true') await storiesGroup.click();
+  await page
+    .locator(`[id="${await storiesGroup.getAttribute('aria-controls')}"]`)
+    .getByRole('link', { name: 'Stories', exact: true })
     .click();
   await page
     .locator('[data-slot=secondary-sidebar]')
-    .getByRole('button', { name: 'Narrator fixture', exact: true })
+    .getByRole('combobox', { name: 'Default voice', exact: true })
     .click();
-  await page.getByRole('button', { name: 'Add Line', exact: true }).click();
+  await page.getByRole('option', { name: 'Narrator fixture', exact: true }).click();
+  await page.getByRole('button', { name: 'Add First Line', exact: true }).click();
   await page.getByRole('textbox', { name: /Enter dialogue/ }).fill('A story line [pause 0.5s]');
   await page.getByText(/assign a voice to each character/).click();
   await page.getByRole('button', { name: 'Add character', exact: true }).click();
@@ -163,15 +222,8 @@ try {
     .filter({ has: page.getByLabel('Character name', { exact: true }) });
   await character.getByText('Default', { exact: true }).first().click();
   await character.getByRole('button', { name: 'Actor fixture', exact: true }).click();
-  await page
-    .getByRole('textbox', { name: /Enter dialogue/ })
-    .first()
-    .locator('..')
-    .locator('..')
-    .locator('summary')
-    .first()
-    .click();
-  await page.locator('main').getByRole('button', { name: 'Mara', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Character', exact: true }).first().click();
+  await page.getByRole('option', { name: 'Mara', exact: true }).click();
   await page.getByRole('button', { name: 'Add Line', exact: true }).click();
   await page
     .getByRole('textbox', { name: /Enter dialogue/ })
@@ -196,7 +248,13 @@ try {
   );
   await page.getByRole('button', { name: 'Split into lines', exact: true }).click();
   assert.equal(await page.getByRole('textbox', { name: /Enter dialogue/ }).count(), 5);
-  await page.getByRole('button', { name: 'Preview this line', exact: true }).first().click();
+  const previewLine = page.getByRole('button', { name: 'Preview this line', exact: true }).first();
+  await previewLine.click();
+  // The audition opens a player under its line; it does not start on its own.
+  await previewLine
+    .locator('xpath=ancestor::div[contains(@class, "group/line")][1]')
+    .getByRole('button', { name: 'Play', exact: true })
+    .click();
   await page.waitForFunction(() =>
     Array.from(document.querySelectorAll('audio')).some((audio) => audio.currentTime > 0),
   );
@@ -206,13 +264,19 @@ try {
     .filter({ hasText: /^Stems$/ })
     .click();
   await page.getByRole('button', { name: 'Stems', exact: true }).click();
-  const stemLinks = page.locator('a[download^="story-"]');
-  await stemLinks.nth(2).waitFor();
-  assert.equal(await stemLinks.count(), 3);
+  // Each rendered stem is a save button; outside Electron it downloads.
+  const stemButtons = page
+    .locator('details')
+    .filter({ has: page.locator('summary').filter({ hasText: /^Stems$/ }) })
+    .locator('li')
+    .getByRole('button');
+  await stemButtons.nth(2).waitFor();
+  assert.equal(await stemButtons.count(), 3);
   assert.equal(auditions, 6);
   const downloaded = page.waitForEvent('download');
-  await stemLinks.first().click();
+  await stemButtons.first().click();
   const download = await downloaded;
+  assert.match(download.suggestedFilename(), /^story-1-.+\.wav$/);
   const bytes = await readFile(await download.path());
   assert.equal(bytes.toString('ascii', 0, 4), 'RIFF');
   assert.ok(bytes.length > 44);

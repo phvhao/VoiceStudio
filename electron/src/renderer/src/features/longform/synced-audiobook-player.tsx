@@ -23,7 +23,7 @@ import {
   SeekBar,
   buildReaderBook,
   chapterTitle,
-  followScroll,
+  followLine,
   sentencePieces,
   usePlayhead,
   type ReaderBook,
@@ -63,11 +63,14 @@ export function SyncedAudiobookPlayer({
   script,
   chapters,
   output,
+  lang = '',
 }: {
   src: string;
   script: string;
   chapters: AudiobookRenderChapter[];
   output?: string;
+  /** The book's language tag (`bookLanguageTag`); '' when it is not known. */
+  lang?: string;
 }) {
   const player = useRef<MediaPlayerInstance>(null);
   const timeline = useQuery({
@@ -91,6 +94,7 @@ export function SyncedAudiobookPlayer({
         script={script}
         chapters={chapters}
         timeline={timeline.data ?? null}
+        lang={lang}
       />
     </StudioMediaPlayer>
   );
@@ -101,19 +105,24 @@ function NowPlayingCard({
   script,
   chapters,
   timeline,
+  lang,
 }: {
   player: RefObject<MediaPlayerInstance | null>;
   script: string;
   chapters: AudiobookRenderChapter[];
   timeline: AudiobookTimeline | null;
+  lang: string;
 }) {
   const { t } = useTranslation();
   const [reading, setReading] = useState(false);
   const duration = useMediaState('duration');
   const error = useMediaState('error');
   const book = useMemo(
-    () => buildReaderBook(script, buildLyricsTimeline(script, { chapters, duration, timeline })),
-    [chapters, duration, script, timeline],
+    () => ({
+      ...buildReaderBook(script, buildLyricsTimeline(script, { chapters, duration, timeline })),
+      lang,
+    }),
+    [chapters, duration, lang, script, timeline],
   );
   const steps = book.chapters.length > 1;
 
@@ -144,7 +153,7 @@ function NowPlayingCard({
           )}
           <SeekBar player={player} chapters={book.chapters} className="mx-1 flex-1" />
           {steps && <ChapterStepButton direction="next" player={player} chapters={book.chapters} />}
-          <PlaybackTime className="ml-1" />
+          <PlaybackTime className="ms-1" />
           <RateMenu player={player} />
         </div>
       </div>
@@ -199,21 +208,23 @@ const SentenceLine = memo(function SentenceLine({
     const element = line.current;
     const active = current.current;
     if (!element || !active) return;
-    const left = followScroll(
-      active.offsetLeft,
-      active.offsetLeft + active.offsetWidth,
-      element.scrollLeft,
-      element.clientWidth,
-      element.scrollWidth - element.clientWidth,
+    const { left, scrolled } = followLine(
+      active,
+      element,
+      getComputedStyle(element).direction === 'rtl',
     );
     if (left !== null) element.scrollTo({ left });
-    element.toggleAttribute('data-scrolled', (left ?? element.scrollLeft) > 0);
+    element.toggleAttribute('data-scrolled', scrolled);
   }, [word]);
 
   return (
+    // `dir="auto"`: the line runs the way the book's text does, whatever the
+    // app's language; the fades follow it.
     <p
       ref={line}
-      className="relative h-5 overflow-hidden scroll-smooth text-[13px] leading-5 whitespace-nowrap text-muted-foreground [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)] motion-reduce:scroll-auto data-scrolled:[mask-image:linear-gradient(to_right,transparent,black_1.5rem,black_calc(100%_-_2rem),transparent)]"
+      dir="auto"
+      lang={book.lang}
+      className="relative h-5 overflow-hidden scroll-smooth text-[13px] leading-5 whitespace-nowrap text-muted-foreground [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)] motion-reduce:scroll-auto data-scrolled:[mask-image:linear-gradient(to_right,transparent,black_1.5rem,black_calc(100%_-_2rem),transparent)] rtl:[mask-image:linear-gradient(to_left,black_calc(100%_-_2rem),transparent)] rtl:data-scrolled:[mask-image:linear-gradient(to_left,transparent,black_1.5rem,black_calc(100%_-_2rem),transparent)]"
     >
       {sentence >= 0 &&
         sentencePieces(book, sentence).map(({ word: index, lead, text }) => (

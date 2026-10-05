@@ -80,6 +80,11 @@ it('flags a cast mapping to a deleted voice, and reads profile ids as their name
   expect(screen.getByText('Voice: Lan')).toBeVisible();
 });
 
+it('does not call a cast voice unavailable while the profiles load', () => {
+  bar('[voice:Mara] Hi.', 13, { voiceCast: { Mara: 'p-mara' }, profiles: [], loading: true });
+  expect(screen.getByText('Voice: Mara, read by Loading…')).toBeVisible();
+});
+
 it('follows the caret on its own', () => {
   const text = 'one\ntwo';
   const { caret } = bar(text, 0);

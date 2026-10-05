@@ -385,14 +385,16 @@ function clickedToken(
   return token && token.start < caret && caret < token.end ? token : null;
 }
 
-function tokenHint(t: TFunction, token: MarkupToken): string {
+function tokenHint(t: TFunction, token: MarkupToken, locale: string): string {
   switch (token.kind) {
     case 'voice':
       return t('editor.hint_voice', { name: voiceName(token.text) ?? '' });
     case 'voiceReset':
       return t('editor.hint_voice_reset');
     case 'pause':
-      return t('editor.hint_pause', { duration: formatPauseSeconds(pauseMs(token.text) ?? 0) });
+      return t('editor.hint_pause', {
+        duration: formatPauseSeconds(pauseMs(token.text) ?? 0, locale),
+      });
     case 'delivery':
       return t('editor.hint_delivery', { tag: token.text });
     case 'expression':
@@ -529,11 +531,63 @@ function useVoiceLane(
   return lane;
 }
 
+// What decides where the textarea's text wraps, copied onto `wrappedTop`'s mirror.
+const WRAP_STYLES = [
+  'direction',
+  'font-family',
+  'font-size',
+  'font-stretch',
+  'font-style',
+  'font-variant',
+  'font-weight',
+  'letter-spacing',
+  'line-height',
+  'overflow-wrap',
+  'padding-bottom',
+  'padding-left',
+  'padding-right',
+  'padding-top',
+  'tab-size',
+  'text-indent',
+  'text-transform',
+  'white-space',
+  'word-break',
+  'word-spacing',
+];
+
+/**
+ * Where the visual line holding `offset` starts in the textarea's content:
+ * measured in a hidden copy of the text before it, as wide as the textarea
+ * and wrapping as it does, so long paragraphs count every row they take.
+ */
+function wrappedTop(element: HTMLTextAreaElement, offset: number): number {
+  const style = getComputedStyle(element);
+  const mirror = document.createElement('div');
+  for (const name of WRAP_STYLES) mirror.style.setProperty(name, style.getPropertyValue(name));
+  Object.assign(mirror.style, {
+    position: 'absolute',
+    visibility: 'hidden',
+    top: '0',
+    left: '-99999px',
+    boxSizing: 'border-box',
+    border: '0',
+    width: `${element.clientWidth}px`,
+  });
+  mirror.textContent = element.value.slice(0, offset);
+  const marker = document.createElement('span');
+  marker.textContent = '\u200b';
+  mirror.append(marker);
+  document.body.append(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
+}
+
 /**
  * Put the caret at `offset` and scroll the editor — never the page — so its
  * line sits in the upper third. The line is found in the overlay, which wraps
  * exactly like the textarea; past `HIGHLIGHT_LIMIT` there is none, so it is
- * placed by its line number.
+ * measured in a copy of the text that wraps the same way.
  */
 export function revealOffset(element: HTMLTextAreaElement, offset: number) {
   element.focus({ preventScroll: true });
@@ -544,10 +598,7 @@ export function revealOffset(element: HTMLTextAreaElement, offset: number) {
     line++;
   const rows = element.parentElement?.querySelector('[data-slot="markup-lines"]');
   const row = rows?.children[line];
-  const top =
-    row instanceof HTMLElement
-      ? row.offsetTop
-      : line * (Number.parseFloat(getComputedStyle(element).lineHeight) || 24);
+  const top = row instanceof HTMLElement ? row.offsetTop : wrappedTop(element, offset);
   element.scrollTop = Math.max(0, top - element.clientHeight / 3);
 }
 
@@ -700,7 +751,7 @@ export function MarkupTextarea({
   /** The caret moved while the editor has focus (typing, clicks, arrow keys). */
   onCaretChange?(offset: number): void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const tools = useContext(MarkupEditorContext);
   const input = useRef<HTMLTextAreaElement | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
@@ -820,7 +871,7 @@ export function MarkupTextarea({
     if (hit) {
       hit.mark.setAttribute('data-hover', '');
       element.style.cursor = 'pointer';
-      element.title = tokenHint(t, hit.token);
+      element.title = tokenHint(t, hit.token, i18n.resolvedLanguage || i18n.language);
     } else {
       element.style.cursor = '';
       if (title === undefined) element.removeAttribute('title');

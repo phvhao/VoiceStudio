@@ -10,7 +10,7 @@
  * Grammar precedence (outer→inner):
  *   # chapter → ## section → [voice:] → [pause] → SSML-lite.
  */
-import { parseSsmlLite, spellOut } from './ssmlLite';
+import { openSsmlTags, parseSsmlLite, spellOut } from './ssmlLite';
 
 export const PAUSE_DEFAULT_MS = 350;
 export const PAUSE_MAX_MS = 10000;
@@ -157,19 +157,37 @@ function runsToSpans(runs, defaultSpeed) {
 }
 
 /**
+ * Mirror of _open_delivery: the delivery tags still open where `text` ends,
+ * written out to open them again. Only the stretch after the last voice switch
+ * or pause counts: delivery never runs past either.
+ */
+function openDelivery(text) {
+  const [runs] = parseVoiceRuns(text, null, null);
+  const pauses = parsePauseMarkers(runs[runs.length - 1][1]);
+  const [stretch, pauseMs] = pauses[pauses.length - 1];
+  if (pauseMs) return '';
+  return openSsmlTags(stretch)
+    .map((name) => `[${name}]`)
+    .join('');
+}
+
+/**
  * Mirror of _parse_sectioned_body: one Audiobook chapter body with its
  * `##`/`###` section headings. A heading line is parsed like any other text,
  * without its marks; the first of its spans that speaks carries `section`
  * (the title as written) and `section_level`, and it is a paragraph of its own
  * (`join: 'paragraph'` on the span before it and on its last span). The voice
- * runs on across it.
+ * runs on across it, and so does a delivery tag open around it.
  */
 function parseSectionedBody(body, { defaultVoice = null, defaultSpeed = null } = {}) {
   const spans = [];
   let voice = defaultVoice;
   let pending = null;
   const breaks = new Set();
-  const add = (text, heading = null) => {
+  let carry = '';
+  const add = (piece, heading = null) => {
+    const text = carry + piece;
+    carry = openDelivery(text);
     const [runs, next] = parseVoiceRuns(text, defaultVoice, voice);
     voice = next;
     const block = runsToSpans(runs, defaultSpeed);
@@ -205,7 +223,7 @@ function parseSectionedBody(body, { defaultVoice = null, defaultSpeed = null } =
   return spans;
 }
 
-/** Mirror of parse_script_to_spans → [{ title, spans:[{voice_id,text,pause_ms_after,speed}] }]. */
+/** Mirror of parse_script_to_spans → [{ title, spans:[{voice_id,text,pause_ms_after,speed}], untitled? }]. */
 export function parseScriptToSpans(text, { defaultVoice = null, defaultSpeed = null } = {}) {
   if (!text) return [];
   const norm = text.replace(/\r\n?/g, '\n');
@@ -234,7 +252,11 @@ export function parseScriptToSpans(text, { defaultVoice = null, defaultSpeed = n
   for (const [title, body] of raw) {
     const spans = parseSectionedBody(body, { defaultVoice, defaultSpeed });
     if (!spans.length) continue;
-    chapters.push({ title: title || `Chapter ${chapters.length + 1}`, spans });
+    // An untitled body keeps the English "Chapter N" of the file's chapter
+    // marks, flagged so a reader can name it in its own language (py parity).
+    const chapter = { title: title || `Chapter ${chapters.length + 1}`, spans };
+    if (!title) chapter.untitled = true;
+    chapters.push(chapter);
   }
   return chapters;
 }

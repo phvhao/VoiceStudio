@@ -104,7 +104,7 @@ export function SpeechCheckReport({
         {groups.map((group) =>
           group.texts.map((text, index) => (
             <li key={`${group.title}-${index}`} className="leading-relaxed">
-              {group.title && <span className="mr-1.5 text-muted-foreground">{group.title} ·</span>}
+              {group.title && <span className="me-1.5 text-muted-foreground">{group.title} ·</span>}
               “{text}”
             </li>
           )),

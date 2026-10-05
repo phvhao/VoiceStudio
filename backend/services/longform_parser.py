@@ -136,6 +136,21 @@ def _runs_to_spans(
     return spans
 
 
+def _open_delivery(text: str) -> str:
+    """The delivery tags (``[slow]``, ``[spell]``…) still open where ``text``
+    ends, written out to open them again where the text goes on.
+
+    Delivery never runs past a voice switch or a pause (each part is parsed on
+    its own), so only the stretch after the last of those counts."""
+    from services.ssml_lite import open_tags
+
+    runs, _ = _voice_runs(text, None, None)
+    stretch, pause_ms = parse_pause_markers(runs[-1][1])[-1]
+    if pause_ms:
+        return ""
+    return "".join(f"[{name}]" for name in open_tags(stretch))
+
+
 def _parse_sectioned_body(
     body: str,
     *,
@@ -148,15 +163,20 @@ def _parse_sectioned_body(
     marks, and the first of its spans that speaks carries ``section`` (the
     title as written) and ``section_level`` (2 or 3). It is a paragraph of its
     own: the span before it and its last span join what follows across a
-    paragraph break (``join: "paragraph"``). The voice runs on across it.
-    Without a heading this is exactly :func:`_parse_chapter_body`."""
+    paragraph break (``join: "paragraph"``). The voice runs on across it, and
+    so does a delivery tag open around it (``[slow]`` … ``## Part`` …
+    ``[/slow]``), as if the heading were ordinary text. Without a heading this
+    is exactly :func:`_parse_chapter_body`."""
     spans: list[dict] = []
     voice = default_voice
     pending: Optional[tuple[str, int]] = None
     breaks: set[int] = set()
+    carry = ""
 
     def add(text: str, heading: Optional[tuple[str, int]] = None) -> None:
-        nonlocal voice, pending
+        nonlocal voice, pending, carry
+        text = carry + text
+        carry = _open_delivery(text)
         runs, voice = _voice_runs(text, default_voice, voice)
         block = _runs_to_spans(runs, default_speed)
         if heading is not None:
@@ -207,7 +227,9 @@ def parse_script_to_spans(
       * Each chapter body resets the active voice to ``default_voice``.
       * A span is dropped iff its text is empty AND pause_ms_after == 0.
       * Chapters with no surviving spans are dropped; untitled bodies are
-        numbered ``Chapter {kept_so_far + 1}`` (post-drop numbering).
+        numbered ``Chapter {kept_so_far + 1}`` (post-drop numbering) and
+        carry ``untitled: True``, so a reader can name them in its own
+        language (key present only there).
     """
     text = _normalize(text)
     matches = list(_HEADING_RE.finditer(text))
@@ -228,6 +250,8 @@ def parse_script_to_spans(
                                       default_speed=default_speed)
         if not spans:
             continue
-        chapters.append({"title": title or f"Chapter {len(chapters) + 1}",
-                         "spans": spans})
+        chapter = {"title": title or f"Chapter {len(chapters) + 1}", "spans": spans}
+        if not title:
+            chapter["untitled"] = True
+        chapters.append(chapter)
     return chapters

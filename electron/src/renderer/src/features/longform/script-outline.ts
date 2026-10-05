@@ -82,10 +82,13 @@ export function scriptOutline(script: string): OutlineChapter[] {
     const marks = [...text.slice(bodyStart, end).matchAll(SECTION_RE)];
     marks.forEach((mark, index) => {
       const at = bodyStart + (mark.index ?? 0);
-      const sectionEnd = index + 1 < marks.length ? bodyStart + (marks[index + 1].index ?? 0) : end;
+      const level = mark[2].length === 3 ? 3 : 2;
+      // A section runs over its own `###` subsections, to the next heading of its level or above.
+      const next = marks.slice(index + 1).find((later) => later[2].length <= level);
+      const sectionEnd = next ? bodyStart + (next.index ?? 0) : end;
       sections.push({
         title: mark[3].trim(),
-        level: mark[2].length === 3 ? 3 : 2,
+        level,
         start: at,
         titleStart: at + mark[1].length,
         lineEnd: at + mark[0].length,

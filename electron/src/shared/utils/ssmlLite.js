@@ -44,6 +44,30 @@ function resolve(stack) {
   return { speed, spell, emphasis };
 }
 
+/** Mirror of _step: apply one tag match to the open-tag stack. */
+function step(stack, m) {
+  const name = m[2].toLowerCase();
+  if (m[1] === '/') {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i] === name) {
+        stack.splice(i, 1);
+        break;
+      }
+    }
+  } else {
+    stack.push(name);
+  }
+}
+
+/** Mirror of open_tags: the tags still open where `text` ends, outermost first. */
+export function openSsmlTags(text) {
+  const stack = [];
+  const re = new RegExp(TAG_RE.source, TAG_RE.flags);
+  let m;
+  while ((m = re.exec(text || '')) !== null) step(stack, m);
+  return stack;
+}
+
 export function parseSsmlLite(text) {
   if (!text) return [];
   if (!text.includes('[')) return [{ text, speed: null, spell: false, emphasis: false }];
@@ -73,18 +97,7 @@ export function parseSsmlLite(text) {
   while ((m = re.exec(text)) !== null) {
     emit(text.slice(last, m.index));
     last = m.index + m[0].length;
-    const isClose = m[1] === '/';
-    const name = m[2].toLowerCase();
-    if (isClose) {
-      for (let i = stack.length - 1; i >= 0; i--) {
-        if (stack[i] === name) {
-          stack.splice(i, 1);
-          break;
-        }
-      }
-    } else {
-      stack.push(name);
-    }
+    step(stack, m);
   }
   emit(text.slice(last));
   return segments;

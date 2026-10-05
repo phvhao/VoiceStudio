@@ -26,6 +26,8 @@ export interface AudiobookTimeline {
   duration?: number;
   chapters: Array<{
     title: string;
+    /** The script gave it no title: `title` is the file's English "Chapter N". */
+    untitled?: boolean;
     start: number;
     end: number;
     precision: AudiobookTimelinePrecision;
@@ -101,6 +103,7 @@ export function evenSplitWords(
 ): Array<Omit<AudiobookLyricsWord, 'chapterIndex'>>;
 
 export function scriptChapters(script: string): Array<{
+  /** '' for a chapter the script gave no title. */
   title: string;
   tokens: string[];
 }>;

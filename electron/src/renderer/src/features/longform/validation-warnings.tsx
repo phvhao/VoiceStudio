@@ -51,7 +51,7 @@ export function ValidationWarnings({
           <XIcon />
         </Button>
       </div>
-      <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted-foreground">
+      <ul className="mt-2 list-disc space-y-1 ps-5 text-xs leading-5 text-muted-foreground">
         {warnings.map((warning, index) => (
           <li key={`${warning.type}:${index}`}>{message(warning)}</li>
         ))}

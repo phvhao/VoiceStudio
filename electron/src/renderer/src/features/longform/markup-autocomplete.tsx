@@ -79,6 +79,7 @@ export function tagSuggestions(
     profiles,
     voiceCast,
   }: Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>,
+  locale?: string,
 ): Suggestion[] {
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
   // A name cast to a profile (or, in older Stories scripts, a profile id
@@ -114,7 +115,7 @@ export function tagSuggestions(
       group: 'pause',
       open: pauseToken(preset.ms),
       label: t(`markup.pause_${preset.id}`),
-      detail: formatPauseSeconds(preset.ms),
+      detail: formatPauseSeconds(preset.ms, locale),
     })),
     ...DELIVERY_TAGS.map((tag): Suggestion => ({
       key: `delivery:${tag}`,
@@ -199,7 +200,7 @@ export function useMarkupAutocomplete({
   /** The list has just been shown. */
   onOpen(): void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const listId = useId();
   const [state, setState] = useState<Suggesting | null>(null);
   if (disabled && state) setState(null);
@@ -210,9 +211,10 @@ export function useMarkupAutocomplete({
   // Built only while a tag is typed: Stories has an editor per line.
   const query = state?.tag.query;
   const typing = query !== undefined;
+  const locale = i18n.resolvedLanguage || i18n.language;
   const all = useMemo(
-    () => (typing ? tagSuggestions(t, { scriptNames, profiles, voiceCast }) : []),
-    [typing, t, scriptNames, profiles, voiceCast],
+    () => (typing ? tagSuggestions(t, { scriptNames, profiles, voiceCast }, locale) : []),
+    [typing, t, scriptNames, profiles, voiceCast, locale],
   );
   const items = useMemo(
     () => (query === undefined ? [] : matchSuggestions(all, query)),

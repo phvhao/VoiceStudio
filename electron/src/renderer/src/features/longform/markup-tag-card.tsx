@@ -51,12 +51,14 @@ import {
   expressionGroups,
   expressionVariant,
   formatPauseSeconds,
+  isBareVoiceReset,
   pauseMs,
   pauseToken,
   removeToken,
   replaceRange,
   respellingParts,
   respellingRange,
+  secondsUnit,
   setRespelling,
   voiceName,
   voiceSection,
@@ -80,6 +82,8 @@ export interface TagToolProps {
   /** Each line has a voice of its own, which `[voice:]` returns to (Stories). */
   lineVoices?: boolean;
   profiles: TagProfile[];
+  /** The profiles are still loading: a cast voice is unknown, not missing. */
+  loading?: boolean;
   /** `[voice:NAME]` names used in the script, first-seen order. */
   scriptNames: string[];
   /** The order voices take their colors in; `scriptNames` unless given. */
@@ -140,7 +144,15 @@ export function editTag(
  * both act through here, so a tag behaves the same however it is reached.
  */
 export function tagActions(tools: TagToolProps, token: MarkupToken) {
-  const { getTarget, headings = false, voiceCast, onVoiceCast, voiceGains, onVoiceGains } = tools;
+  const {
+    getTarget,
+    headings = false,
+    lineVoices = false,
+    voiceCast,
+    onVoiceCast,
+    voiceGains,
+    onVoiceGains,
+  } = tools;
   const edit = (make: (value: string) => MarkupEdit) => editTag(getTarget(), token, make);
   const replace = (insert: string) =>
     edit((value) => replaceRange(value, token.start, token.end, insert));
@@ -163,6 +175,8 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
   };
   return {
     name,
+    /** A `[voice:]` that returns to the line's own voice (Stories), not the shared default. */
+    toLine: lineVoices && token.kind === 'voiceReset' && isBareVoiceReset(token.text),
     replace,
     remove: () => edit((value) => removeToken(value, token)),
     /** Switch the tag to a script name, or with `null` back to the default voice. */
@@ -244,8 +258,7 @@ export function MarkupTagCard({
   const [shown, setShown] = useState(activation);
   if (activation && activation !== shown) setShown(activation);
   const current = activation ?? shown;
-  // How Base UI closed the card, which decides where the focus goes.
-  const closedBy = useRef<string | null>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const focusRef = useRef<HTMLElement | null>(null);
   const anchor = useMemo(
     () => current && current.handle.anchorAt(current.token.start, current.token.end),
@@ -257,10 +270,8 @@ export function MarkupTagCard({
     <Popover.Root
       key={current.id}
       open={activation !== null}
-      onOpenChange={(open, details) => {
-        if (open) return;
-        closedBy.current = details.reason;
-        onClose();
+      onOpenChange={(open) => {
+        if (!open) onClose();
       }}
     >
       <Popover.Portal>
@@ -272,21 +283,21 @@ export function MarkupTagCard({
           className="isolate z-50 outline-none"
         >
           <Popover.Popup
+            ref={popupRef}
             aria-label={t('editor.card_label', { tag: token.text })}
             initialFocus={current.via === 'keyboard' ? focusRef : false}
-            // A press elsewhere leaves the focus where that press put it.
-            finalFocus={() => (closedBy.current === 'outside-press' ? true : handle.element)}
+            // The focus goes back to the editor only when closing would lose
+            // it: from inside the card, or from nowhere. A press in another
+            // field or line, or a menu opened meanwhile, keeps it where it is.
+            finalFocus={() => {
+              const active = document.activeElement;
+              return !active || active === document.body || popupRef.current?.contains(active)
+                ? handle.element
+                : false;
+            }}
             className={CARD}
           >
-            <TagCardBody
-              token={token}
-              tools={tools}
-              focusRef={focusRef}
-              onDone={() => {
-                closedBy.current = null;
-                onClose();
-              }}
-            />
+            <TagCardBody token={token} tools={tools} focusRef={focusRef} onDone={onClose} />
           </Popover.Popup>
         </Popover.Positioner>
       </Popover.Portal>
@@ -396,7 +407,7 @@ function VoiceChoicePicker({
     >
       <Combobox.Trigger
         aria-label={label}
-        className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-left text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50"
+        className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-start text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50"
       >
         {current?.icon}
         <span className="min-w-0 flex-1 truncate">{current?.label}</span>
@@ -511,9 +522,9 @@ function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>)
 /** `[voice:NAME]` and `[voice:]`: who reads from here, who that is cast to, and how loud. */
 function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: ReactNode }) {
   const { t } = useTranslation();
-  const { profiles, scriptNames, defaultVoiceName, lineVoices = false } = tools;
+  const { profiles, scriptNames, defaultVoiceName, loading = false } = tools;
   const voices = tools.voices ?? scriptNames;
-  const { name } = act;
+  const { name, toLine } = act;
   // Older Stories scripts put a profile id in the tag.
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
   const label = (voice: string) => profileName(voice) ?? voice;
@@ -531,14 +542,16 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
   // A name that is a profile id reads in that profile without being cast.
   const direct = name !== null && !act.castTo && profileName(name) !== undefined;
   const castValue = act.castTo || (direct ? name : DEFAULT_CHOICE);
-  const missing = act.castTo !== '' && profileName(act.castTo) === undefined;
+  // Until the profiles arrive, a cast voice is unknown, not missing.
+  const unknown = act.castTo !== '' && profileName(act.castTo) === undefined;
+  const missing = unknown && !loading;
   const section = act.section();
   const reads = section !== null && section[0] < section[1];
   return (
     <>
       {name === null ? (
         <Header icon={<ResetDot />} title={t('markup.voice_reset')} token={token}>
-          {t(lineVoices ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
+          {t(toLine ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
         </Header>
       ) : (
         <Header
@@ -611,12 +624,16 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
                       label: profile.name,
                       icon: avatar(profile),
                     })),
-                    ...(missing
+                    ...(unknown
                       ? [
                           {
                             value: act.castTo,
-                            label: t('modelSettings.unavailable'),
-                            icon: <CircleAlertIcon className="size-4 text-destructive" />,
+                            label: t(loading ? 'common.loading' : 'modelSettings.unavailable'),
+                            icon: loading ? (
+                              <ResetDot />
+                            ) : (
+                              <CircleAlertIcon className="size-4 text-destructive" />
+                            ),
                           },
                         ]
                       : []),
@@ -634,7 +651,7 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
         </p>
       )}
       {/* In Stories `[voice:]` goes back to each line's own voice, not one shared default. */}
-      {act.setGain && (name !== null || !lineVoices) && (
+      {act.setGain && !toLine && (
         <div className="space-y-1">
           <VoiceGainControl
             name={name === null ? t('audiobook.default_voice') : label(name)}
@@ -683,7 +700,8 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
 }
 
 function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remove: ReactNode }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
   const ms = pauseMs(token.text) ?? 0;
   const [seconds, setSeconds] = useState(String(ms / 1000));
   const customMs = Math.round(Number(seconds) * 1000);
@@ -699,9 +717,9 @@ function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remov
         title={t('audiobook.insert_pause')}
         token={token}
       >
-        {t('editor.card_pause', { duration: formatPauseSeconds(ms) })}
+        {t('editor.card_pause', { duration: formatPauseSeconds(ms, locale) })}
       </Header>
-      <div role="group" aria-label={t('markup.pause_hint')} className="flex flex-wrap gap-1">
+      <div role="group" aria-label={t('editor.pause_length')} className="flex flex-wrap gap-1">
         {PAUSE_PRESETS.map((preset) => (
           <button
             key={preset.id}
@@ -713,7 +731,7 @@ function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remov
           >
             {t(`markup.pause_${preset.id}`)}
             <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
-              {formatPauseSeconds(preset.ms)}
+              {formatPauseSeconds(preset.ms, locale)}
             </span>
           </button>
         ))}
@@ -734,10 +752,11 @@ function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remov
             step="0.1"
             value={seconds}
             aria-invalid={!valid}
+            aria-label={t('editor.pause_custom_seconds')}
             className="h-7 w-16 px-2 text-xs"
             onChange={(event) => setSeconds(event.target.value)}
           />
-          s
+          <span aria-hidden="true">{secondsUnit(locale)}</span>
         </label>
         <Button type="submit" size="xs" variant="secondary" disabled={!valid}>
           {t('editor.apply')}

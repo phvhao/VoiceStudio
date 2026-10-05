@@ -1,4 +1,4 @@
-export function parseCastNames(text: string): string[];
+export function parseCastNames(text: string, cast?: Record<string, string>): string[];
 export function isDefaultVoiceName(name: string | null | undefined): boolean;
 export function scriptStats(text: string): { chapters: number; words: number; runtimeSec: number };
 export function formatRuntimeClock(seconds: number): string;

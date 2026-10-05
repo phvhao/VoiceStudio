@@ -146,6 +146,11 @@ it('shows a compact now-playing card instead of a transcript on the page', () =>
     'aria-valuetext',
     '0:00 / 0:14',
   );
+  // A timeline runs left to right in every language, its fill and marks too.
+  expect(screen.getByRole('slider', { name: 'Seek' }).closest('[dir]')).toHaveAttribute(
+    'dir',
+    'ltr',
+  );
   expect(screen.getByText('0:00 / 0:14')).toBeVisible();
   expect(screen.getByText('One')).toBeVisible();
   expect(screen.getByText('1/2')).toBeVisible();

@@ -48,6 +48,8 @@ import type { Draft } from './longform-session';
 interface Props {
   draft: Draft;
   profiles: { id: string; name: string }[];
+  /** The profiles are still loading: a line's voice is unknown, not missing. */
+  profilesLoading?: boolean;
   disabled: boolean;
   canSynthesize?: boolean;
   onChange: (patch: Partial<Draft>) => void;
@@ -229,6 +231,7 @@ function LineSpeed({
 export function StoryEditor({
   draft,
   profiles,
+  profilesLoading = false,
   disabled,
   canSynthesize = true,
   onChange,
@@ -261,8 +264,8 @@ export function StoryEditor({
     draft.globalSpeed,
   ]);
   const scriptNames = useMemo(
-    () => parseCastNames(draft.lines.map((line) => line.text).join('\n')),
-    [draft.lines],
+    () => parseCastNames(draft.lines.map((line) => line.text).join('\n'), draft.voiceCast),
+    [draft.lines, draft.voiceCast],
   );
   const defaultVoiceName = profiles.find((profile) => profile.id === draft.voice)?.name;
   const audition = async (line: Line) => {
@@ -570,6 +573,7 @@ export function StoryEditor({
           getTarget={getTarget}
           disabled={disabled || !targetLine}
           profiles={profiles}
+          loading={profilesLoading}
           scriptNames={scriptNames}
           voiceCast={draft.voiceCast}
           onVoiceCast={(voiceCast) => onChange({ voiceCast })}
@@ -606,7 +610,9 @@ export function StoryEditor({
         spokenNumber += 1;
         const accent = characterAccent(draft.cast, line.character);
         const profileMissing =
-          line.profileId != null && !profiles.some((profile) => profile.id === line.profileId);
+          !profilesLoading &&
+          line.profileId != null &&
+          !profiles.some((profile) => profile.id === line.profileId);
         return (
           <div
             key={line.id}
@@ -618,7 +624,7 @@ export function StoryEditor({
             onFocusCapture={() => setActiveLine(line.id)}
           >
             <div className="flex flex-wrap items-center gap-1 px-2 pt-1.5">
-              <span className="w-6 text-right font-mono text-[11px] text-muted-foreground tabular-nums">
+              <span className="w-6 text-end font-mono text-[11px] text-muted-foreground tabular-nums">
                 {spokenNumber}
               </span>
               <Select
@@ -725,6 +731,7 @@ export function StoryEditor({
               disabled={disabled}
               lineVoices
               profiles={profiles}
+              loading={profilesLoading}
               scriptNames={scriptNames}
               voiceCast={draft.voiceCast}
               onVoiceCast={(voiceCast) => onChange({ voiceCast })}

@@ -1975,6 +1975,8 @@
     "listen_part": "Listen to this part",
     "select_part": "Select this part",
     "card_pause": "A silence of {{duration}}.",
+    "pause_length": "Pause length",
+    "pause_custom_seconds": "Custom pause length, in seconds",
     "apply": "Apply",
     "card_expression": "A sound performed at this point.",
     "card_delivery": "Changes how the words between {{open}} and {{close}} are read.",
@@ -2086,7 +2088,8 @@
   "book": {
     "contents": "Contents",
     "empty": "Start a chapter with a line like # Chapter 1.",
-    "node_meta": "{{words}} words · {{runtime}}",
+    "node_meta_one": "{{words}} word · {{runtime}}",
+    "node_meta_other": "{{words}} words · {{runtime}}",
     "status_rendered": "Rendered",
     "status_changed": "Changed",
     "status_not_rendered": "Not rendered",

@@ -327,14 +327,20 @@ class Span:
 class Chapter:
     title: str
     spans: list[Span] = field(default_factory=list)
+    #: The script gave no title: ``title`` is the English "Chapter N" the
+    #: file's chapter marks use, and a reader names it in its own language.
+    untitled: bool = False
 
     @property
     def char_count(self) -> int:
         return sum(len(s.text) for s in self.spans)
 
     def to_dict(self) -> dict:
-        return {"title": self.title, "char_count": self.char_count,
-                "spans": [s.to_dict() for s in self.spans]}
+        doc = {"title": self.title, "char_count": self.char_count,
+               "spans": [s.to_dict() for s in self.spans]}
+        if self.untitled:
+            doc["untitled"] = True
+        return doc
 
 
 @dataclass
@@ -368,7 +374,8 @@ def parse_audiobook_script(text: str, *, default_voice: Optional[str] = None) ->
     from services.longform_parser import parse_script_to_spans
 
     chapters = [
-        Chapter(title=c["title"], spans=[Span(**s) for s in c["spans"]])
+        Chapter(title=c["title"], spans=[Span(**s) for s in c["spans"]],
+                untitled=c.get("untitled", False))
         for c in parse_script_to_spans(text, default_voice=default_voice)
     ]
     return AudiobookPlan(chapters=chapters)
@@ -925,6 +932,8 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
                              "start": phrases[first]["start"], "phrase": first})
         doc = {"title": chapter.title, "start": round(start, 3), "end": round(end, 3),
                "precision": precision, "phrases": phrases, "sections": sections}
+        if getattr(chapter, "untitled", False):
+            doc["untitled"] = True
         if rest and rest[0]:
             doc["key"] = str(rest[0])
         out.append(doc)

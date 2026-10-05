@@ -130,8 +130,27 @@ export function pauseToken(ms: number): string {
   return value < 1000 || value % 100 !== 0 ? `[pause ${value}ms]` : `[pause ${value / 1000}s]`;
 }
 
-export function formatPauseSeconds(ms: number): string {
-  return `${Number((clampPauseMs(ms) / 1000).toFixed(2))} s`;
+export function formatPauseSeconds(ms: number, locale?: string): string {
+  return seconds(locale).format(Number((clampPauseMs(ms) / 1000).toFixed(2)));
+}
+
+/** The short unit `formatPauseSeconds` writes in `locale`: "s", "giây"… */
+export function secondsUnit(locale?: string): string {
+  return (
+    seconds(locale)
+      .formatToParts(1)
+      .find((part) => part.type === 'unit')?.value ?? 's'
+  );
+}
+
+/** Seconds as `locale` writes them, unit included ("1.5s", "1,5 giây"). */
+function seconds(locale?: string) {
+  return new Intl.NumberFormat(locale, {
+    style: 'unit',
+    unit: 'second',
+    unitDisplay: 'narrow',
+    maximumFractionDigits: 2,
+  });
 }
 
 /** How long a `[pause …]` tag pauses, to the millisecond; `null` for any other text. */
@@ -283,6 +302,15 @@ export function pronounceSelection(text: string, start: number, end: number): Ma
 
 export function voiceToken(name: string): string {
   return `[voice:${name}]`;
+}
+
+/**
+ * `[voice:]`, with nothing in it. Where each line has a voice of its own
+ * (Stories) it returns to the line's voice; `[voice:default]` reads in the
+ * default voice there, as everywhere.
+ */
+export function isBareVoiceReset(token: string): boolean {
+  return VOICE_RE.exec(token)?.[1].trim() === '';
 }
 
 /** The name in a `[voice:NAME]` tag; `null` for the resets and for any other text. */
@@ -537,6 +565,25 @@ export function tokenAt(text: string, pos: number, { headings = false } = {}): M
     if (pos > end) continue;
     if (headings && onHeadingLine(text, start)) return null;
     return { start, end, text: match[0], kind: classifyToken(match[0]) as MarkupToken['kind'] };
+  }
+  return null;
+}
+
+/**
+ * The tag holding all of `start…end`: the one at a collapsed caret, or the
+ * one a selection lies inside. A right-click on macOS selects the word under
+ * the pointer before the menu opens, so `[pause 1s]` arrives with `pause`
+ * selected.
+ */
+export function tokenAround(
+  text: string,
+  start: number,
+  end: number,
+  options: { headings?: boolean } = {},
+): MarkupToken | null {
+  for (const at of [start, end]) {
+    const token = tokenAt(text, at, options);
+    if (token && token.start <= start && end <= token.end) return token;
   }
   return null;
 }

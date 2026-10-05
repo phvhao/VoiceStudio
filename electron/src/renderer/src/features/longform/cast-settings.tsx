@@ -67,7 +67,7 @@ export function VoiceGainControl({
         disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />
-      <output className="w-12 shrink-0 text-right tabular-nums">{text}</output>
+      <output className="w-12 shrink-0 text-end tabular-nums">{text}</output>
       <Button
         size="icon-xs"
         variant="ghost"
@@ -80,6 +80,19 @@ export function VoiceGainControl({
       </Button>
     </div>
   );
+}
+
+/**
+ * Whether a page shows the Cast panel: always for Audiobook. Stories shows it
+ * once a line names a voice inline, and while the default voice has a volume
+ * of its own, which applies to every render and is set nowhere else.
+ */
+export function showsCastPanel(
+  mode: 'audiobook' | 'stories',
+  inlineNames: readonly string[],
+  voiceGains: VoiceGains | undefined,
+): boolean {
+  return mode === 'audiobook' || inlineNames.length > 0 || voiceGain(voiceGains, '') !== 0;
 }
 
 export function CastSettings({

@@ -49,7 +49,7 @@ import {
   pauseToken,
   pronounceSelection,
   replaceRange,
-  tokenAt,
+  tokenAround,
   wrapSelection,
   type DeliveryTag,
   type MarkupEdit,
@@ -172,12 +172,12 @@ function VoiceItems({
 }
 
 function PauseItems({ choose }: { choose(ms: number): void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return PAUSE_PRESETS.map((preset) => (
     <Item
       key={preset.id}
       label={t(`markup.pause_${preset.id}`)}
-      hint={formatPauseSeconds(preset.ms)}
+      hint={formatPauseSeconds(preset.ms, i18n.resolvedLanguage || i18n.language)}
       onClick={() => choose(preset.ms)}
     />
   ));
@@ -245,7 +245,7 @@ function VolumeSubmenu({
 /** What the tag card offers for the right-clicked tag, as menu items. */
 function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps }) {
   const { t } = useTranslation();
-  const { profiles, scriptNames, defaultVoiceName, lineVoices = false } = tools;
+  const { profiles, scriptNames, defaultVoiceName, loading = false } = tools;
   const voices = tools.voices ?? scriptNames;
   const act = tagActions(tools, token);
   const { name, setGain } = act;
@@ -255,7 +255,7 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
   const kind = deliveryKind(token.text);
   // A voice tag has its voice's volume; `[voice:]` the default voice's, except
   // in Stories, where it returns to each line's own voice.
-  const volume = token.kind === 'voice' || (token.kind === 'voiceReset' && !lineVoices);
+  const volume = token.kind === 'voice' || (token.kind === 'voiceReset' && !act.toLine);
   return (
     <>
       <p className="flex min-w-0 items-center gap-1.5 px-2 py-1 font-mono text-[11px] text-muted-foreground">
@@ -289,7 +289,8 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
           label={t('editor.read_by')}
           hint={
             act.castTo
-              ? (profileName(act.castTo) ?? t('modelSettings.unavailable'))
+              ? (profileName(act.castTo) ??
+                t(loading ? 'common.loading' : 'modelSettings.unavailable'))
               : (profileName(name) ?? t('audiobook.default_voice'))
           }
         >
@@ -408,9 +409,7 @@ export function MarkupContextMenu({
     if (!element) return;
     setSelection(element.selectionStart !== element.selectionEnd);
     setToken(
-      element.selectionStart === element.selectionEnd
-        ? tokenAt(element.value, element.selectionStart, { headings })
-        : null,
+      tokenAround(element.value, element.selectionStart, element.selectionEnd, { headings }),
     );
   };
   const run = (make: (value: string, start: number, end: number) => MarkupEdit) => {

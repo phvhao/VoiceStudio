@@ -116,6 +116,20 @@ it('only sends cast assignments used by the current script', () => {
   expect(renderBody('audiobook', draft)).toMatchObject({ voice_map: { Mara: 'actor' } });
 });
 
+it('keeps a voice saved for a `[voice:Default]` name, as older versions cast it', () => {
+  const draft = {
+    ...longformSession.state.drafts.audiobook,
+    voice: 'narrator',
+    script: 'Intro [voice:Default] Cast before. [voice:default] Reset.',
+    voiceCast: { Default: 'actor' },
+  };
+  // The saved cast still reads; the uncast lowercase reset still returns to the default voice.
+  expect(renderBody('audiobook', draft)).toMatchObject({ voice_map: { Default: 'actor' } });
+  expect(renderBody('audiobook', { ...draft, voiceCast: {} })).toHaveProperty('voice_map', {});
+  const story = { ...draft, lines: [{ id: '1', text: '[voice:Default] Hi', profileId: null }] };
+  expect(renderBody('stories', story)).toMatchObject({ voice_map: { Default: 'actor' } });
+});
+
 it('treats object-property names as ordinary unmapped cast names', () => {
   const draft = {
     ...longformSession.state.drafts.audiobook,

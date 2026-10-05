@@ -1,8 +1,8 @@
 import type { ComponentProps } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
-import '@/i18n';
-import { VoicePicker } from './voice-picker';
+import i18n from '@/i18n';
+import { ProfilesFailure, VoicePicker, profileListState } from './voice-picker';
 
 // Decomposed (NFD), as names pasted from macOS can arrive.
 const GIONG = 'Giọng Bắc'.normalize('NFD');
@@ -209,4 +209,41 @@ it('waits for the profiles to load instead of calling the chosen voice missing',
   expect(trigger).toHaveTextContent('Đào Lan');
   expect(trigger).not.toHaveAttribute('aria-busy');
   expect(trigger).toBeEnabled();
+});
+
+it('stops loading once the profiles fail, and offers a retry', () => {
+  const refetch = vi.fn();
+  const failed = {
+    data: undefined,
+    isPending: false,
+    isError: true,
+    error: new Error('Profiles are unreadable'),
+    isFetching: false,
+    refetch,
+  };
+  // A failed load is no longer on its way: the pickers do not wait for it.
+  expect(profileListState(failed)).toEqual({ profiles: [], loading: false });
+  expect(profileListState({ ...failed, isPending: true, isError: false })).toMatchObject({
+    loading: true,
+  });
+  render(<ProfilesFailure query={failed} />);
+  expect(screen.getByRole('alert')).toHaveTextContent('Profiles are unreadable');
+  fireEvent.click(screen.getByRole('button', { name: i18n.t('common.retry') }));
+  expect(refetch).toHaveBeenCalled();
+});
+
+it('says nothing while the profiles have not failed', () => {
+  const { container } = render(
+    <ProfilesFailure
+      query={{
+        data: [],
+        isPending: false,
+        isError: false,
+        error: null,
+        isFetching: false,
+        refetch: vi.fn(),
+      }}
+    />,
+  );
+  expect(container).toBeEmptyDOMElement();
 });

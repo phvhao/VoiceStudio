@@ -45,6 +45,7 @@ import {
   pauseToken,
   pronounceSelection,
   sanitizeCastName,
+  secondsUnit,
   wrapSelection,
   type DeliveryTag,
   type MarkupEdit,
@@ -167,6 +168,7 @@ export function MarkupToolbar({
   getTarget,
   disabled,
   profiles,
+  loading = false,
   scriptNames,
   voiceCast,
   onVoiceCast,
@@ -178,6 +180,8 @@ export function MarkupToolbar({
   getTarget(): MarkupTarget | null;
   disabled: boolean;
   profiles: Profile[];
+  /** The profiles are still loading: a cast voice is unknown, not missing. */
+  loading?: boolean;
   /** `[voice:NAME]` names already used in the script, first-seen order. */
   scriptNames: string[];
   voiceCast: Record<string, string>;
@@ -190,7 +194,8 @@ export function MarkupToolbar({
   actions?: ReactNode;
   className?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage || i18n.language;
   const [open, setOpen] = useState<'pause' | 'voice' | 'expressions' | 'guide' | null>(null);
   const [customSeconds, setCustomSeconds] = useState('1.5');
   const [voiceQuery, setVoiceQuery] = useState('');
@@ -264,7 +269,7 @@ export function MarkupToolbar({
               >
                 <span>{t(`markup.pause_${preset.id}`)}</span>
                 <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {formatPauseSeconds(preset.ms)}
+                  {formatPauseSeconds(preset.ms, locale)}
                 </span>
               </button>
             ))}
@@ -285,10 +290,11 @@ export function MarkupToolbar({
                 step="0.1"
                 value={customSeconds}
                 aria-invalid={!customValid}
+                aria-label={t('editor.pause_custom_seconds')}
                 className="h-7 w-16 px-2 text-xs"
                 onChange={(event) => setCustomSeconds(event.target.value)}
               />
-              s
+              <span aria-hidden="true">{secondsUnit(locale)}</span>
             </label>
             <Button type="submit" size="xs" variant="secondary" disabled={!customValid}>
               {t('markup.insert')}
@@ -309,13 +315,13 @@ export function MarkupToolbar({
           </p>
           {profiles.length >= VOICE_SEARCH_MIN && (
             <label className="relative block">
-              <SearchIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              <SearchIcon className="pointer-events-none absolute start-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 autoFocus
                 value={voiceQuery}
                 placeholder={t('markup.voice_search')}
                 aria-label={t('markup.voice_search')}
-                className="h-7 pl-7 text-xs"
+                className="h-7 ps-7 text-xs"
                 onChange={(event) => setVoiceQuery(event.target.value)}
               />
             </label>
@@ -328,7 +334,8 @@ export function MarkupToolbar({
                   const direct = profileName(name);
                   const mapped = castVoice(voiceCast, name);
                   const detail = mapped
-                    ? (profileName(mapped) ?? t('modelSettings.unavailable'))
+                    ? (profileName(mapped) ??
+                      t(loading ? 'common.loading' : 'modelSettings.unavailable'))
                     : direct
                       ? ''
                       : t('audiobook.cast_uses_default');
@@ -336,7 +343,7 @@ export function MarkupToolbar({
                     <button
                       key={name}
                       type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm outline-none hover:bg-accent focus-visible:bg-accent"
                       onClick={() => voice(name)}
                     >
                       <span
@@ -361,7 +368,7 @@ export function MarkupToolbar({
                   <button
                     key={profile.id}
                     type="button"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-start text-sm outline-none hover:bg-accent focus-visible:bg-accent"
                     onClick={() => voiceProfile(profile)}
                   >
                     <ProfileAvatar name={profile.name} className="size-5 shrink-0" />
@@ -404,7 +411,7 @@ export function MarkupToolbar({
           )}
           <button
             type="button"
-            className="flex w-full items-center gap-2 rounded-md border-t border-border/50 px-2 pt-2 pb-1 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
+            className="flex w-full items-center gap-2 rounded-md border-t border-border/50 px-2 pt-2 pb-1 text-start text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
             onClick={() =>
               apply((value, start, end) => insertToken(value, start, end, VOICE_RESET_TOKEN))
             }

@@ -1867,6 +1867,8 @@
     "listen_part": "Dengarkan bagian ini",
     "select_part": "Pilih bagian ini",
     "card_pause": "Hening selama {{duration}}.",
+    "pause_length": "Panjang jeda",
+    "pause_custom_seconds": "Panjang jeda kustom, dalam detik",
     "apply": "Terapkan",
     "card_expression": "Suara yang dibunyikan di titik ini.",
     "card_delivery": "Mengubah cara kata-kata di antara {{open}} dan {{close}} dibacakan.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "Daftar isi",
     "empty": "Mulai bab dengan baris seperti # Bab 1.",
-    "node_meta": "{{words}} kata · {{runtime}}",
+    "node_meta_one": "{{words}} kata · {{runtime}}",
+    "node_meta_other": "{{words}} kata · {{runtime}}",
     "status_rendered": "Sudah dirender",
     "status_changed": "Berubah",
     "status_not_rendered": "Belum dirender",

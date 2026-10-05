@@ -9,12 +9,51 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ProfileAvatar } from '@/components/profile-avatar';
+import { Button } from '@/components/ui/button';
+import { describeError } from '@/lib/api/client';
 import type { Profile } from '@/lib/api/types';
 import { cn } from '@/lib/utils';
 
 /** A profile as the picker needs it; a row without `kind` reads as a clone, as the backend reads it. */
 export type VoiceProfile = Pick<Profile, 'id' | 'name'> &
   Partial<Pick<Profile, 'kind' | 'image_url'>>;
+
+interface ProfilesQuery<T> {
+  data: T[] | undefined;
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  isFetching: boolean;
+  refetch(): unknown;
+}
+
+/**
+ * The profile list as the voice pickers read it: still loading only while it
+ * is on its way. A failed load is not loading — `ProfilesFailure` says so.
+ */
+export function profileListState<T>(query: ProfilesQuery<T>): { profiles: T[]; loading: boolean } {
+  return { profiles: query.data ?? [], loading: query.isPending };
+}
+
+/** Why the voice list could not load, and a retry; nothing while it has not failed. */
+export function ProfilesFailure({ query }: { query: ProfilesQuery<unknown> }) {
+  const { t } = useTranslation();
+  if (!query.isError) return null;
+  return (
+    <p role="alert" className="flex items-center gap-2 text-xs text-destructive">
+      <CircleAlertIcon className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1">{describeError(query.error)}</span>
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={query.isFetching}
+        onClick={() => void query.refetch()}
+      >
+        {t('common.retry')}
+      </Button>
+    </p>
+  );
+}
 
 interface VoiceOption {
   value: string;
@@ -161,7 +200,7 @@ export function VoicePicker({
         aria-busy={loading || undefined}
         data-attention={attention ? '' : undefined}
         className={cn(
-          'flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-left text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-50 data-attention:border-amber-500/70 data-attention:ring-2 data-attention:ring-amber-500/25 dark:bg-input/30 dark:hover:bg-input/50',
+          'flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-start text-sm transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-50 data-attention:border-amber-500/70 data-attention:ring-2 data-attention:ring-amber-500/25 dark:bg-input/30 dark:hover:bg-input/50',
           !current?.profile && 'text-muted-foreground',
           className,
         )}

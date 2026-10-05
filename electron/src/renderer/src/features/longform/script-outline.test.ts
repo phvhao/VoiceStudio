@@ -46,12 +46,7 @@ describe('scriptOutline', () => {
       ['Two', 3, []],
     ]);
     // Plan indexes match the parser's chapters.
-    expect(scriptChapters(SCRIPT).map((c) => c.title)).toEqual([
-      'Chapter 1',
-      'One',
-      'Empty',
-      'Two',
-    ]);
+    expect(scriptChapters(SCRIPT).map((c) => c.title)).toEqual(['', 'One', 'Empty', 'Two']);
   });
 
   it('gives offsets into the text and counts the spoken words', () => {
@@ -60,13 +55,28 @@ describe('scriptOutline', () => {
     const part = one.sections[0];
     expect(SCRIPT.slice(one.start, one.lineEnd ?? 0)).toBe('# One');
     expect(SCRIPT.slice(part.titleStart ?? 0, part.lineEnd ?? 0)).toBe('Part [voice:Mara] two');
-    expect(part.end).toBe(one.sections[1].start);
+    // The `##` section holds its `###` subsection.
+    expect(part.end).toBe(one.end);
     expect(one.sections[1].end).toBe(one.end);
     // "First words here." (3), "Part two" (2), "Mara speaks." (2), "Deeper", "x",
     // "#### not a section" (4).
     expect(one.words).toBe(13);
-    expect(part.words).toBe(4);
+    expect(part.words).toBe(10);
+    expect(one.sections[1].words).toBe(6);
     expect(outline[0]).toMatchObject({ title: null, start: 0, titleStart: null, words: 3 });
+  });
+
+  it('ends a section at the next heading of its level or above', () => {
+    const text = '# Ch\n## A\ntext a\n### A.1\nmore\n## B\nb';
+    const [a, a1, b] = scriptOutline(text)[0].sections;
+    expect(a.end).toBe(text.indexOf('## B'));
+    expect(a1.end).toBe(text.indexOf('## B'));
+    expect(b.end).toBe(text.length);
+    // "A", "text a", "A.1", "more": the subsection counts toward its section.
+    expect(a.words).toBe(5);
+    // A section added after A lands after its subsections, which stay A's.
+    const added = insertHeading(text, a.end, 2, 'New').text;
+    expect(added).toBe('# Ch\n## A\ntext a\n### A.1\nmore\n\n## New\n\n## B\nb');
   });
 
   it('reads CRLF text by its newline-normalized offsets', () => {

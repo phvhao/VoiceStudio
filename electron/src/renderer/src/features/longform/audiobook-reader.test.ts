@@ -4,6 +4,7 @@ import {
   buildReaderBook,
   chapterAt,
   endsSentence,
+  followLine,
   followScroll,
   nextChapterStart,
   playbackClock,
@@ -287,6 +288,39 @@ describe('followScroll', () => {
 
   it('stays within the scrollable range', () => {
     expect(followScroll(4990, 5010, 0, 400, 4700)).toBe(4700);
+  });
+});
+
+describe('followLine', () => {
+  const line = { scrollLeft: 0, clientWidth: 200, scrollWidth: 2000 };
+
+  it('scrolls a left-to-right line forward to the word', () => {
+    expect(followLine({ offsetLeft: 900, offsetWidth: 40 }, line, false)).toEqual({
+      left: 840,
+      scrolled: true,
+    });
+    expect(followLine({ offsetLeft: 50, offsetWidth: 40 }, line, false)).toEqual({
+      left: null,
+      scrolled: false,
+    });
+  });
+
+  it('scrolls a right-to-left line the other way, as Chromium counts it', () => {
+    // The line starts at its right edge and overflows to the left: a word far
+    // into it sits at a negative offset, and scrollLeft runs down from 0.
+    expect(followLine({ offsetLeft: -900, offsetWidth: 40 }, line, true)).toEqual({
+      left: -1000,
+      scrolled: true,
+    });
+    // Its first words are in view at the start.
+    expect(followLine({ offsetLeft: 120, offsetWidth: 40 }, line, true)).toEqual({
+      left: null,
+      scrolled: false,
+    });
+    // Scrolled on, the line comes back for a word near its start.
+    expect(
+      followLine({ offsetLeft: 120, offsetWidth: 40 }, { ...line, scrollLeft: -700 }, true),
+    ).toEqual({ left: 0, scrolled: false });
   });
 });
 

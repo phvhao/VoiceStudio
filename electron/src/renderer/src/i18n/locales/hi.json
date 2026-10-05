@@ -1867,6 +1867,8 @@
     "listen_part": "यह हिस्सा सुनें",
     "select_part": "यह हिस्सा चुनें",
     "card_pause": "{{duration}} का मौन।",
+    "pause_length": "विराम की अवधि",
+    "pause_custom_seconds": "कस्टम विराम की अवधि, सेकंड में",
     "apply": "लागू करें",
     "card_expression": "इस जगह पर निकाली जाने वाली ध्वनि।",
     "card_delivery": "{{open}} और {{close}} के बीच के शब्दों को पढ़ने का तरीका बदलता है।",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "विषय-सूची",
     "empty": "किसी अध्याय की शुरुआत # अध्याय 1 जैसी पंक्ति से करें।",
-    "node_meta": "{{words}} शब्द · {{runtime}}",
+    "node_meta_one": "{{words}} शब्द · {{runtime}}",
+    "node_meta_other": "{{words}} शब्द · {{runtime}}",
     "status_rendered": "रेंडर हो चुका",
     "status_changed": "बदला गया",
     "status_not_rendered": "रेंडर नहीं हुआ",

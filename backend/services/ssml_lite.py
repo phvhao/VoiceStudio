@@ -84,6 +84,27 @@ def _resolve(stack: list[str]) -> dict:
     return {"speed": speed, "spell": spell, "emphasis": emphasis}
 
 
+def _step(stack: list[str], m: re.Match) -> None:
+    """Apply one tag to the open-tag stack: an open pushes it; a close drops
+    the nearest matching open, and an unmatched close is ignored."""
+    name = m.group(2).lower()
+    if m.group(1) == "/":
+        for i in range(len(stack) - 1, -1, -1):
+            if stack[i] == name:
+                del stack[i]
+                break
+    else:
+        stack.append(name)  # unclosed opens stay on the stack to EOL
+
+
+def open_tags(text: str) -> list[str]:
+    """The tags still open where ``text`` ends, outermost first (lowercase)."""
+    stack: list[str] = []
+    for m in _TAG_RE.finditer(text or ""):
+        _step(stack, m)
+    return stack
+
+
 def parse_ssml_lite(text: str) -> list[dict]:
     """Split one line of SSML-LITE markup into ordered prosody segments.
 
@@ -120,16 +141,7 @@ def parse_ssml_lite(text: str) -> list[dict]:
     for m in _TAG_RE.finditer(text):
         emit(text[last:m.start()])
         last = m.end()
-        is_close = m.group(1) == "/"
-        name = m.group(2).lower()
-        if is_close:
-            # Close the nearest matching open tag; ignore an unmatched close.
-            for i in range(len(stack) - 1, -1, -1):
-                if stack[i] == name:
-                    del stack[i]
-                    break
-        else:
-            stack.append(name)  # unclosed opens stay on the stack to EOL
+        _step(stack, m)
 
     emit(text[last:])
 

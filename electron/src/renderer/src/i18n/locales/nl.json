@@ -1867,6 +1867,8 @@
     "listen_part": "Dit deel beluisteren",
     "select_part": "Dit deel selecteren",
     "card_pause": "Een stilte van {{duration}}.",
+    "pause_length": "Pauzeduur",
+    "pause_custom_seconds": "Eigen pauzeduur, in seconden",
     "apply": "Toepassen",
     "card_expression": "Een geluid dat op dit punt klinkt.",
     "card_delivery": "Verandert hoe de woorden tussen {{open}} en {{close}} worden voorgelezen.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "Inhoud",
     "empty": "Begin een hoofdstuk met een regel als # Hoofdstuk 1.",
-    "node_meta": "{{words}} woorden · {{runtime}}",
+    "node_meta_one": "{{words}} woord · {{runtime}}",
+    "node_meta_other": "{{words}} woorden · {{runtime}}",
     "status_rendered": "Weergegeven",
     "status_changed": "Gewijzigd",
     "status_not_rendered": "Niet weergegeven",

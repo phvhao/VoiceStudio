@@ -74,11 +74,20 @@ it('shows the chapters and sections with their length and render status', async 
   expect(tree.getByRole('button', { name: 'One' })).toBeVisible();
   expect(tree.getByRole('button', { name: 'Part two' })).toBeVisible();
   expect(tree.getByRole('button', { name: 'Two' })).toBeVisible();
-  expect(tree.getByText(t('book.node_meta', { words: 4, runtime: '0:02' }))).toBeVisible();
+  expect(
+    tree.getByText(t('book.node_meta', { count: 4, words: '4', runtime: '0:02' })),
+  ).toBeVisible();
+  // A one-word section reads in the singular.
+  expect(t('book.node_meta', { count: 1, words: '1', runtime: '0:00' })).toBe('1 word · 0:00');
   // A chapter with nothing to read is not in the render's plan.
   expect(tree.getByText(t('book.status_empty'))).toBeVisible();
   expect(await tree.findByText(t('book.status_rendered'))).toBeVisible();
   expect(tree.getByText(t('book.status_changed'))).toHaveAttribute('title', t('book.hint_changed'));
+  // The length and status sit under the title, which keeps the row's width.
+  const meta = within(tree.getByRole('button', { name: 'One' }).parentElement!);
+  expect(
+    meta.getByText(t('book.status_rendered')).closest('[data-slot=outline-meta]'),
+  ).not.toBeNull();
   const [path, init] = mock.api.mock.calls[0];
   expect(path).toBe('/audiobook/outline');
   expect(JSON.parse(init.body)).toEqual(
@@ -161,4 +170,92 @@ it('names the opening text before any chapter heading', async () => {
   );
   expect(await screen.findByRole('menuitem', { name: t('book.add_chapter') })).toBeVisible();
   expect(screen.queryByRole('menuitem', { name: t('book.rename') })).toBeNull();
+});
+
+it('hides the statuses of an earlier script until its own arrive', async () => {
+  render(<Harness />);
+  expect(await within(contents()).findByText(t('book.status_rendered'))).toBeVisible();
+  // The new chapter shifts the plan: the old answer no longer lines up with it.
+  mock.api.mockImplementation(async (path: string, init: { body: string }) =>
+    path === '/audiobook/outline' && JSON.parse(init.body).text.startsWith('# New')
+      ? {
+          book: true,
+          chapters: [
+            { title: 'New', status: 'not_rendered', cached: false },
+            { title: 'One', status: 'rendered', cached: true },
+            { title: 'Two', status: 'changed', cached: false },
+          ],
+        }
+      : { book: true, chapters: [] },
+  );
+  fireEvent.change(script(), { target: { value: `# New\nText.\n${SCRIPT}` } });
+  expect(within(contents()).queryByText(t('book.status_rendered'))).toBeNull();
+  expect(within(contents()).queryByText(t('book.status_changed'))).toBeNull();
+  const row = (title: string) =>
+    within(within(contents()).getByRole('button', { name: title }).parentElement!);
+  expect(
+    await row('One').findByText(t('book.status_rendered'), {}, { timeout: 3000 }),
+  ).toBeVisible();
+  expect(row('New').getByText(t('book.status_not_rendered'))).toBeVisible();
+  expect(row('Two').getByText(t('book.status_changed'))).toBeVisible();
+});
+
+it('keeps one status answer cached, however often the script settles', async () => {
+  const client = new QueryClient();
+  function Cached() {
+    const [script, setScript] = useState(SCRIPT);
+    const draft: Draft = { ...blankLongformDraft(), script, voice: 'narrator' };
+    return (
+      <QueryClientProvider client={client}>
+        <textarea
+          aria-label="Script"
+          value={script}
+          onChange={(event) => setScript(event.target.value)}
+        />
+        <BookOutline
+          draft={draft}
+          disabled={false}
+          canPreview
+          onBusy={() => {}}
+          getTarget={() => null}
+        />
+      </QueryClientProvider>
+    );
+  }
+  render(<Cached />);
+  await within(contents()).findByText(t('book.status_rendered'));
+  fireEvent.change(script(), { target: { value: `${SCRIPT} More.` } });
+  await waitFor(() => expect(mock.api).toHaveBeenCalledTimes(2), { timeout: 3000 });
+  await waitFor(() =>
+    expect(client.getQueryCache().findAll({ queryKey: ['audiobook-outline'] })).toHaveLength(1),
+  );
+});
+
+it('hands the focus back to the menu button when its menu closes with nothing done', async () => {
+  render(<Harness />);
+  const more = screen.getByRole('button', { name: t('book.more', { title: 'Part two' }) });
+  more.focus();
+  fireEvent.click(more);
+  const menu = await screen.findByRole('menu');
+  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  await waitFor(() => expect(more).toHaveFocus());
+});
+
+it('gives the focus to the row when a rename is cancelled or changes nothing', async () => {
+  render(<Harness />);
+  const field = () =>
+    screen.getByRole('textbox', { name: t('book.rename_title', { title: 'Part two' }) });
+  const title = () => within(contents()).getByRole('button', { name: 'Part two' });
+  await choose('Part two', 'book.rename');
+  await waitFor(() => expect(field()).toHaveFocus());
+  fireEvent.keyDown(field(), { key: 'Escape' });
+  await waitFor(() => expect(title()).toHaveFocus());
+  await choose('Part two', 'book.rename');
+  await waitFor(() => expect(field()).toHaveFocus());
+  fireEvent.change(field(), { target: { value: '   ' } });
+  fireEvent.keyDown(field(), { key: 'Enter' });
+  await waitFor(() => expect(title()).toHaveFocus());
+  expect(script().value).toBe(SCRIPT);
 });

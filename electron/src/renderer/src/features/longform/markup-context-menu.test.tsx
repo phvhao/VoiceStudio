@@ -77,6 +77,23 @@ it('removes the tag that was right-clicked', async () => {
   expect(script().value).toBe('Wait here');
 });
 
+it('acts on the tag when the right-click selected a word in it, as macOS does', async () => {
+  render(<Editor initial="Wait [pause 1s] here" />);
+  // macOS selects the word under the pointer before the menu opens.
+  const word = 'Wait ['.length;
+  rightClickAt(word, word + 'pause'.length);
+  expect(within(await screen.findByRole('menu')).getByText('[pause 1s]')).toBeVisible();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Remove tag' }));
+  expect(script().value).toBe('Wait here');
+});
+
+it('offers no tag for a selection reaching past it', async () => {
+  render(<Editor initial="Wait [pause 1s] here" />);
+  rightClickAt(0, 'Wait [pa'.length);
+  await screen.findByRole('menu');
+  expect(screen.queryByRole('menuitem', { name: 'Remove tag' })).toBeNull();
+});
+
 it('unwraps delivery markup and keeps the words', async () => {
   render(<Editor initial="say [slow]softly[/slow] now" />);
   rightClickAt('say [sl'.length);

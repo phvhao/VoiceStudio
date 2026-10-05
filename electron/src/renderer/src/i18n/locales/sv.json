@@ -1867,6 +1867,8 @@
     "listen_part": "Lyssna på den här delen",
     "select_part": "Markera den här delen",
     "card_pause": "En tystnad på {{duration}}.",
+    "pause_length": "Pauslängd",
+    "pause_custom_seconds": "Egen pauslängd i sekunder",
     "apply": "Verkställ",
     "card_expression": "Ett ljud som framförs på det här stället.",
     "card_delivery": "Ändrar hur orden mellan {{open}} och {{close}} läses.",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "Innehåll",
     "empty": "Börja ett kapitel med en rad som # Kapitel 1.",
-    "node_meta": "{{words}} ord · {{runtime}}",
+    "node_meta_one": "{{words}} ord · {{runtime}}",
+    "node_meta_other": "{{words}} ord · {{runtime}}",
     "status_rendered": "Skapat",
     "status_changed": "Ändrat",
     "status_not_rendered": "Inte skapat",

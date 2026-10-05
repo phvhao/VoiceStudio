@@ -23,6 +23,12 @@ describe('parseCastNames', () => {
     expect(['', ' ', 'default', ' Default ', 'DEFAULT', null].every(isDefaultVoiceName)).toBe(true);
     expect(isDefaultVoiceName('Defaults')).toBe(false);
   });
+  it('keeps a `default` name a saved cast already gives a voice', () => {
+    const script = '[voice:Default] a [voice:default] b [voice:] c';
+    expect(parseCastNames(script, { Default: 'p1' })).toEqual(['Default']);
+    expect(parseCastNames(script, { Default: '' })).toEqual([]);
+    expect(parseCastNames(script, { '': 'p1' })).toEqual([]);
+  });
   it('is empty for a script with no voice tags', () => {
     expect(parseCastNames('# Chapter\nJust narration.')).toEqual([]);
     expect(parseCastNames('')).toEqual([]);
@@ -47,6 +53,17 @@ describe('scriptStats', () => {
     expect(chapters).toBe(1);
     // "Part two" (2) + "Body." + "Deep" + "#### four" (2): `####` stays text.
     expect(words).toBe(6);
+  });
+  it('counts the words of scripts written without spaces', () => {
+    // 今天/天气/很/好 · 我们/去/公园/散步/吧
+    const chinese = scriptStats('# 第一章\n今天天气很好。我们去公园散步吧。');
+    expect(chinese.words).toBeGreaterThanOrEqual(8);
+    expect(formatRuntimeClock(chinese.runtimeSec)).not.toBe('0:00');
+    expect(scriptStats('今日は天気がいいです。').words).toBeGreaterThanOrEqual(4);
+    expect(scriptStats('วันนี้อากาศดีมาก เราไปเดินเล่นกัน').words).toBeGreaterThanOrEqual(6);
+    // Spaced scripts still count their runs; a mixed run counts each word.
+    expect(scriptStats('Xin chào các bạn').words).toBe(4);
+    expect(scriptStats('Say 你好 now').words).toBe(3);
   });
 });
 

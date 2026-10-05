@@ -1867,6 +1867,8 @@
     "listen_part": "ฟังส่วนนี้",
     "select_part": "เลือกส่วนนี้",
     "card_pause": "ความเงียบ {{duration}}",
+    "pause_length": "ความยาวช่วงเงียบ",
+    "pause_custom_seconds": "ความยาวช่วงเงียบที่กำหนดเอง (วินาที)",
     "apply": "ใช้",
     "card_expression": "เสียงที่แสดง ณ ตำแหน่งนี้",
     "card_delivery": "เปลี่ยนวิธีอ่านคำระหว่าง {{open}} และ {{close}}",
@@ -1978,7 +1980,8 @@
   "book": {
     "contents": "สารบัญ",
     "empty": "เริ่มบทด้วยบรรทัดเช่น # บทที่ 1",
-    "node_meta": "{{words}} คำ · {{runtime}}",
+    "node_meta_one": "{{words}} คำ · {{runtime}}",
+    "node_meta_other": "{{words}} คำ · {{runtime}}",
     "status_rendered": "สร้างแล้ว",
     "status_changed": "มีการเปลี่ยนแปลง",
     "status_not_rendered": "ยังไม่ได้สร้าง",

@@ -31,6 +31,8 @@ DEFAULT_LABELS = {
     "player": "Player",
     "estimated": "Timing is estimated: the highlight may run ahead of or behind the voice.",
     "keys": "Space plays or pauses, the arrow keys go back or forward.",
+    # A chapter the script gave no title, ``{n}`` its number.
+    "chapter_n": "Chapter {n}",
 }
 #: The longest label kept (a sentence, not a payload).
 _LABEL_MAX = 300
@@ -84,15 +86,24 @@ def estimated_timeline(output: str, script: str, *,
     return book_timeline(output, timed)
 
 
-def page_timeline(timeline: Optional[dict]) -> dict:
+def chapter_title(chapter: dict, number: int, labels: dict) -> str:
+    """A timeline chapter's title on the page: as written, or for a chapter
+    the script left untitled, ``labels["chapter_n"]`` with its ``number``."""
+    if chapter.get("untitled"):
+        return labels["chapter_n"].replace("{n}", str(number))
+    return str(chapter.get("title") or "")
+
+
+def page_timeline(timeline: Optional[dict], labels: Optional[dict] = None) -> dict:
     """What the page reads from a book timeline: chapters with their phrases
     and sections, nothing else (cache keys stay home)."""
+    labels = labels_for(labels)
     chapters = []
     for chapter in (timeline or {}).get("chapters") or []:
         if not isinstance(chapter, dict):
             continue
         chapters.append({
-            "title": str(chapter.get("title") or ""),
+            "title": chapter_title(chapter, len(chapters) + 1, labels),
             "start": chapter.get("start", 0),
             "end": chapter.get("end", 0),
             "precision": chapter.get("precision", "chapter"),
@@ -125,12 +136,12 @@ padding-bottom:7rem}
 nav{position:sticky;top:1rem;align-self:start;max-height:calc(100vh - 9rem);overflow:auto;font-size:.9rem}
 nav h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 .5rem}
 nav ol{list-style:none;margin:0;padding:0}
-nav ol ol{padding-left:.9rem}
+nav ol ol{padding-inline-start:.9rem}
 nav button{all:unset;cursor:pointer;display:block;width:100%;padding:.2rem .4rem;border-radius:.35rem;line-height:1.4}
 nav button:hover{background:var(--phrase)}
 nav button:focus-visible{outline:2px solid var(--accent)}
 nav button[aria-current=true]{color:var(--accent);font-weight:600}
-nav .s3{padding-left:1.2rem}
+nav .s3{padding-inline-start:1.2rem}
 main{max-width:42rem}
 main section{margin-bottom:2.5rem}
 main h2{font-size:1.4rem;line-height:1.3;margin:1.5rem 0 .75rem}
@@ -330,7 +341,9 @@ _JS = r"""
       if (chapter >= 0) chapterButtons[chapter].el.setAttribute('aria-current', 'true');
     }
     if (!seeking) seekBar.value = String(t);
-    timeText.textContent = clock(t) + ' / ' + clock(audio.duration || data.duration || 0);
+    var time = clock(t) + ' / ' + clock(audio.duration || data.duration || 0);
+    timeText.textContent = time;
+    seekBar.setAttribute('aria-valuetext', time);
   }
   var frame = 0;
   function loop() { paint(); frame = audio.paused ? 0 : requestAnimationFrame(loop); }
@@ -386,11 +399,16 @@ _ICONS = {
 
 def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
                 labels: Optional[dict] = None, author: str = "", narrator: str = "",
-                cover_src: Optional[str] = None, lang: str = "en",
-                duration: float = 0.0) -> str:
+                cover_src: Optional[str] = None, lang: str = "en", direction: str = "ltr",
+                book_lang: str = "", duration: float = 0.0) -> str:
     """The book's ``index.html``. Every text from the book goes through
     :func:`html.escape` or :func:`_script_json`; the page builds its text
-    with ``textContent`` only."""
+    with ``textContent`` only.
+
+    ``lang`` and ``direction`` are the app's, whose words the page's own
+    labels are in; ``book_lang`` is the language of the book's text (its
+    title, contents and chapters), ``""`` when it is not known. The book's
+    text runs in its own direction (``dir="auto"``)."""
     labels = labels_for(labels)
     esc = html.escape
     byline = ""
@@ -399,11 +417,13 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
     if narrator:
         byline += f"<p>{esc(labels['narrated_by'])} {esc(narrator)}</p>"
     cover = f'<img src="{esc(cover_src)}" alt="">' if cover_src else ""
-    data = {**page_timeline(timeline), "labels": labels, "duration": float(duration or 0)}
+    data = {**page_timeline(timeline, labels), "labels": labels,
+            "duration": float(duration or 0)}
+    text_lang = f' lang="{esc(book_lang)}" dir="auto"'
     speeds = "".join(
         f'<option value="{s}"{" selected" if s == 1 else ""}>{s}×</option>' for s in SPEEDS)
     return f"""<!doctype html>
-<html lang="{esc(lang or 'en')}">
+<html lang="{esc(lang or 'en')}" dir="{'rtl' if direction == 'rtl' else 'ltr'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -412,10 +432,10 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 <style>{_CSS}</style>
 </head>
 <body>
-<header class="book">{cover}<div><h1>{esc(title)}</h1>{byline}</div></header>
+<header class="book">{cover}<div><h1{text_lang}>{esc(title)}</h1>{byline}</div></header>
 <div class="layout">
-<nav aria-labelledby="contents"><h2 id="contents">{esc(labels['contents'])}</h2><ol id="toc"></ol></nav>
-<main id="text"></main>
+<nav aria-labelledby="contents"><h2 id="contents">{esc(labels['contents'])}</h2><ol id="toc"{text_lang}></ol></nav>
+<main id="text"{text_lang}></main>
 </div>
 <p class="keys">{esc(labels['keys'])}</p>
 <div class="player" role="region" aria-label="{esc(labels['player'])}">

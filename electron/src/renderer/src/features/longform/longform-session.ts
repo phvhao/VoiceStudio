@@ -9,6 +9,7 @@ import {
 } from '@shared/utils/longformOverrides';
 import { castVoice } from './cast-map';
 import { parseCastNames } from '@shared/utils/audiobookScript';
+import { LANG_CODES } from '@shared/utils/languages';
 import { restoreBookOptions, lexiconMap, type BookOptions } from './book-options';
 import { createCoalescedJsonStorage } from '@shared/utils/coalescedJsonStorage';
 import { Store } from '@tanstack/store';
@@ -218,9 +219,19 @@ export function stopLongform() {
   if (controller) patch({ stopped: true });
   controller?.abort();
 }
+/**
+ * The language tag of a book read in `language` (a picker label such as
+ * "Vietnamese"): its text's own language, which the app's may not be. ''
+ * for "Auto" or a name it does not know — in HTML, a language not known.
+ */
+export function bookLanguageTag(language: string): string {
+  return LANG_CODES.find((entry) => entry.label === language)?.code ?? '';
+}
+
 export function renderBody(mode: Mode, draft: Draft) {
   const names = parseCastNames(
     mode === 'audiobook' ? draft.script : draft.lines.map((line) => line.text).join('\n'),
+    draft.voiceCast,
   );
   const voice_map = Object.fromEntries(
     names

@@ -5,9 +5,9 @@
 * ``POST /audiobook/outline`` looks each chapter up under the key a real
   render uses (one derivation, ``_chapter_cache_keys``), and tells which
   chapters changed since the last book.
-* ``POST /audiobook/export/html`` writes ``<output>.html.zip``: a
+* ``POST /audiobook/export/html`` builds a ZIP in the temp folder: a
   self-contained ``index.html`` (escaped, timeline embedded, no network) and
-  the book's audio.
+  the book's audio. ``GET /audiobook/export/html/{id}`` downloads it once.
 
 App modules are resolved at call time: other suites reload them.
 """
@@ -18,6 +18,7 @@ import importlib
 import json
 import os
 import re
+import tempfile
 import types
 import wave
 import zipfile
@@ -244,9 +245,22 @@ def _book(outputs, name="audiobook_h1.m4b", timeline=True):
     return name
 
 
+@pytest.fixture
+def exports(outputs, tmp_path, monkeypatch):
+    """The temp folder exports wait in, outside the outputs."""
+    temp = tmp_path / "system-temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    return temp / "voicestudio-html-exports"
+
+
 def _export(**kw):
     router = _mod("api.routers.audiobook")
     return asyncio.run(router.audiobook_export_html(router.AudiobookHtmlExportRequest(**kw)))
+
+
+def _zip(exports, got) -> zipfile.ZipFile:
+    return zipfile.ZipFile(exports / f"{got['id']}.zip")
 
 
 def _page_data(page: str) -> dict:
@@ -254,7 +268,7 @@ def _page_data(page: str) -> dict:
     return json.loads(m.group(1))
 
 
-def test_html_export_zips_a_self_contained_page_and_the_audio(outputs):
+def test_html_export_zips_a_self_contained_page_and_the_audio(outputs, exports):
     name = _book(outputs)
     covers = outputs / "audiobook_covers"
     covers.mkdir()
@@ -263,15 +277,14 @@ def test_html_export_zips_a_self_contained_page_and_the_audio(outputs):
                   metadata={"author": "A <uthor>", "narrator": "N"},
                   cover_path=str(covers / "0123456789ab.png"),
                   labels={"play": "Phát", "contents": "Mục lục", "bogus": "x"})
-    assert got["output"] == f"{name}.html.zip"
-    with zipfile.ZipFile(outputs / got["output"]) as archive:
+    with _zip(exports, got) as archive:
         assert sorted(archive.namelist()) == ["audio/audiobook_h1.m4a", "cover.png", "index.html"]
         assert archive.read("audio/audiobook_h1.m4a") == (outputs / name).read_bytes()
         page = archive.read("index.html").decode("utf-8")
     # No network: no URL, no external resource of any kind.
     assert not re.search(r"https?:|//[a-z]|@import|url\(", page, re.I)
     assert 'src="audio/audiobook_h1.m4a"' in page and 'src="cover.png"' in page
-    assert '<html lang="vi">' in page
+    assert '<html lang="vi" dir="ltr">' in page
     # Book text is escaped everywhere it lands.
     assert "<title>My &lt;Book&gt; &amp; co</title>" in page and "A &lt;uthor&gt;" in page
     assert "alert(1)" in page and "<script>alert" not in page
@@ -286,11 +299,11 @@ def test_html_export_zips_a_self_contained_page_and_the_audio(outputs):
     assert "bogus" not in data["labels"] and "Mục lục" in page
 
 
-def test_html_export_estimates_a_timeline_for_a_book_without_one(outputs):
+def test_html_export_estimates_a_timeline_for_a_book_without_one(outputs, exports):
     name = _book(outputs, "audiobook_h2.mp3", timeline=False)
     script = "# One\nabcd\n## Sub\nefgh\n# Broken\nzz\n# Three\nijkl"
     got = _export(output=name, text=script, chapter_durations=[6.0, None, 2.0])
-    with zipfile.ZipFile(outputs / got["output"]) as archive:
+    with _zip(exports, got) as archive:
         assert "audio/audiobook_h2.mp3" in archive.namelist()
         data = _page_data(archive.read("index.html").decode("utf-8"))
     assert [(c["title"], c["start"], c["end"], c["precision"]) for c in data["chapters"]] == [
@@ -298,19 +311,76 @@ def test_html_export_estimates_a_timeline_for_a_book_without_one(outputs):
     assert data["chapters"][0]["sections"][0]["title"] == "Sub"
 
 
-def test_html_export_rebuilds_in_place_and_goes_with_the_book_name(outputs):
+def test_html_export_is_downloaded_once_and_leaves_no_copy_of_the_book(outputs, exports):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
     router = _mod("api.routers.audiobook")
     name = _book(outputs)
-    first = _export(output=name)["output"]
-    assert _export(output=name, title="Again")["output"] == first
-    assert sorted(p.name for p in outputs.iterdir() if p.name.startswith(name)) == [
-        name, f"{name}.html.zip", f"{name}.timeline.json"]
-    router._remove_book_derivatives(str(outputs / name))
-    assert sorted(p.name for p in outputs.iterdir() if p.name.startswith(name)) == [name]
+    # What an earlier version left beside the book goes with the next export.
+    (outputs / f"{name}.html.zip").write_bytes(b"old copy of the book")
+    got = _export(output=name)
+    assert sorted(p.name for p in outputs.iterdir() if p.is_file()) == [
+        name, f"{name}.timeline.json"]
+    assert got["bytes"] == os.path.getsize(exports / f"{got['id']}.zip")
+
+    app = FastAPI()
+    app.include_router(router.router)
+    client = TestClient(app)
+    first = client.get(f"/audiobook/export/html/{got['id']}")
+    assert first.status_code == 200 and first.headers["content-type"] == "application/zip"
+    assert first.content[:2] == b"PK"
+    # Served once: the copy of the book is gone.
+    assert list(exports.iterdir()) == []
+    assert client.get(f"/audiobook/export/html/{got['id']}").status_code == 404
+    assert client.get("/audiobook/export/html/" + "A" * 32).status_code == 404
+
+
+def test_html_export_removes_exports_nobody_downloaded(outputs, exports):
+    name = _book(outputs)
+    exports.mkdir()
+    stale, fresh = exports / ("a" * 32 + ".zip"), exports / ("b" * 32 + ".zip")
+    for path in (stale, fresh):
+        path.write_bytes(b"x")
+    old = os.path.getmtime(stale) - 2 * 60 * 60
+    os.utime(stale, (old, old))
+    got = _export(output=name)
+    assert sorted(p.name for p in exports.iterdir()) == sorted([fresh.name, f"{got['id']}.zip"])
+
+
+def test_html_export_tags_the_book_text_with_its_own_language(outputs, exports):
+    name = _book(outputs)
+    got = _export(output=name, lang="ar", direction="rtl", book_lang="en")
+    with _zip(exports, got) as archive:
+        page = archive.read("index.html").decode("utf-8")
+    # The page's words are the app's; the book's text is in its own language.
+    assert '<html lang="ar" dir="rtl">' in page
+    assert '<main id="text" lang="en" dir="auto">' in page
+    assert '<ol id="toc" lang="en" dir="auto">' in page
+    got = _export(output=name, book_lang="not a tag!")
+    with _zip(exports, got) as archive:
+        assert '<main id="text" lang="" dir="auto">' in archive.read("index.html").decode()
+
+
+def test_html_export_names_an_untitled_chapter_in_the_app_language(outputs, exports):
+    name = _book(outputs, "audiobook_h3.mp3", timeline=False)
+    got = _export(output=name, text="Opening words.\n# Two\nMore.", chapter_durations=[1.0, 1.0],
+                  labels={"chapter_n": "Chương {n}"})
+    with _zip(exports, got) as archive:
+        page = archive.read("index.html").decode("utf-8")
+    assert [c["title"] for c in _page_data(page)["chapters"]] == ["Chương 1", "Two"]
+    # The page's title falls back to the first chapter's, as the page names it.
+    assert "<title>Chương 1</title>" in page
+
+
+def test_page_seek_bar_reads_as_a_time():
+    html_mod = _mod("services.audiobook_html")
+    page = html_mod.render_page(title="t", timeline=None, audio_src="audio/a.m4a")
+    assert "seekBar.setAttribute('aria-valuetext', time)" in page
 
 
 @pytest.mark.parametrize("output", ["../x.m4b", "audiobook_none.m4b", "audiobook_h1.wav", ""])
-def test_html_export_refuses_anything_but_a_finished_book(outputs, output):
+def test_html_export_refuses_anything_but_a_finished_book(outputs, exports, output):
     from fastapi import HTTPException
 
     _book(outputs)

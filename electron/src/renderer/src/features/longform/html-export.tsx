@@ -6,7 +6,7 @@ import { getBridge } from '@/components/bridge';
 import { Button } from '@/components/ui/button';
 import { apiJson, apiPath, describeError } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
-import type { Draft } from './longform-session';
+import { bookLanguageTag, type Draft } from './longform-session';
 
 /** The exported page's own words, in the app's language. */
 export function htmlExportLabels(t: TFunction) {
@@ -22,15 +22,23 @@ export function htmlExportLabels(t: TFunction) {
     player: t('book.html_player'),
     estimated: t('book.html_estimated'),
     keys: t('book.html_keys'),
+    // A chapter the script left untitled; the page puts in its number.
+    chapter_n: t('audiobook.chapter_n', { n: '{n}' }),
   };
 }
 
 /**
  * `POST /audiobook/export/html` for the draft's finished book. The script and
  * chapter lengths it was rendered from go along: a book rendered before
- * timelines were kept gets one estimated from them.
+ * timelines were kept gets one estimated from them. The page's own words are
+ * in the app's language and direction; the book's text keeps its own language.
  */
-export function htmlExportBody(draft: Draft, t: TFunction, lang: string) {
+export function htmlExportBody(
+  draft: Draft,
+  t: TFunction,
+  lang: string,
+  direction: 'ltr' | 'rtl' = 'ltr',
+) {
   const durations = draft.outputChapters.map((chapter) =>
     chapter.status === 'failed'
       ? null
@@ -47,6 +55,8 @@ export function htmlExportBody(draft: Draft, t: TFunction, lang: string) {
     text: draft.outputScript || null,
     chapter_durations: draft.outputScript && timed ? durations : null,
     lang,
+    direction,
+    book_lang: bookLanguageTag(draft.language),
     labels: htmlExportLabels(t),
   };
 }
@@ -59,15 +69,21 @@ export function htmlExportName(draft: Draft): string {
 
 /**
  * Build the book's web-page export and save it like every other export: the
- * native save dialog under Electron, a download in the browser.
+ * native save dialog under Electron, a download in the browser. The backend
+ * hands the ZIP out once and then removes it: it is a full copy of the book.
  */
-export async function exportBookHtml(draft: Draft, t: TFunction, lang: string) {
-  const { output } = await apiJson<{ output: string }>('/audiobook/export/html', {
+export async function exportBookHtml(
+  draft: Draft,
+  t: TFunction,
+  lang: string,
+  direction: 'ltr' | 'rtl' = 'ltr',
+) {
+  const { id } = await apiJson<{ id: string }>('/audiobook/export/html', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(htmlExportBody(draft, t, lang)),
+    body: JSON.stringify(htmlExportBody(draft, t, lang, direction)),
   });
-  const url = apiPath('/audio/' + encodeURIComponent(output));
+  const url = apiPath('/audiobook/export/html/' + encodeURIComponent(id));
   const name = htmlExportName(draft);
   if (getBridge()) {
     await saveExport(url, name);
@@ -101,7 +117,7 @@ export function ExportHtmlButton({
         setBusy(true);
         onError(null);
         try {
-          await exportBookHtml(draft, t, i18n.language);
+          await exportBookHtml(draft, t, i18n.language, i18n.dir(i18n.language));
         } catch (cause) {
           onError(describeError(cause));
         } finally {
