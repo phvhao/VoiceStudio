@@ -472,7 +472,7 @@ class TaskExecutor:
         extra = {
             key: value for key, value in opts.to_manifest().items()
             if value is not None
-            and key not in ("seed", "vary_repeats", *ExpressiveOptions.JOIN_KEYS)
+            and key not in ("seed", "vary_repeats", *ExpressiveOptions.RENDER_KEYS)
         }
         native_proxy = bool(
             getattr(backend, "supports_native_omnivoice_controls", False)

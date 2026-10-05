@@ -1,9 +1,16 @@
 import { apiFetch } from '@/lib/api/client';
 import { exportStoryAudio, exportStems } from '@shared/utils/storyExport';
-import { overridesToRequest } from '@shared/utils/longformOverrides';
+import { overridesToRequest, readingToRequest } from '@shared/utils/longformOverrides';
 import { resolveStoryVoice } from './story-inputs';
 import type { Draft, Line } from './longform-session';
 import { beginAppActivity } from '@/lib/app-activity';
+// The reading fields travel to /generate as one `reading` field instead.
+const READING_FIELDS = new Set([
+  'punctuation_pauses',
+  'split_commas',
+  'verify_speech',
+  'use_app_reading',
+]);
 export function storyChunkBody(
   draft: Draft,
   text: string,
@@ -18,7 +25,12 @@ export function storyChunkBody(
   const id = resolveStoryVoice(draft, profileId, profiles);
   if (id) body.set('profile_id', id);
   for (const [key, value] of Object.entries(overridesToRequest(draft.overrides, draft.language)))
-    body.set(key, String(value));
+    if (!READING_FIELDS.has(key)) body.set(key, String(value));
+  // A line is read like the book: the project's own reading, else the app's.
+  body.set(
+    'reading',
+    draft.overrides.reading ? JSON.stringify(readingToRequest(draft.overrides.reading)) : 'app',
+  );
   return body;
 }
 export async function previewStoryLine(

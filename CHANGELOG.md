@@ -10,6 +10,7 @@ metadata and the backend fallback mirror it.
 
 **Highlights**
 - Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
+- Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
 
 ### Changed
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
@@ -18,6 +19,12 @@ metadata and the backend fallback mirror it.
 - Audiobook says when its default voice is missing and highlights where to pick it; Stories lists inline [voice:] names for casting
 - Listen previews the selected Audiobook text, or the paragraph at the cursor, in the voice in effect there
 - Stories and Audiobook renders honor [[word|respelling]] pronunciation overrides, and a Pronounce button writes one for the selected word
+- Long text is read sentence by sentence in Audiobook, Stories, Clone and Voice Design, joined with a pause you set per punctuation mark; existing books render once more the first time
+- Settings → Reading holds sentence-by-sentence reading, the per-mark pauses and the speech check for the whole app; each workspace opens it from a quick button, and a book can keep its own values
+- Script editors get a right-click menu: cut, copy and paste, every markup insert, and changing or removing the tag under the cursor
+- Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
+- Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
+- Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written
 
 ## [0.5.7] — 2026-10-05
 

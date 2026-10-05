@@ -41,6 +41,9 @@ _ALL_FIELDS = {
     "line_gap_ms": 250,
     "paragraph_gap_ms": 600,
     "trim_edges": True,
+    "punctuation_pauses": (("sentence", 400),),
+    "split_commas": True,
+    "verify_speech": True,
 }
 
 

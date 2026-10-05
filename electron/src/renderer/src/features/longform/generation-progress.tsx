@@ -101,6 +101,14 @@ export function GenerationProgress({
                   · {t('audiobook.cached_tag')}
                 </span>
               )}
+              {chapter.suspects && chapter.suspects.length > 0 && (
+                <span
+                  className="shrink-0 text-amber-600 dark:text-amber-400"
+                  title={chapter.suspects.join('\n')}
+                >
+                  · {t('pacing.check_count', { count: chapter.suspects.length })}
+                </span>
+              )}
               {chapter.status === 'failed' && (
                 <span className="min-w-0 truncate text-destructive/80">
                   · {t('audiobook.failed_tag')}

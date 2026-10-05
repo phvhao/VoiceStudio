@@ -46,6 +46,7 @@ GET /api/settings/llm-providers/{provider_id}/models
 GET /api/settings/llm-skills
 GET /api/settings/perf/torch-compile-disabled
 GET /api/settings/performance-profile
+GET /api/settings/reading
 GET /api/settings/storage
 GET /api/settings/storage/models-dir
 GET /archetypes
@@ -333,6 +334,7 @@ PUT /api/settings/llm-providers/{provider_id}
 PUT /api/settings/llm-skills/{skill_id}
 PUT /api/settings/perf/torch-compile-disabled
 PUT /api/settings/performance-profile
+PUT /api/settings/reading
 PUT /api/settings/storage/models-dir
 PUT /archetypes/previews
 PUT /calls/settings

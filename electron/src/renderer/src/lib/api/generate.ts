@@ -168,6 +168,9 @@ export function toGenerateForm(input: CloneGenerateInput): FormData {
     if (instruct) form.append('instruct', instruct);
   }
   if (input.designRecipe) form.append('design_recipe', JSON.stringify(input.designRecipe));
+  // Settings → Reading: long text is read sentence by sentence with the chosen
+  // pauses (and checked, if that is on) — the same as Audiobook and Stories.
+  form.append('reading', 'app');
   return form;
 }
 

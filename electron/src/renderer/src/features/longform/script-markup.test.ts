@@ -13,6 +13,10 @@ import {
   pauseToken,
   previewPassage,
   pronounceSelection,
+  removeToken,
+  replaceRange,
+  respellingRange,
+  tokenAt,
   tokenizeMarkup,
   wrapSelection,
   type MarkupEdit,
@@ -248,5 +252,46 @@ describe('pronunciation overrides', () => {
     const edit = pronounceSelection('ab', 1, 1);
     expect(edit.text).toBe('a[[|]]b');
     expect(edit.selectionStart).toBe('a[['.length);
+  });
+});
+
+describe('editing existing markup', () => {
+  const text = 'Say [pause 1s] then [slow]softly now[/slow] and [[gif|jiff]] [huh] ok';
+
+  it('finds the token under the caret, edges included', () => {
+    const start = text.indexOf('[pause');
+    expect(tokenAt(text, start)?.text).toBe('[pause 1s]');
+    expect(tokenAt(text, start + 4)?.kind).toBe('pause');
+    expect(tokenAt(text, start + '[pause 1s]'.length)?.text).toBe('[pause 1s]');
+    expect(tokenAt(text, 1)).toBeNull();
+  });
+
+  it('removes a delivery pair from either end and keeps its words selected', () => {
+    for (const tag of ['[slow]', '[/slow]']) {
+      const edit = removeToken(text, tokenAt(text, text.indexOf(tag) + 1)!);
+      expect(edit.text).toBe('Say [pause 1s] then softly now and [[gif|jiff]] [huh] ok');
+      expect(selected(edit)).toBe('softly now');
+    }
+  });
+
+  it('removes a respelling but keeps the word', () => {
+    const edit = removeToken(text, tokenAt(text, text.indexOf('[[') + 3)!);
+    expect(edit.text).toContain('and gif [huh]');
+  });
+
+  it('removes a plain tag with one neighbouring space', () => {
+    const edit = removeToken(text, tokenAt(text, text.indexOf('[huh]') + 1)!);
+    expect(edit.text).toBe('Say [pause 1s] then [slow]softly now[/slow] and [[gif|jiff]] ok');
+  });
+
+  it('replaces a token in place', () => {
+    const token = tokenAt(text, text.indexOf('[pause') + 2)!;
+    expect(replaceRange(text, token.start, token.end, pauseToken(250)).text).toContain(
+      'Say [pause 250ms] then',
+    );
+    expect(respellingRange(tokenAt(text, text.indexOf('[[') + 2)!)).toEqual([
+      text.indexOf('jiff'),
+      text.indexOf('jiff') + 4,
+    ]);
   });
 });

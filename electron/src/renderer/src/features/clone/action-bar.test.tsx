@@ -182,3 +182,5 @@ describe('ActionBar', () => {
 });
 
 vi.mock('@/hooks/use-engines', () => ({ useEngines: () => ({ activeTts: null }) }));
+// Settings → Reading has its own tests; this suite renders without a QueryClient.
+vi.mock('@/components/reading-settings', () => ({ ReadingSettingsButton: () => null }));

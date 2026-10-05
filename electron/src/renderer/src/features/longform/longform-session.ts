@@ -37,6 +37,18 @@ export interface AudiobookRenderChapter {
   /** Exact length in the embedded m4b chapters; sent by newer backends only. */
   duration_ms?: number;
   error?: string;
+  /** Phrases the speech check still heard differently after its retakes. */
+  suspects?: string[];
+}
+/** Phrases a render's speech check reported for listening (newer backends). */
+export function suspectPhrases(event: Record<string, unknown>): string[] {
+  const check = event.speech_check as { suspect?: unknown } | undefined;
+  return Array.isArray(check?.suspect)
+    ? check.suspect
+        .map((item) => (item as { text?: unknown })?.text)
+        .filter((text): text is string => typeof text === 'string' && text.length > 0)
+        .slice(0, 50)
+    : [];
 }
 export interface Draft extends BookOptions {
   importText: string;
@@ -303,6 +315,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
               ...(event.duration_ms != null && Number.isFinite(Number(event.duration_ms))
                 ? { duration_ms: Number(event.duration_ms) }
                 : {}),
+              ...(suspectPhrases(event).length ? { suspects: suspectPhrases(event) } : {}),
               ...(event.type === 'chapter_error'
                 ? {
                     error:

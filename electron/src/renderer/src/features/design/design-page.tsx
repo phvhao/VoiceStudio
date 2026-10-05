@@ -54,6 +54,7 @@ import { Input } from '@/components/ui/input';
 import { useGenerateClone } from '@/hooks/use-generate';
 import { OutputPanel } from '@/features/clone/output-panel';
 import { QualityControls } from '@/features/clone/quality-controls';
+import { ReadingSettingsButton } from '@/components/reading-settings';
 import { VoiceControls } from '@/features/clone/action-bar';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { queryKeys } from '@/lib/query';
@@ -549,6 +550,11 @@ export function DesignPage() {
                 <div className="flex items-center gap-1">
                   <EngineLanguagePicker operation="tts" />
                   <QualityControls size="sm" disabled={generation.isGenerating} />
+                  <ReadingSettingsButton
+                    side="top"
+                    disabled={generation.isGenerating}
+                    className="font-normal text-muted-foreground hover:text-foreground"
+                  />
                   <VoiceControls size="icon-sm" />
                 </div>
               </div>

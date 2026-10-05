@@ -1131,12 +1131,98 @@ def _generate_timeout_s(
     )
 
 
+#: How far a speech-check retake moves the chunk seed (a pinned seed must still
+#: give the retake a different draw).
+_RETAKE_SEED_STEP = 7919
+
+
+def _resolve_reading(reading: Optional[str], duration) -> Optional[dict]:
+    """The ``reading`` form field → ``{"pauses", "split_commas", "verify"}``.
+
+    ``"app"`` follows Settings → Reading; a JSON object carries explicit values
+    (``{"punctuation_pauses": {...} | null, "split_commas": bool,
+    "verify_speech": bool}``). ``None`` when nothing changes the take, which
+    keeps every request without the field byte-identical to before. A fixed
+    ``duration`` cannot be split into phrases, so it keeps one take.
+    """
+    if not reading or not reading.strip():
+        return None
+    if reading.strip() == "app":
+        from services import reading_settings
+
+        app = reading_settings.load()
+        resolved = {"pauses": reading_settings.phrase_pauses(app),
+                    "split_commas": app["split_commas"], "verify": app["verify_speech"]}
+    else:
+        import json
+
+        try:
+            data = json.loads(reading)
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        pauses = None
+        raw = data.get("punctuation_pauses")
+        if isinstance(raw, dict):
+            from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
+
+            pauses = dict(DEFAULT_PUNCTUATION_PAUSES)
+            for family, value in raw.items():
+                if family in pauses and isinstance(value, (int, float)) \
+                        and not isinstance(value, bool):
+                    pauses[family] = int(max(0, min(int(value), 5000)))
+        resolved = {"pauses": pauses, "split_commas": bool(data.get("split_commas")),
+                    "verify": bool(data.get("verify_speech"))}
+    if duration is not None:
+        resolved["pauses"] = None
+    if resolved["pauses"] is None and not resolved["verify"]:
+        return None
+    return resolved
+
+
+def _reading_units(text: str, reading: Optional[dict]):
+    """``(phrases, silences)`` for a sentence-by-sentence take, else ``None``
+    (one take, or the usual <=800-char chunks)."""
+    if not reading or reading.get("pauses") is None:
+        return None
+    from services.chunked_tts import split_into_phrases
+
+    phrases = split_into_phrases(text, reading["pauses"],
+                                 split_commas=reading["split_commas"])
+    if len(phrases) <= 1:
+        return None
+    return [p for p, _ in phrases], [ms for _, ms in phrases]
+
+
+def _reading_verifier(reading: Optional[dict], sample_rate: int):
+    if not reading or not reading.get("verify"):
+        return None
+    from services.speech_verify import SpeechVerifier
+
+    return SpeechVerifier(sample_rate)
+
+
+def _render_take(text: str, take, verifier):
+    """``take(attempt)`` → audio, through the speech check when one is on."""
+    return verifier.render(text, take) if verifier is not None else take(0)
+
+
+def _join_takes(parts, sample_rate, texts, gaps, crossfade_ms, sink):
+    """Phrases join with their chosen silences; plain chunks crossfade."""
+    from services.chunked_tts import concatenate_audio_chunks, join_phrases
+
+    if gaps is not None:
+        return join_phrases(parts, sample_rate, gaps, texts=texts, sink=sink)
+    return concatenate_audio_chunks(parts, sample_rate, crossfade_ms, texts=texts, sink=sink)
+
+
 def _run_inference(
     model, text, language, ref_audio_path, ref_text, instruct, duration,
     num_step, guidance_scale, speed, t_shift, denoise,
     postprocess_output, layer_penalty_factor, position_temperature,
     class_temperature, used_seed, effect_preset="broadcast",
-    max_chunk_chars=None, crossfade_ms=None, *, dropped_sink=None,
+    max_chunk_chars=None, crossfade_ms=None, *, dropped_sink=None, reading=None,
 ):
     import torch
     try:
@@ -1182,26 +1268,35 @@ def _run_inference(
             # text takes the single-shot path below unchanged. [pause] inputs
             # keep the dedicated stitcher above (spans are already short).
             from services.chunked_tts import (
-                DEFAULT_CROSSFADE_MS, DEFAULT_MAX_CHUNK_CHARS,
-                concatenate_audio_chunks, split_text_into_chunks,
+                DEFAULT_CROSSFADE_MS, DEFAULT_MAX_CHUNK_CHARS, split_text_into_chunks,
             )
             _max_chars = DEFAULT_MAX_CHUNK_CHARS if max_chunk_chars is None else max_chunk_chars
             _xfade_ms = DEFAULT_CROSSFADE_MS if crossfade_ms is None else crossfade_ms
-            text_chunks = split_text_into_chunks(text, _max_chars)
+            # Settings → Reading (when asked for): a take per sentence/clause,
+            # joined with each mark's silence, each listened back if checked.
+            units = _reading_units(text, reading)
+            verifier = _reading_verifier(reading, sr)
+            text_chunks, gaps = units if units is not None else (
+                split_text_into_chunks(text, _max_chars), None)
             if len(text_chunks) > 1:
                 parts = []
                 for i, chunk_text in enumerate(text_chunks):
-                    # Vary the seed per chunk (deterministically) to avoid
-                    # correlated RNG artifacts across chunk boundaries.
-                    if used_seed is not None:
-                        torch.manual_seed(used_seed + i)
-                    parts.append(_gen(chunk_text, None)[0])
+                    def _take(attempt, i=i, chunk_text=chunk_text):
+                        # Vary the seed per chunk (deterministically) to avoid
+                        # correlated RNG artifacts across chunk boundaries; a
+                        # retake moves it again.
+                        if used_seed is not None:
+                            torch.manual_seed(used_seed + i + attempt * _RETAKE_SEED_STEP)
+                        return _gen(chunk_text, None)[0]
+                    parts.append(_render_take(chunk_text, _take, verifier))
                     _note_generate_progress()
-                audio_out = concatenate_audio_chunks(parts, sr, _xfade_ms,
-                                                     texts=text_chunks,
-                                                     sink=dropped_sink)
+                audio_out = _join_takes(parts, sr, text_chunks, gaps, _xfade_ms, dropped_sink)
             else:
-                audio_out = _gen(text, duration)[0]
+                def _single(attempt):
+                    if attempt and used_seed is not None:
+                        torch.manual_seed(used_seed + attempt * _RETAKE_SEED_STEP)
+                    return _gen(text, duration)[0]
+                audio_out = _render_take(text, _single, verifier)
 
         # Apply DSP effect preset. The VoiceStudio model never masters its own
         # output, so mastering always runs here (unchanged behavior).
@@ -1220,7 +1315,7 @@ def _run_backend_inference(
     used_seed, effect_preset="broadcast",
     max_chunk_chars=None, crossfade_ms=None, *, t_shift=None,
     layer_penalty_factor=None, position_temperature=None,
-    class_temperature=None, dropped_sink=None,
+    class_temperature=None, dropped_sink=None, reading=None,
 ):
     """Engine-aware twin of :func:`_run_inference` (issue #312).
 
@@ -1281,31 +1376,43 @@ def _run_backend_inference(
             # Wave 1.2: sentence-boundary chunking for long text (see
             # _run_inference for the rationale; behavior is identical here).
             from services.chunked_tts import (
-                DEFAULT_CROSSFADE_MS, DEFAULT_MAX_CHUNK_CHARS,
-                concatenate_audio_chunks, split_text_into_chunks,
+                DEFAULT_CROSSFADE_MS, DEFAULT_MAX_CHUNK_CHARS, split_text_into_chunks,
             )
             _max_chars = DEFAULT_MAX_CHUNK_CHARS if max_chunk_chars is None else max_chunk_chars
             _xfade_ms = DEFAULT_CROSSFADE_MS if crossfade_ms is None else crossfade_ms
-            text_chunks = split_text_into_chunks(text, _max_chars)
+            units = _reading_units(text, reading)
+            verifier = _reading_verifier(reading, sr)
+            text_chunks, gaps = units if units is not None else (
+                split_text_into_chunks(text, _max_chars), None)
             if len(text_chunks) > 1:
                 parts = []
                 for i, chunk_text in enumerate(text_chunks):
-                    if used_seed is not None:
-                        torch.manual_seed(used_seed + i)
-                    chunk_kwargs = dict(gen_kwargs)
-                    if forwards_seed and used_seed is not None:
-                        chunk_kwargs["seed"] = used_seed + i
-                    parts.append(trace_call("synthesis", backend.generate,
-                        chunk_text, duration=None, **chunk_kwargs
-                    ))
+                    def _take(attempt, i=i, chunk_text=chunk_text):
+                        chunk_seed = (None if used_seed is None
+                                      else used_seed + i + attempt * _RETAKE_SEED_STEP)
+                        if chunk_seed is not None:
+                            torch.manual_seed(chunk_seed)
+                        chunk_kwargs = dict(gen_kwargs)
+                        if forwards_seed and chunk_seed is not None:
+                            chunk_kwargs["seed"] = chunk_seed
+                        return trace_call("synthesis", backend.generate,
+                            chunk_text, duration=None, **chunk_kwargs
+                        )
+                    parts.append(_render_take(chunk_text, _take, verifier))
                     _note_generate_progress()
-                audio_out = concatenate_audio_chunks(parts, sr, _xfade_ms,
-                                                     texts=text_chunks,
-                                                     sink=dropped_sink)
+                audio_out = _join_takes(parts, sr, text_chunks, gaps, _xfade_ms, dropped_sink)
             else:
-                if forwards_seed and used_seed is not None:
-                    gen_kwargs["seed"] = used_seed
-                audio_out = trace_call("synthesis", backend.generate, text, duration=duration, **gen_kwargs)
+                def _single(attempt):
+                    take_seed = (None if used_seed is None
+                                 else used_seed + attempt * _RETAKE_SEED_STEP)
+                    if attempt and take_seed is not None:
+                        torch.manual_seed(take_seed)
+                    take_kwargs = dict(gen_kwargs)
+                    if forwards_seed and take_seed is not None:
+                        take_kwargs["seed"] = take_seed
+                    return trace_call("synthesis", backend.generate, text,
+                                      duration=duration, **take_kwargs)
+                audio_out = _render_take(text, _single, verifier)
 
         return _apply_effect_chain(
             audio_out, sr, effect_preset,
@@ -1838,6 +1945,9 @@ async def generate_speech(
     # OMNIVOICE_PRONUNCIATION env var can disable it for power users. Omitting it
     # with an empty dictionary is byte-identical to legacy behavior.
     pronounce: bool = Form(True),
+    # Settings → Reading for this take: "app" follows the app-wide setting; a
+    # JSON object carries explicit values. Omitted → the take is unchanged.
+    reading: Optional[str] = Form(None),
     # Streaming preview: when true, the response is application/x-ndjson —
     # one JSON event per line ("start" → N × "chunk" (base64 PCM16 preview of
     # each text chunk, playable the moment it arrives) → "done" with the saved
@@ -2449,13 +2559,19 @@ async def generate_speech(
             headers=_remote_headers,
         )
 
+    _reading = _resolve_reading(reading, duration)
+
     if stream:
         from omnivoice.utils.text import parse_pause_markers
         from services.chunked_tts import split_text_into_chunks
 
         _segments = parse_pause_markers(text)
         _has_pause = len(_segments) > 1 or (_segments and _segments[0][1] > 0)
-        _text_chunks = [] if _has_pause else split_text_into_chunks(text, max_chunk_chars)
+        _units = None if _has_pause else _reading_units(text, _reading)
+        _text_chunks = ([] if _has_pause else
+                        _units[0] if _units else split_text_into_chunks(text, max_chunk_chars))
+        _gaps = _units[1] if _units else None
+        _verifiers: dict = {}
         # #1330 — see the non-streaming path: chunks the engine rendered to
         # nothing land here so the stream can say the take is missing text
         # instead of quietly handing back a short one.
@@ -2473,51 +2589,58 @@ async def generate_speech(
             """
             import torch
             try:
-                if used_seed is not None:
-                    torch.manual_seed(used_seed + i)
-                if _backend is not None:
-                    _lang = None if (language and language.lower() == "auto") else language
-                    raw = trace_call("synthesis", _backend.generate,
-                        chunk_text, duration=None, language=_lang,
-                        ref_audio=ref_audio_path, ref_text=ref_text,
-                        instruct=instruct, num_step=num_step,
-                        guidance_scale=guidance_scale, speed=speed,
-                        denoise=denoise, postprocess_output=postprocess_output,
-                        **({
-                            key: value for key, value in {
-                                "t_shift": t_shift,
-                                "layer_penalty_factor": layer_penalty_factor,
-                                "position_temperature": position_temperature,
-                                "class_temperature": class_temperature,
-                            }.items() if value is not None
-                        } if getattr(
-                            _backend, "supports_native_omnivoice_controls", False
-                        ) else {}),
-                        **({"seed": used_seed + i} if used_seed is not None and (
-                            getattr(_backend, "supports_native_omnivoice_controls", False)
-                            or getattr(_backend, "supports_generation_seed", False)
-                        ) else {}),
-                    )
-                    sr = _backend.sample_rate
-                    skip = getattr(_backend, "applies_own_mastering", False)
-                else:
-                    kwargs = {}
-                    if t_shift is not None: kwargs["t_shift"] = t_shift
-                    if layer_penalty_factor is not None: kwargs["layer_penalty_factor"] = layer_penalty_factor
-                    if position_temperature is not None: kwargs["position_temperature"] = position_temperature
-                    if class_temperature is not None: kwargs["class_temperature"] = class_temperature
-                    # Same cached-reference path as _run_inference: chunk 0 encodes
-                    # the reference, chunks 1..N hit the cache instead of re-encoding.
-                    from services.tts_backend import generate_with_cached_ref
-                    raw = trace_call("synthesis", generate_with_cached_ref,
-                        _model, ref_audio=ref_audio_path, ref_text=ref_text,
-                        text=chunk_text, language=language, instruct=instruct,
-                        duration=None, num_step=num_step,
-                        guidance_scale=guidance_scale, speed=speed, denoise=denoise,
-                        postprocess_output=postprocess_output, **kwargs
-                    )[0]
-                    sr = _model.sampling_rate if hasattr(_model, "sampling_rate") else 24000
-                    skip = False
+                sr = (_backend.sample_rate if _backend is not None
+                      else getattr(_model, "sampling_rate", 24000))
+                skip = (getattr(_backend, "applies_own_mastering", False)
+                        if _backend is not None else False)
+                if sr not in _verifiers:
+                    _verifiers[sr] = _reading_verifier(_reading, sr)
+
+                def _take(attempt):
+                    # A speech-check retake moves the chunk seed again.
+                    if used_seed is not None:
+                        torch.manual_seed(used_seed + i + attempt * _RETAKE_SEED_STEP)
+                    if _backend is not None:
+                        _lang = None if (language and language.lower() == "auto") else language
+                        return trace_call("synthesis", _backend.generate,
+                            chunk_text, duration=None, language=_lang,
+                            ref_audio=ref_audio_path, ref_text=ref_text,
+                            instruct=instruct, num_step=num_step,
+                            guidance_scale=guidance_scale, speed=speed,
+                            denoise=denoise, postprocess_output=postprocess_output,
+                            **({
+                                key: value for key, value in {
+                                    "t_shift": t_shift,
+                                    "layer_penalty_factor": layer_penalty_factor,
+                                    "position_temperature": position_temperature,
+                                    "class_temperature": class_temperature,
+                                }.items() if value is not None
+                            } if getattr(
+                                _backend, "supports_native_omnivoice_controls", False
+                            ) else {}),
+                            **({"seed": used_seed + i + attempt * _RETAKE_SEED_STEP} if used_seed is not None and (
+                                getattr(_backend, "supports_native_omnivoice_controls", False)
+                                or getattr(_backend, "supports_generation_seed", False)
+                            ) else {}),
+                        )
+                    else:
+                        kwargs = {}
+                        if t_shift is not None: kwargs["t_shift"] = t_shift
+                        if layer_penalty_factor is not None: kwargs["layer_penalty_factor"] = layer_penalty_factor
+                        if position_temperature is not None: kwargs["position_temperature"] = position_temperature
+                        if class_temperature is not None: kwargs["class_temperature"] = class_temperature
+                        # Same cached-reference path as _run_inference: chunk 0 encodes
+                        # the reference, chunks 1..N hit the cache instead of re-encoding.
+                        from services.tts_backend import generate_with_cached_ref
+                        return trace_call("synthesis", generate_with_cached_ref,
+                            _model, ref_audio=ref_audio_path, ref_text=ref_text,
+                            text=chunk_text, language=language, instruct=instruct,
+                            duration=None, num_step=num_step,
+                            guidance_scale=guidance_scale, speed=speed, denoise=denoise,
+                            postprocess_output=postprocess_output, **kwargs
+                        )[0]
+
+                raw = _render_take(chunk_text, _take, _verifiers[sr])
                 preview = _apply_effect_chain(raw, sr, effect_preset, skip_mastering=skip)
                 # The STREAMED copy is provenance-marked by the caller (#1169
                 # mark, moved off this GPU job in #1190): the preview PCM
@@ -2537,11 +2660,9 @@ async def generate_speech(
         def _assemble_stream_chunks(parts, sr):
             """Concat + whole-take effect chain — the same tail the
             non-streaming multi-chunk loop runs, as one pool job."""
-            from services.chunked_tts import concatenate_audio_chunks
             try:
-                audio_out = concatenate_audio_chunks(parts, sr, crossfade_ms,
-                                                     texts=_text_chunks,
-                                                     sink=_dropped_sink)
+                audio_out = _join_takes(parts, sr, _text_chunks, _gaps, crossfade_ms,
+                                        _dropped_sink)
                 skip = (getattr(_backend, "applies_own_mastering", False)
                         if _backend is not None else False)
                 return _apply_effect_chain(audio_out, sr, effect_preset, skip_mastering=skip)
@@ -2572,7 +2693,7 @@ async def generate_speech(
                                     layer_penalty_factor=layer_penalty_factor,
                                     position_temperature=position_temperature,
                                     class_temperature=class_temperature,
-                                    dropped_sink=_dropped_sink,
+                                    dropped_sink=_dropped_sink, reading=_reading,
                                 ),
                                 what="TTS generate",
                                 min_vram_gb=_engine_min_vram_gb,
@@ -2600,6 +2721,7 @@ async def generate_speech(
                                     layer_penalty_factor, position_temperature,
                                     class_temperature, used_seed, effect_preset,
                                     max_chunk_chars, crossfade_ms, dropped_sink=_dropped_sink,
+                                    reading=_reading,
                                 ),
                                 what="TTS generate",
                                 min_vram_gb=_engine_min_vram_gb,
@@ -2808,7 +2930,7 @@ async def generate_speech(
                     layer_penalty_factor=layer_penalty_factor,
                     position_temperature=position_temperature,
                     class_temperature=class_temperature,
-                    dropped_sink=_dropped_text,
+                    dropped_sink=_dropped_text, reading=_reading,
                 )
             else:
                 _local_render = functools.partial(
@@ -2818,6 +2940,7 @@ async def generate_speech(
                     postprocess_output, layer_penalty_factor, position_temperature,
                     class_temperature, used_seed, effect_preset,
                     max_chunk_chars, crossfade_ms, dropped_sink=_dropped_text,
+                    reading=_reading,
                 )
             audio_tensor = await _run_with_reference_lease(
                 ref_lease,

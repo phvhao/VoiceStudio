@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiJson, describeError } from '@/lib/api/client';
 import { beginAppActivity } from '@/lib/app-activity';
-import { chapterPreviewBody, type Draft } from './longform-session';
+import { chapterPreviewBody, suspectPhrases, type Draft } from './longform-session';
 
 /**
  * Audition a passage of the manuscript on the chapter-preview endpoint: the
@@ -10,6 +10,8 @@ import { chapterPreviewBody, type Draft } from './longform-session';
  */
 export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void) {
   const [output, setOutput] = useState<string | null>(null);
+  // What the speech check (when on) still heard differently in this passage.
+  const [suspects, setSuspects] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // The caret sat somewhere with nothing to speak (a heading, a lone tag).
@@ -31,13 +33,20 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
     setPending(true);
     setError(null);
     setOutput(null);
+    setSuspects([]);
     try {
-      const result = await apiJson<{ output: string }>('/audiobook/preview', {
-        method: 'POST',
-        body: JSON.stringify(chapterPreviewBody({ ...draft, script: passage }, 0)),
-        signal: current.signal,
-      });
-      if (!current.signal.aborted) setOutput(result.output);
+      const result = await apiJson<{ output: string; speech_check?: unknown }>(
+        '/audiobook/preview',
+        {
+          method: 'POST',
+          body: JSON.stringify(chapterPreviewBody({ ...draft, script: passage }, 0)),
+          signal: current.signal,
+        },
+      );
+      if (!current.signal.aborted) {
+        setOutput(result.output);
+        setSuspects(suspectPhrases(result));
+      }
     } catch (cause) {
       if (!current.signal.aborted) setError(describeError(cause));
     } finally {
@@ -54,12 +63,14 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
     error,
     pending,
     empty,
+    suspects,
     preview,
     stop: () => controller.current?.abort(),
     dismiss: () => {
       setOutput(null);
       setError(null);
       setEmpty(false);
+      setSuspects([]);
     },
   };
 }

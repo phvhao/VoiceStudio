@@ -12,12 +12,47 @@ ignores.
 | You want | Do this | Works on |
 |---|---|---|
 | A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text | Every engine |
-| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide, and the editor colors each tag | Every engine (Reactions: default engine) |
+| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide, the editor colors each tag, and right-clicking a tag changes or removes it | Every engine (Reactions: default engine) |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
 | Whispering | Style → `whisper` (the voice-design/style field) | Default engine |
 | Emotion ("excited", "sad", graded intensity) | IndexTTS2's emotion controls — Audiobook tab's Production Overrides, or the `/ws/tts` API — or CosyVoice 3 instruct | Opt-in engines only |
 | The same take again | Pin the seed / lock the profile | Default engine |
+
+## Sentence-by-sentence rendering and punctuation pauses
+
+The default engine fixes a take's length up front and fills it in parallel, so
+a long take with near-identical clauses ("Spring is …; Summer is …; Autumn is
+…") can come back with a clause copied, dropped or swapped. VoiceStudio
+therefore reads long text sentence by sentence: every sentence and clause is
+its own take, joined with a deliberate silence.
+
+**Settings → Reading** holds this for the whole app — Audiobook, Stories, Clone
+and Voice Design. The **Phrasing** button next to the quality controls in
+Clone and Voice Design, and **Pauses & phrasing** in the Audiobook and Stories
+setup panel, open the same settings in place. It sets the silence per mark —
+end of sentence (300 ms), ellipsis (500), semicolon (250), colon (250), dash
+(200) and comma (120, used where a long sentence is cut at a comma, or at every
+comma when **Pause at every comma** is on). Turning **Read sentence by
+sentence** off restores one take per paragraph. A book or story can keep its
+own values instead (**This project only**). Dubbing never uses them: its lines
+must fit their subtitle timing. In long-form renders the pause is exact when
+**Trim engine silence** is on; otherwise the engine's own lead-in is kept at
+the outer edges of each line.
+
+**Check the reading and redo mistakes** (off by default) listens to each
+sentence with the speech recognizer you already installed, re-renders the ones
+whose words differ from the script (up to twice, keeping the closest take) and,
+in Audiobook and Stories, lists the sentences that still differ after the
+render. It never downloads a recognizer; without one, rendering continues
+unchecked. Expect it to take noticeably longer.
+
+API callers keep the take they had unless they ask: long-form requests
+(`/audiobook`, `/longform/render`, `/audiobook/preview`) send
+`use_app_reading: true` to follow Settings → Reading, or the explicit
+`punctuation_pauses` / `split_commas` / `verify_speech` fields; `/generate`
+takes `reading=app` or a JSON object with those fields. The setting itself is
+`GET`/`PUT /api/settings/reading`.
 
 ## Recovering an interrupted audiobook
 
@@ -35,6 +70,13 @@ the pipeline goes out of its way not to break tags:
   are left unchanged.
 - The text-normalization pass (numbers, abbreviations) skips every `[…]` span
   (`backend/services/text_normalization.py`).
+- The same pass drops double quotation marks, which are never spoken: the
+  default model misread a word glued to a typographic quote (`“đừng` came out
+  as "dừng"). It also speaks shouted words that carry accents in lower case
+  (`MÙA THU` → `mùa thu`), since the model tends to spell all-caps words letter
+  by letter; vowel-less acronyms (`ĐHQG`), Roman numerals and lone plain-ASCII
+  capitals (`USA`, `KTNB`) stay as written — use `[spell]…[/spell]` to have an
+  acronym spelled out.
 - The long-text chunker never cuts inside a bracket tag
   (`backend/services/chunked_tts.py`, `_BRACKET_TAG_RE`).
 

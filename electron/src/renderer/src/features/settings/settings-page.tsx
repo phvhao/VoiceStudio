@@ -10,6 +10,7 @@ import { SharingSettings } from './sharing-settings';
 import { MediaTools } from './media-tools';
 import { LogSettings } from './log-settings';
 import { PronunciationSettings } from './pronunciation-settings';
+import { ReadingSettings } from './reading-settings';
 import { PermissionsSettings } from './permissions-settings';
 import { UsageSettings } from './usage-settings';
 import { WorkersSettings } from './workers-settings';
@@ -43,6 +44,7 @@ import {
   BoxesIcon,
   WrenchIcon,
   SpellCheckIcon,
+  TextQuoteIcon,
   LockKeyholeIcon,
   BarChart3Icon,
   ServerCogIcon,
@@ -106,6 +108,13 @@ const extraSettings = [
       'pronunciation.test_label',
       'pronunciation.backup_title',
     ],
+  },
+  {
+    to: '/settings/reading',
+    label: 'pacing.settings_title',
+    Icon: TextQuoteIcon,
+    Component: ReadingSettings,
+    fields: ['pacing.settings_title', 'pacing.title', 'pacing.phrase_rendering', 'pacing.verify'],
   },
   {
     to: '/settings/updates',

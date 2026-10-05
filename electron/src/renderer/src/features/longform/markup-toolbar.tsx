@@ -88,6 +88,20 @@ const DELIVERY: { tag: DeliveryTag; icon: ComponentType; label: string; hint: st
 const VOICE_SEARCH_MIN = 7;
 
 /**
+ * The `[voice:NAME]` name for a profile, casting it to the profile when the
+ * name is new, so scripts carry readable names instead of profile ids.
+ */
+export function castProfileVoice(
+  profile: Profile,
+  voiceCast: Record<string, string>,
+  onVoiceCast: (cast: Record<string, string>) => void,
+): string {
+  const name = castNameForProfile(profile, voiceCast);
+  if (castVoice(voiceCast, name) !== profile.id) onVoiceCast({ ...voiceCast, [name]: profile.id });
+  return name;
+}
+
+/**
  * Apply an edit to the target textarea. `insertText` keeps it on the native
  * undo stack, so Ctrl+Z removes an inserted tag like any typed text; where
  * that command is unavailable the value is committed directly.
@@ -107,9 +121,12 @@ export function applyMarkupEdit(
   input.setSelectionRange(result.from, result.to);
   let native = false;
   try {
+    // An empty insert is a deletion; insertText refuses an empty string.
     native =
       typeof document.execCommand === 'function' &&
-      document.execCommand('insertText', false, result.insert);
+      (result.insert
+        ? document.execCommand('insertText', false, result.insert)
+        : result.from === result.to || document.execCommand('delete'));
   } catch {
     native = false;
   }
@@ -192,12 +209,8 @@ export function MarkupToolbar({
   const customValid = Number.isFinite(customMs) && customMs > 0 && customMs <= PAUSE_MAX_MS;
 
   const voice = (name: string) => apply((value, start, end) => applyVoice(value, start, end, name));
-  const voiceProfile = (profile: Profile) => {
-    const name = castNameForProfile(profile, voiceCast);
-    if (castVoice(voiceCast, name) !== profile.id)
-      onVoiceCast({ ...voiceCast, [name]: profile.id });
-    voice(name);
-  };
+  const voiceProfile = (profile: Profile) =>
+    voice(castProfileVoice(profile, voiceCast, onVoiceCast));
   const query = voiceQuery.trim().toLocaleLowerCase();
   const matches = (name: string) => !query || name.toLocaleLowerCase().includes(query);
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;

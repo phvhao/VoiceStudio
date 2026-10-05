@@ -42,6 +42,7 @@ import { cn } from '@/lib/utils';
 import { reorder } from '@shared/utils/storyReorder';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupToolbar, type MarkupTarget } from './markup-toolbar';
+import { MarkupContextMenu } from './markup-context-menu';
 import type { Draft } from './longform-session';
 interface Props {
   draft: Draft;
@@ -723,20 +724,33 @@ export function StoryEditor({
               )}
               {lineActions(line, index)}
             </div>
-            <MarkupTextarea
-              textareaRef={(node) => {
-                if (node) lineInputs.current.set(line.id, node);
-                else lineInputs.current.delete(line.id);
+            <MarkupContextMenu
+              getTarget={() => {
+                const element = lineInputs.current.get(line.id);
+                return element ? { element, setText: (text) => update(line.id, { text }) } : null;
               }}
-              autoGrow
-              rows={2}
-              aria-label={t('stories.linePlaceholder')}
-              placeholder={t('stories.linePlaceholder')}
-              textClassName="px-3 pt-1 pb-3 text-sm leading-6 placeholder:text-muted-foreground/50"
-              value={line.text}
               disabled={disabled}
-              onValueChange={(text) => update(line.id, { text })}
-            />
+              profiles={profiles}
+              scriptNames={scriptNames}
+              voiceCast={draft.voiceCast}
+              onVoiceCast={(voiceCast) => onChange({ voiceCast })}
+              onChapter={() => addChapter(line.id)}
+            >
+              <MarkupTextarea
+                textareaRef={(node) => {
+                  if (node) lineInputs.current.set(line.id, node);
+                  else lineInputs.current.delete(line.id);
+                }}
+                autoGrow
+                rows={2}
+                aria-label={t('stories.linePlaceholder')}
+                placeholder={t('stories.linePlaceholder')}
+                textClassName="px-3 pt-1 pb-3 text-sm leading-6 placeholder:text-muted-foreground/50"
+                value={line.text}
+                disabled={disabled}
+                onValueChange={(text) => update(line.id, { text })}
+              />
+            </MarkupContextMenu>
             {preview?.id === line.id && (
               <div className="px-3 pb-3">
                 <WaveformPlayer

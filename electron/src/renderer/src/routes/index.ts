@@ -28,7 +28,10 @@ const ProjectsPage = lazyRouteComponent(
   () => import('@/features/projects/projects-page'),
   'ProjectsPage',
 );
-const CallsPage = lazyRouteComponent(() => import('@/features/workflows/workflows-page'), 'WorkflowsPage');
+const CallsPage = lazyRouteComponent(
+  () => import('@/features/workflows/workflows-page'),
+  'WorkflowsPage',
+);
 const ToolsPage = lazyRouteComponent(() => import('@/features/tools/tools-page'), 'ToolsPage');
 const IntegrationsPage = lazyRouteComponent(
   () => import('@/features/integrations/integrations-page'),
@@ -170,6 +173,11 @@ export const pronunciationRoute = createRoute({
   path: '/settings/pronunciation',
   component: SettingsPage,
 });
+export const readingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/settings/reading',
+  component: SettingsPage,
+});
 export const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects',
@@ -283,6 +291,7 @@ export const routeTree = rootRoute.addChildren([
   cloneRoute,
   savedVoicesRoute,
   pronunciationRoute,
+  readingRoute,
   mediaRoute,
   toolsRoute,
   callsRoute,

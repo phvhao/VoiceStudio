@@ -553,3 +553,34 @@ def test_pronunciation_switch_is_env_only(monkeypatch, env, expected):
     # A never-written pref must not change the outcome.
     monkeypatch.setattr(prefs_mod, "get", lambda key, default=None: False)
     assert pronunciation_enabled() is expected
+
+
+# ── Quotation marks and shouted words ────────────────────────────────────────
+#
+# Measured on the default model: a word glued to a typographic quote
+# ("“đừng") was read "dừng" in every take, and "MÙA THU" as "mùa té tu".
+
+@pytest.mark.parametrize("raw, expected", [
+    ("bại: “đừng cầu”.", "bại: đừng cầu."),
+    ('He said "go"now', "He said go now"),
+    ("«Vite», dit-il", "Vite, dit-il"),
+    ("don’t stop", "don’t stop"),               # apostrophes stay
+    ("x [[“a”|b]] y", "x [[“a”|b]] y"),  # bracket grammar untouched
+])
+def test_double_quotes_are_not_spoken(raw, expected):
+    assert normalize_text(raw, None) == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("MÙA XUÂN là; MÙA THU là", "mùa xuân là; mùa thu là"),
+    ("ĐHQG HÀ NỘI", "ĐHQG hà nội"),            # no vowel: an acronym
+    ("CHƯƠNG IV", "chương IV"),                           # Roman numeral stays
+    ("ÉTÉ CHAUD", "été chaud"),
+    ("USA và NASA", "USA và NASA"),                 # lone ASCII words stay
+    ("DO NOT ENTER", "DO NOT ENTER"),                         # no diacritic anchor
+    ("СССР ЭТО", "СССР ЭТО"),  # other scripts untouched
+    ("MÙA\nTHU", "mùa\nTHU"),                       # a line break ends the run
+    ("[MÙA] THU", "[MÙA] THU"),
+])
+def test_shouted_latin_words_are_spoken_in_lower_case(raw, expected):
+    assert normalize_text(raw, None) == expected

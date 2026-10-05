@@ -427,6 +427,50 @@ def set_history_retention(body: _HistoryRetentionBody):
     return _history_retention_state()
 
 
+# ── Reading (sentence by sentence, punctuation pauses, speech check) ──────
+
+
+class _PausesBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    sentence: int | None = Field(default=None, ge=0, le=5000)
+    ellipsis: int | None = Field(default=None, ge=0, le=5000)
+    semicolon: int | None = Field(default=None, ge=0, le=5000)
+    colon: int | None = Field(default=None, ge=0, le=5000)
+    dash: int | None = Field(default=None, ge=0, le=5000)
+    comma: int | None = Field(default=None, ge=0, le=5000)
+
+
+class _ReadingBody(BaseModel):
+    phrase_rendering: bool | None = None
+    punctuation_pauses: _PausesBody | None = None
+    split_commas: bool | None = None
+    verify_speech: bool | None = None
+
+
+@router.get("/reading")
+def get_reading():
+    """How text is read aloud app-wide (Settings → Reading)."""
+    from services import reading_settings
+
+    return reading_settings.load()
+
+
+@router.put("/reading")
+def set_reading(body: _ReadingBody):
+    """Change any part of Settings → Reading; omitted fields keep their value."""
+    from services import reading_settings
+
+    changes = body.model_dump(exclude_none=True)
+    if body.punctuation_pauses is not None:
+        changes["punctuation_pauses"] = body.punctuation_pauses.model_dump(exclude_none=True)
+    try:
+        return reading_settings.save(changes)
+    except Exception:
+        logger.exception("set_reading failed")
+        raise HTTPException(status_code=500, detail="Failed to persist setting")
+
+
 # ── Dictation refinement (parity program Wave 2.1 / Spec 3 phase 2) ───────
 
 

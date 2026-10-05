@@ -42,9 +42,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from services.audiobook import (
     ExpressiveOptions,
+    punctuation_pause_pairs,
     parse_audiobook_script,
     synthesize_chapter,
 )
+from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
 from services.longform_render import (
     LONGFORM_CACHE_SUBDIR,
     LOUDNESS_PRESETS,
@@ -91,6 +93,21 @@ def _safe_cover_path(cover_path: str | None) -> str | None:
     return real if os.path.isfile(real) else None
 
 
+class PunctuationPauses(BaseModel):
+    """Silence (ms) after each punctuation family in a phrase-by-phrase render.
+    Bounded like the line/paragraph gaps; defaults mirror
+    ``chunked_tts.DEFAULT_PUNCTUATION_PAUSES``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sentence: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["sentence"], ge=0, le=5000)
+    ellipsis: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["ellipsis"], ge=0, le=5000)
+    semicolon: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["semicolon"], ge=0, le=5000)
+    colon: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["colon"], ge=0, le=5000)
+    dash: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["dash"], ge=0, le=5000)
+    comma: int = Field(default=DEFAULT_PUNCTUATION_PAUSES["comma"], ge=0, le=5000)
+
+
 class ExpressiveMixin(BaseModel):
     """Optional expressive/quality knobs shared by every longform front door
     (#1208). All optional — an omitted field reproduces today's exact render.
@@ -134,6 +151,39 @@ class ExpressiveMixin(BaseModel):
     emo_text: str | None = Field(default=None, max_length=500)
     emo_alpha: float | None = Field(default=None, ge=0.0, le=1.0)
     vary_repeats: bool = False
+    # Phrase-by-phrase rendering: every sentence/clause is its own engine take,
+    # joined with this silence per punctuation family (omitted families use the
+    # defaults). Omitted entirely → one take per <=800-char chunk, today's audio.
+    punctuation_pauses: "PunctuationPauses | None" = None
+    split_commas: bool = False
+    # Listen back to each take with the installed ASR; retake mismatches.
+    verify_speech: bool = False
+    # Follow Settings → Reading for whichever of the three fields above the
+    # request leaves out. The app sends this; API callers that omit it keep
+    # exactly the render they had (one take per paragraph, no check).
+    use_app_reading: bool = False
+
+
+def _reading_fields(req: "ExpressiveMixin") -> dict:
+    """The request's reading fields, completed from Settings → Reading when it
+    asks for that (``use_app_reading``) and leaves a field out."""
+    given = req.model_fields_set
+    pauses = (punctuation_pause_pairs(req.punctuation_pauses.model_dump())
+              if req.punctuation_pauses is not None else None)
+    split_commas, verify = bool(req.split_commas), bool(req.verify_speech)
+    if req.use_app_reading:
+        from services import reading_settings
+
+        app = reading_settings.load()
+        if "punctuation_pauses" not in given:
+            pauses = punctuation_pause_pairs(reading_settings.phrase_pauses(app))
+        if "split_commas" not in given:
+            split_commas = app["split_commas"]
+        if "verify_speech" not in given:
+            verify = app["verify_speech"]
+    return {"punctuation_pauses": pauses,
+            "split_commas": bool(split_commas and pauses is not None),
+            "verify_speech": verify}
 
 
 def _expressive_opts(req: "ExpressiveMixin") -> ExpressiveOptions:
@@ -152,6 +202,7 @@ def _expressive_opts(req: "ExpressiveMixin") -> ExpressiveOptions:
         line_gap_ms=int(req.line_gap_ms),
         paragraph_gap_ms=int(req.paragraph_gap_ms),
         trim_edges=bool(req.trim_edges),
+        **_reading_fields(req),
     )
 
 
@@ -494,6 +545,16 @@ def _base_seed(opts: ExpressiveOptions, voice: dict):
     return opts.seed if opts.seed is not None else voice.get("seed")
 
 
+def _retake_seed_input(text: str, attempt: int, next_nonce) -> tuple[str, int]:
+    """``(text, nonce)`` to seed a take with. The first take is seeded exactly
+    as before; a speech-check retake (``attempt`` > 0) salts the text so a
+    pinned seed still gives a different take, without advancing the repeat
+    counter the first take already used."""
+    if not attempt:
+        return text, next_nonce()
+    return f"{text}\x00retake{int(attempt)}", 0
+
+
 def _make_occ_counter(opts: ExpressiveOptions):
     """Per-closure occurrence counter for the cache opt-out (#1208).
 
@@ -623,9 +684,9 @@ def _build_synth(
              else _generic_extra_kwargs(opts))
     next_nonce = _make_occ_counter(opts)
 
-    def synth(text, voice_id, speed=None):
+    def synth(text, voice_id, speed=None, attempt=0):
         v = resolve(voice_id)
-        seed = _seed_segment_rng(_base_seed(opts, v), text, next_nonce())
+        seed = _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(text, attempt, next_nonce))
         call_extra = dict(extra)
         if native_proxy and seed is not None:
             call_extra["seed"] = seed
@@ -664,9 +725,9 @@ async def _prepare_synth(
         sampling = _omnivoice_sampling_kwargs(opts)
         next_nonce = _make_occ_counter(opts)
 
-        def synth(text, voice_id, speed=None):
+        def synth(text, voice_id, speed=None, attempt=0):
             v = resolve(voice_id)
-            _seed_segment_rng(_base_seed(opts, v), text, next_nonce())
+            _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(text, attempt, next_nonce))
             # A book is the worst case for the re-encode this avoids: hundreds of
             # segments, one voice. The reference is encoded on the first segment
             # and reused for every one after it.
@@ -866,8 +927,14 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
                              voice_sig=voice_sigs, extra_sig=seg_extra_sig,
                              vary_repeats=opts.vary_repeats,
                              legacy_voice_sigs=legacy_voice_sigs)
+    verifier = None
+    if opts.verify_speech:
+        from services.speech_verify import SpeechVerifier
+
+        verifier = SpeechVerifier(sr)
     audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
-                                    segment_cache=seg_cache, **opts.join_kwargs())
+                                    segment_cache=seg_cache, verifier=verifier,
+                                    **opts.join_kwargs())
     # Invisible provenance mark on the assembled chapter (#1169), tensor stage,
     # before the WAV lands in the cache — this single site covers every
     # longform front door (/audiobook, /longform/render [Stories],
@@ -882,8 +949,10 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     # file under its key (#2279).
     atomic_save_wav(wav_path, audio, sr, durable=True)
     record_chapter_inputs(cache_dir, content_id, inputs)
-    return wav_path, dur, False, {"total": seg_cache.hits + seg_cache.misses,
-                                  "cached": seg_cache.hits}
+    stats = {"total": seg_cache.hits + seg_cache.misses, "cached": seg_cache.hits}
+    if verifier is not None:
+        stats["speech_check"] = verifier.stats()
+    return wav_path, dur, False, stats
 
 
 def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
@@ -1050,7 +1119,7 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
     opts = _expressive_opts(req)
     decision = gpu_gateway.decide("audiobook")
     with voice_leases.VoiceFileLease() as lease:
-        wav_path, dur, was_cached, _seg_stats = await _run_chapter(
+        wav_path, dur, was_cached, seg_stats = await _run_chapter(
             chapter, decision=decision, job=None, default_voice=req.default_voice,
             language=resolved_lang, opts=opts, voice_map=req.voice_map,
             lexicon=req.lexicon, cache_dir=cache_dir, lease=lease,
@@ -1060,6 +1129,8 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
         "duration_s": round(dur, 2),
         "cached": was_cached,
         "title": chapter.title,
+        **({"speech_check": seg_stats["speech_check"]}
+           if seg_stats and "speech_check" in seg_stats else {}),
     }
 
 
@@ -1264,6 +1335,10 @@ async def _render_longform_sse(
                 # reuse inside a re-rendered chapter.
                 ev["segments"] = seg_stats["total"]
                 ev["cached_segments"] = seg_stats["cached"]
+                if "speech_check" in seg_stats:
+                    # Phrases that still differ from the script after their
+                    # retakes — what the listener should check.
+                    ev["speech_check"] = seg_stats["speech_check"]
             yield _emit(ev)
 
         route_notice = chapter_run.notice()

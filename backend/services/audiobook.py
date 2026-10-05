@@ -65,6 +65,14 @@ def segment_seed(base_seed: int, text: str, nonce: int = 0) -> int:
     return (int(base_seed) + zlib.crc32(text.encode("utf-8")) + int(nonce) * _NONCE_MIX) % (2**31)
 
 
+def punctuation_pause_pairs(pauses) -> Optional[tuple]:
+    """``{family: ms}`` → the sorted, hashable pairs :class:`ExpressiveOptions`
+    stores (``None`` stays ``None``: phrase rendering off)."""
+    if pauses is None:
+        return None
+    return tuple(sorted((str(k), int(v)) for k, v in dict(pauses).items()))
+
+
 @dataclass(frozen=True)
 class ExpressiveOptions:
     """Optional expressive/quality knobs for a longform render (#1208).
@@ -101,14 +109,31 @@ class ExpressiveOptions:
     line_gap_ms: int = 0
     paragraph_gap_ms: int = 0
     trim_edges: bool = False
+    #: Phrase-by-phrase rendering: each sentence/clause is its own engine take,
+    #: joined with this silence per punctuation family (sorted ``(family, ms)``
+    #: pairs, hashable for the frozen dataclass). ``None`` = one take per
+    #: paragraph chunk, today's bytes. ``split_commas`` makes every comma a
+    #: phrase boundary too.
+    punctuation_pauses: Optional[tuple] = None
+    split_commas: bool = False
+    #: Listen back to each take with the installed ASR and retake the ones
+    #: that say something else (``services.speech_verify``).
+    verify_speech: bool = False
 
     #: Manifest keys that shape the join, not the engine call — never forward
     #: these as synth kwargs.
-    JOIN_KEYS = ("line_gap_ms", "paragraph_gap_ms", "trim_edges")
+    JOIN_KEYS = ("line_gap_ms", "paragraph_gap_ms", "trim_edges",
+                 "punctuation_pauses", "split_commas")
+    #: Manifest keys that are never engine kwargs (the join, plus render-side
+    #: switches such as the speech check).
+    RENDER_KEYS = JOIN_KEYS + ("verify_speech",)
 
     def join_kwargs(self) -> dict:
         """The subset of options :func:`synthesize_chapter` takes directly."""
-        return {k: getattr(self, k) for k in self.JOIN_KEYS}
+        kw = {k: getattr(self, k) for k in self.JOIN_KEYS}
+        if kw["punctuation_pauses"] is not None:
+            kw["punctuation_pauses"] = dict(kw["punctuation_pauses"])
+        return kw
 
     @property
     def is_default(self) -> bool:
@@ -137,7 +162,16 @@ class ExpressiveOptions:
         # Keep pre-join-control keys for every legacy render, including ones
         # with a seed or emotion override (not only the all-default instance).
         if self.line_gap_ms or self.paragraph_gap_ms or self.trim_edges:
-            payload.update(self.join_kwargs())
+            payload.update({k: getattr(self, k) for k in
+                            ("line_gap_ms", "paragraph_gap_ms", "trim_edges")})
+        # Phrase rendering and the speech check change the audio, so they key
+        # the caches — but only when on, so every existing key stays as it was.
+        if self.punctuation_pauses is not None or self.split_commas:
+            payload["punctuation_pauses"] = (dict(self.punctuation_pauses)
+                                             if self.punctuation_pauses is not None else None)
+            payload["split_commas"] = self.split_commas
+        if self.verify_speech:
+            payload["verify_speech"] = True
         return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
     def to_manifest(self) -> dict:
@@ -156,6 +190,10 @@ class ExpressiveOptions:
             "line_gap_ms": self.line_gap_ms,
             "paragraph_gap_ms": self.paragraph_gap_ms,
             "trim_edges": self.trim_edges,
+            "punctuation_pauses": (dict(self.punctuation_pauses)
+                                   if self.punctuation_pauses is not None else None),
+            "split_commas": self.split_commas,
+            "verify_speech": self.verify_speech,
         }
 
     @classmethod
@@ -178,6 +216,9 @@ class ExpressiveOptions:
             line_gap_ms=int(data.get("line_gap_ms") or 0),
             paragraph_gap_ms=int(data.get("paragraph_gap_ms") or 0),
             trim_edges=bool(data.get("trim_edges", False)),
+            punctuation_pauses=punctuation_pause_pairs(data.get("punctuation_pauses")),
+            split_commas=bool(data.get("split_commas", False)),
+            verify_speech=bool(data.get("verify_speech", False)),
         )
 
 
@@ -350,6 +391,17 @@ def _join_with_gap(parts: list, sample_rate: int, gap_ms: int):
     return concatenate_audio_chunks(out, sample_rate, crossfade_ms=0)
 
 
+def _accepts_attempt(synth) -> bool:
+    """Whether ``synth`` takes ``attempt=`` (a retake that must differ)."""
+    import inspect
+
+    try:
+        params = inspect.signature(synth).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "attempt" or p.kind is p.VAR_KEYWORD for p in params)
+
+
 def synthesize_chapter(
     spans: list[Span],
     synth: Callable[[str, Optional[str], Optional[float]], "object"],
@@ -361,6 +413,9 @@ def synthesize_chapter(
     trim_edges: bool = False,
     lexicon: Optional[dict] = None,
     segment_cache: Optional["object"] = None,
+    punctuation_pauses: Optional[dict] = None,
+    split_commas: bool = False,
+    verifier: Optional["object"] = None,
 ):
     """Render a chapter's spans to one waveform via an injected ``synth``.
 
@@ -378,13 +433,24 @@ def synthesize_chapter(
     interrupted chapter resumes from its finished segments. Pauses are
     synthesized silence and never touch the cache.
 
+    ``punctuation_pauses`` (when given) renders phrase by phrase: every
+    sentence and clause is its own engine take (``chunked_tts.
+    split_into_phrases``) joined with that silence per punctuation family,
+    instead of up to 800 characters per take. ``verifier`` (a
+    :class:`services.speech_verify.SpeechVerifier`) listens back to each take
+    and retakes the ones that say something else; ``synth`` then receives
+    ``attempt=n`` for a retake when it accepts that keyword, so a pinned seed
+    still yields a different take.
+
     Returns ``(audio_tensor, duration_seconds)``. torch + chunked_tts are
     imported lazily so this module stays import-light for the pure parser path.
     """
     import torch
     from core.render_trace import call as trace_call
     from services.chunked_tts import (concatenate_audio_chunks,
+                                      join_phrases,
                                       join_rendered_chunks,
+                                      split_into_phrases,
                                       split_text_into_chunks)
     from services.pronunciation import apply_inline_overrides, apply_lexicon
 
@@ -405,8 +471,20 @@ def synthesize_chapter(
         paragraphs = (split_paragraphs(text) if paragraph_gap_ms > 0 else []) or [text]
         if not span.text:
             paragraphs = []
-        paragraphs_by_span.append(paragraphs)
+        # Each paragraph becomes (takes, silence after each take): the phrases
+        # of a phrase-by-phrase render, else today's <=800-char chunks joined
+        # by the crossfade (``None``).
+        units = []
+        for paragraph in paragraphs:
+            if punctuation_pauses is not None:
+                phrases = split_into_phrases(paragraph, punctuation_pauses,
+                                             split_commas=split_commas)
+                units.append(([p for p, _ in phrases], [ms for _, ms in phrases]))
+            else:
+                units.append((split_text_into_chunks(paragraph), None))
+        paragraphs_by_span.append(units)
         if span.text:
+            total_join_ms += sum(sum(gaps) for _, gaps in units if gaps)
             total_join_ms += planned_gap_ms + max(0, len(paragraphs) - 1) * paragraph_gap_ms
             if total_join_ms > MAX_JOIN_SILENCE_MS:
                 raise ValueError(
@@ -422,6 +500,17 @@ def synthesize_chapter(
     # gets a distinct cache slot — and therefore a distinct take — instead of
     # replaying one WAV. Always computed (cheap); inert when the cache ignores it.
     occ_counts: dict = {}
+    retake_kw = _accepts_attempt(synth)
+
+    def _take(text, span):
+        def take(attempt):
+            if attempt:
+                _stop_if_abandoned()
+                kw = {"attempt": attempt} if retake_kw else {}
+                return trace_call("synthesis", synth, text, span.voice_id, span.speed, **kw)
+            return trace_call("synthesis", synth, text, span.voice_id, span.speed)
+        return verifier.render(text, take) if verifier is not None else take(0)
+
     for span, paragraphs in zip(spans, paragraphs_by_span):
         if span.text:
             occ_key = (span.voice_id, span.text, getattr(span, "speed", None))
@@ -435,20 +524,23 @@ def synthesize_chapter(
                 # With no paragraph gap asked for, the span stays ONE engine
                 # call — the pre-existing bytes, seeds and prosody.
                 rendered_paragraphs = []
-                for paragraph in paragraphs:
-                    chunks = split_text_into_chunks(paragraph)
+                for chunks, gaps in paragraphs:
                     rendered = []
                     for c in chunks:
                         _stop_if_abandoned()
-                        rendered.append(trace_call("synthesis", synth, c, span.voice_id, span.speed))
+                        rendered.append(_take(c, span))
                         _note_chunk_done()
                     # Deliberately NOT pre-filtered (#1330). Dropping the empties
                     # here both hid them — a chapter would come back short with
                     # nothing said about it — and misaligned `rendered` from
                     # `chunks`, so the concat could not name which text was lost.
-                    joined = join_rendered_chunks(rendered, sample_rate,
-                                                  crossfade_ms=crossfade_ms,
-                                                  texts=chunks, trim_edges=trim_edges)
+                    if gaps is not None:
+                        joined = join_phrases(rendered, sample_rate, gaps,
+                                              texts=chunks, trim_edges=trim_edges)
+                    else:
+                        joined = join_rendered_chunks(rendered, sample_rate,
+                                                      crossfade_ms=crossfade_ms,
+                                                      texts=chunks, trim_edges=trim_edges)
                     if joined is not None:
                         rendered_paragraphs.append(joined)
                 audio = _join_with_gap(

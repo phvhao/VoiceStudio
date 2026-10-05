@@ -22,7 +22,7 @@ import logging
 
 from core.render_trace import timed as _render_timed
 import re
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger("omnivoice.chunked_tts")
 
@@ -95,13 +95,14 @@ DEFAULT_TRIM_KEEP_MS = 40
 
 
 def trim_edge_silence(audio, sample_rate: int, *, threshold_db: float = DEFAULT_TRIM_THRESHOLD_DB,
-                      keep_ms: int = DEFAULT_TRIM_KEEP_MS):
+                      keep_ms: int = DEFAULT_TRIM_KEEP_MS, head: bool = True, tail: bool = True):
     """Strip near-silent lead-in and tail from one rendered chunk.
 
     Works on the last axis of a 1-D or (channels, samples) tensor. Keeps
     ``keep_ms`` of the quiet edge on both sides so onsets and decays are not
     clipped. A chunk that is silent throughout is returned unchanged (its
-    caller decides what an empty render means).
+    caller decides what an empty render means). ``head`` / ``tail`` limit the
+    trim to one edge.
     """
     import torch
 
@@ -115,8 +116,8 @@ def trim_edge_silence(audio, sample_rate: int, *, threshold_db: float = DEFAULT_
     if loud.numel() == 0:
         return audio
     keep = int(sample_rate * keep_ms / 1000)
-    start = max(0, int(loud[0]) - keep)
-    end = min(audio.shape[-1], int(loud[-1]) + 1 + keep)
+    start = max(0, int(loud[0]) - keep) if head else 0
+    end = min(audio.shape[-1], int(loud[-1]) + 1 + keep) if tail else audio.shape[-1]
     if start == 0 and end == audio.shape[-1]:
         return audio
     return audio[..., start:end]
@@ -179,6 +180,203 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) 
 #: A character that can actually be voiced — any letter or digit, in any
 #: script. Punctuation, brackets, quotes and dashes are not speech on their own.
 _SPEAKABLE_RE = re.compile(r"[^\W_]", re.UNICODE)
+
+
+# ── Phrase-by-phrase rendering ─────────────────────────────────────────────
+#
+# Masked, non-autoregressive engines (the VoiceStudio model) fix a take's
+# length up front and fill it in parallel; nothing ties the audio to the text
+# order. Over a long take with near-identical clauses ("Spring is ...; Summer
+# is ...; Autumn is ...") they copy one clause into another's slot, drop one,
+# or garble one. Rendering each sentence/clause as its own short take removes
+# that failure, and the join puts a chosen silence at each punctuation mark.
+
+#: Punctuation families whose silence a phrase-by-phrase render controls.
+PUNCTUATION_CLASSES = ("sentence", "ellipsis", "semicolon", "colon", "dash", "comma")
+#: Silence (ms) after each family. Mirrored by
+#: ``electron/src/shared/utils/longformOverrides.js`` (DEFAULT_PUNCTUATION_PAUSES).
+DEFAULT_PUNCTUATION_PAUSES = {
+    "sentence": 300,
+    "ellipsis": 500,
+    "semicolon": 250,
+    "colon": 250,
+    "dash": 200,
+    "comma": 120,
+}
+#: Longest phrase sent to the engine in one call (~9-13 s of speech for
+#: spaced scripts; dense scripts are scaled down by ``_effective_max_chars``).
+PHRASE_MAX_CHARS = 200
+
+# One candidate boundary: a run of one punctuation family. Fullwidth forms are
+# escapes to keep the repo's no-literal-CJK gate clean. Linear: each branch is
+# a single character class.
+_PHRASE_MARK_RE = re.compile(
+    "(?P<terminal>[.!?\u2026\u3002\uff01\uff1f]+)"
+    "|(?P<semicolon>[;\uff1b])"
+    "|(?P<colon>[:\uff1a])"
+    "|(?P<dash>[\u2014\u2013]+)"
+    "|(?P<comma>[,\uff0c\u3001])"
+)
+# Closing quotes/parentheses that belong to the phrase a mark ends.
+_PHRASE_CLOSERS = "\"'\u201d\u2019\u00bb)\u300d\u300f\uff09"
+# Marks of no-space scripts end a phrase even with no whitespace after them.
+_NO_SPACE_MARKS = set("\u3002\uff01\uff1f\uff1b\uff1a\uff0c\u3001")
+_SENTENCE_MARKS = ".!?\u3002\uff01\uff1f"
+_MARK_FAMILY = {
+    ";": "semicolon", "\uff1b": "semicolon",
+    ":": "colon", "\uff1a": "colon",
+    "\u2014": "dash", "\u2013": "dash",
+    ",": "comma", "\uff0c": "comma", "\u3001": "comma",
+}
+
+
+def _period_ends_sentence(text: str, pos: int) -> bool:
+    """A lone period after an abbreviation or a digit does not end a sentence
+    (same rule as :func:`_find_last_sentence_end`)."""
+    word_start = pos - 1
+    while word_start >= 0 and text[word_start].isalpha():
+        word_start -= 1
+    if text[word_start + 1: pos].lower() in _ABBREVIATIONS:
+        return False
+    return not (word_start >= 0 and text[word_start].isdigit())
+
+
+def _between_digits(text: str, start: int, end: int) -> bool:
+    return 0 < start and end < len(text) and text[start - 1].isdigit() and text[end].isdigit()
+
+
+def _phrase_marks(text: str, split_commas: bool):
+    """Yield ``(end, family)`` for every phrase boundary in *text*: the index
+    just past the mark (and any closing quote), and its punctuation family."""
+    tags = [m.span() for m in _BRACKET_TAG_RE.finditer(text)]
+    n = len(text)
+    for m in _PHRASE_MARK_RE.finditer(text):
+        start, end = m.span()
+        if any(a <= start < b for a, b in tags):
+            continue  # never inside a [tag]
+        run, kind = m.group(), m.lastgroup
+        if kind == "terminal":
+            if "\u2026" in run or "..." in run:
+                family = "ellipsis"
+            elif run == "." and not _period_ends_sentence(text, start):
+                continue
+            else:
+                family = "sentence"
+        elif kind == "comma" and not split_commas:
+            continue
+        else:
+            family = _MARK_FAMILY[run[0]]
+        if kind in ("colon", "comma") and _between_digits(text, start, end):
+            continue  # a time such as 10:30, a number such as 1,000
+        while end < n and text[end] in _PHRASE_CLOSERS:
+            end += 1
+        if kind == "dash":
+            # A dash parts phrases only when it stands apart ("night - and");
+            # a joined one ("sow-reap") belongs to the word.
+            if not ((start > 0 and text[start - 1].isspace())
+                    or (end < n and text[end].isspace())):
+                continue
+        elif end < n and not text[end].isspace() and not (set(run) & _NO_SPACE_MARKS):
+            continue
+        yield end, family
+
+
+def _family_of_end(chunk: str) -> Optional[str]:
+    """Punctuation family a fallback chunk ends on (None: a plain word break)."""
+    stripped = chunk.rstrip().rstrip(_PHRASE_CLOSERS)
+    if not stripped:
+        return None
+    if stripped.endswith(("...", "\u2026")):
+        return "ellipsis"
+    if stripped[-1] in _SENTENCE_MARKS:
+        return "sentence"
+    return _MARK_FAMILY.get(stripped[-1])
+
+
+def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
+                       split_commas: bool = False,
+                       max_chars: int = PHRASE_MAX_CHARS) -> List[tuple]:
+    """Split *text* into short phrases, each paired with the silence (ms) that
+    follows it, for phrase-by-phrase rendering.
+
+    Every sentence end, ellipsis, semicolon, colon and free-standing dash
+    closes a phrase; commas do too when ``split_commas`` is on. A phrase still
+    longer than ``max_chars`` is cut by :func:`split_text_into_chunks` (which
+    prefers commas, then spaces), and each such cut gets the pause of the mark
+    it lands on. The last phrase carries ``0``: what follows a paragraph is the
+    caller's line/paragraph gap. ``pauses`` overrides
+    :data:`DEFAULT_PUNCTUATION_PAUSES` per family.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    silence = {**DEFAULT_PUNCTUATION_PAUSES, **(pauses or {})}
+    pieces: List[list] = []
+    start = 0
+    for end, family in _phrase_marks(text, split_commas):
+        piece = text[start:end].strip()
+        if piece:
+            pieces.append([piece, family])
+        start = end
+    tail = text[start:].strip()
+    if tail:
+        pieces.append([tail, None])
+    # A piece with nothing to say (a lone dash or quote) joins its neighbour.
+    merged: List[list] = []
+    for piece, family in pieces:
+        if merged and not (_SPEAKABLE_RE.search(piece) and _SPEAKABLE_RE.search(merged[-1][0])):
+            merged[-1] = [f"{merged[-1][0]} {piece}", family]
+        else:
+            merged.append([piece, family])
+    phrases: List[tuple] = []
+    for piece, family in merged:
+        if len(piece) <= _effective_max_chars(piece, max_chars):
+            phrases.append((piece, family))
+            continue
+        parts = split_text_into_chunks(piece, max_chars)
+        for k, part in enumerate(parts):
+            phrases.append((part, family if k == len(parts) - 1 else _family_of_end(part)))
+    out = [(phrase, int(silence.get(family, 0)) if family else 0) for phrase, family in phrases]
+    if out:
+        out[-1] = (out[-1][0], 0)
+    return out
+
+
+def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
+                 texts=None, trim_edges: bool = False, sink=None):
+    """Join phrase renders with each boundary's chosen silence.
+
+    The engine's own lead-in/tail is trimmed at every phrase boundary so the
+    chosen pause is the pause heard; the outer edges are trimmed only when
+    ``trim_edges`` asks for it, as for a single-take paragraph.
+    ``pauses_ms[i]`` is the silence after phrase ``i``. Dropped (empty)
+    renders are reported the way :func:`join_rendered_chunks` reports them;
+    ``None`` when nothing rendered.
+    """
+    import torch
+
+    dropped = {i for i, r in enumerate(rendered)
+               if r is None or getattr(r, "shape", (0,))[-1] == 0}
+    if dropped:
+        report_dropped_chunks(sorted(dropped), len(rendered), texts, sink)
+    kept = [i for i in range(len(rendered)) if i not in dropped]
+    if not kept:
+        return None
+    parts = []
+    for position, i in enumerate(kept):
+        first, last = position == 0, position == len(kept) - 1
+        audio = trim_edge_silence(rendered[i], sample_rate,
+                                  head=trim_edges or not first,
+                                  tail=trim_edges or not last)
+        if position:
+            samples = int(sample_rate * int(pauses_ms[kept[position - 1]] or 0) / 1000.0)
+            if samples > 0:
+                parts.append(torch.zeros(*audio.shape[:-1], samples,
+                                         dtype=audio.dtype, device=audio.device))
+        parts.append(audio)
+    if len(parts) == 1:
+        return parts[0]
+    return concatenate_audio_chunks(parts, sample_rate, crossfade_ms=0)
 
 
 def _merge_unspeakable(chunks: List[str], max_chars: int = 0) -> List[str]:

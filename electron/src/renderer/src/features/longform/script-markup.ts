@@ -374,3 +374,75 @@ export function previewPassage(text: string, start: number, end: number): string
     ? `${voiceToken(name)} ${passage}`
     : passage;
 }
+
+export interface MarkupToken {
+  start: number;
+  end: number;
+  text: string;
+  kind: Exclude<MarkupKind, 'text' | 'heading'>;
+}
+
+/** The markup token under (or touching) position `pos`, for editing it. */
+export function tokenAt(text: string, pos: number): MarkupToken | null {
+  for (const match of text.matchAll(TOKEN_RE)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (start > pos) break;
+    if (pos <= end)
+      return { start, end, text: match[0], kind: classifyToken(match[0]) as MarkupToken['kind'] };
+  }
+  return null;
+}
+
+/** Replace `from…to` with `insert`; the caret lands after it, or it is selected. */
+export function replaceRange(
+  text: string,
+  from: number,
+  to: number,
+  insert: string,
+  { select = false } = {},
+): MarkupEdit {
+  const [a, b] = clampRange(text, from, to);
+  return edit(text, a, b, insert, select ? a : a + insert.length, a + insert.length);
+}
+
+/**
+ * Remove a token. A delivery tag takes its partner with it and keeps the
+ * words between them; a respelling keeps the word it respelled; any other tag
+ * goes with one neighbouring space, so no double space is left behind.
+ */
+export function removeToken(text: string, token: MarkupToken): MarkupEdit {
+  if (token.kind === 'delivery') {
+    const name = token.text.replace(/[[\]/]/g, '').toLowerCase();
+    const closing = token.text.startsWith('[/');
+    // `name` is one of the four delivery words, so it needs no escaping.
+    const partner = new RegExp(String.raw`\[` + (closing ? '' : '/') + name + String.raw`\]`, 'gi');
+    let match: RegExpExecArray | null = null;
+    if (closing) {
+      for (const m of text.slice(0, token.start).matchAll(partner)) match = m as RegExpExecArray;
+    } else {
+      partner.lastIndex = token.end;
+      match = partner.exec(text);
+    }
+    if (match) {
+      const [open, close] = closing
+        ? [{ start: match.index, end: match.index + match[0].length }, token]
+        : [token, { start: match.index, end: match.index + match[0].length }];
+      const inner = text.slice(open.end, close.start);
+      return replaceRange(text, open.start, close.end, inner, { select: true });
+    }
+  }
+  if (token.kind === 'pronunciation') {
+    const inner = token.text.slice(2, -2);
+    const word = inner.includes('|') ? inner.slice(0, inner.indexOf('|')) : inner;
+    return replaceRange(text, token.start, token.end, word, { select: true });
+  }
+  const after = text[token.end] === ' ' && (token.start === 0 || /\s/.test(text[token.start - 1]));
+  return replaceRange(text, token.start, token.end + (after ? 1 : 0), '');
+}
+
+/** Select the "how it is read" half of `[[word|respelling]]`. */
+export function respellingRange(token: MarkupToken): [number, number] {
+  const bar = token.text.indexOf('|');
+  return bar < 0 ? [token.start + 2, token.end - 2] : [token.start + bar + 1, token.end - 2];
+}

@@ -358,6 +358,84 @@ def _outside_brackets(text: str, fn: Callable[[str], str]) -> str:
     return "".join(parts)
 
 
+# ── Double quotation marks ───────────────────────────────────────────────────
+#
+# Quotation marks are never spoken, and the default model misreads a word
+# glued to a typographic one: “đừng ... came back as "dừng" in every take,
+# while the same sentence without the quote said "đừng". They are dropped;
+# one that sat between two letters leaves a space so the words stay apart.
+# Apostrophes and single quotes are kept (they live inside words: don’t).
+
+_DOUBLE_QUOTE_RE = re.compile('[\u0022\u201c\u201d\u201e\u201f\u00ab\u00bb\uff02]')
+_SPACE_RUN_RE = re.compile(r"[ \t]{2,}")
+
+
+def _drop_double_quotes(text: str) -> str:
+    if not _DOUBLE_QUOTE_RE.search(text):
+        return text
+
+    def _replace(m: re.Match) -> str:
+        before = text[m.start() - 1] if m.start() else ""
+        after = text[m.end()] if m.end() < len(text) else ""
+        return " " if before.isalnum() and after.isalnum() else ""
+
+    return _SPACE_RUN_RE.sub(" ", _DOUBLE_QUOTE_RE.sub(_replace, text))
+
+
+# ── Shouted words (ALL CAPS, Latin script) ───────────────────────────────────
+#
+# The default model reads an all-caps word as a string of letters far more
+# often than as the word: "MÙA THU" came back as "mùa té tu". Words that
+# carry a diacritic are not acronyms, so a run of all-caps Latin words
+# anchored by one of them is spoken in lower case. Inside such a run a word
+# without a vowel ("KTNB", "ĐHQG") or a Roman numeral ("IV") is left as
+# written; a lone plain-ASCII word ("USA", "NASA") is never touched, and other
+# scripts are never touched (Cyrillic all-caps is mostly acronyms).
+
+_WORD_RE = re.compile(r"[^\W\d_]+")
+_ROMAN_NUMERAL_RE = re.compile(r"[IVXLCDM]+")
+_VOWELS = frozenset("aeiouy")
+
+
+def _latin_caps(word: str) -> bool:
+    return word.isupper() and all(unicodedata.name(c, "").startswith("LATIN") for c in word)
+
+
+def _has_vowel(word: str) -> bool:
+    return any(unicodedata.normalize("NFD", c)[0].lower() in _VOWELS for c in word)
+
+
+def _speakable_lowercase(word: str) -> bool:
+    return _has_vowel(word) and not _ROMAN_NUMERAL_RE.fullmatch(word)
+
+
+def _lowercase_shouted_words(text: str) -> str:
+    words = list(_WORD_RE.finditer(text))
+    out: list[str] = []
+    last = 0
+    i = 0
+    while i < len(words):
+        if not _latin_caps(words[i].group()):
+            i += 1
+            continue
+        # A run: all-caps words separated by spaces only (punctuation or a
+        # line break ends it).
+        j = i + 1
+        while (j < len(words) and _latin_caps(words[j].group())
+               and text[words[j - 1].end():words[j].start()].strip(" \t") == ""):
+            j += 1
+        run = words[i:j]
+        if any(not w.group().isascii() and _has_vowel(w.group()) for w in run):
+            for w in run:
+                if _speakable_lowercase(w.group()):
+                    out.append(text[last:w.start()])
+                    out.append(w.group().lower())
+                    last = w.end()
+        i = j
+    out.append(text[last:])
+    return "".join(out)
+
+
 # ── Abbreviation expansion ────────────────────────────────────────────────────
 #
 # Per-language (key, expansion, guard) triples. Matching is case-sensitive
@@ -660,6 +738,8 @@ def normalize_text(text: str, language: Optional[str] = None) -> str:
     if not text:
         return text or ""
     out = _safety_filters(text)
+    out = _outside_brackets(out, _drop_double_quotes)
+    out = _outside_brackets(out, _lowercase_shouted_words)
     # Runs outside the num2words gate below: ko/ja/zh keep their digits (that
     # gate returns None for them) but still need the range mark spoken.
     plain = _plain_lang_code(language)

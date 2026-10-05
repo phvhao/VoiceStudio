@@ -20,12 +20,14 @@ import { clearedScriptPatch, scriptSize } from './story-clear';
 import { ConfirmDialog } from '../clone/confirm-dialog';
 import { MarkupToolbar } from './markup-toolbar';
 import { MarkupTextarea } from './markup-textarea';
+import { MarkupContextMenu } from './markup-context-menu';
 import { previewPassage } from './script-markup';
 import { usePassagePreview } from './passage-preview';
 import { storyVoicesReady } from './story-inputs';
 import { StorySpeed } from './story-speed';
 import { ProjectSettings } from './project-settings';
 import { ProductionSettings } from './production-settings';
+import { PacingSettings, SpeechCheckReport } from './pacing-settings';
 import { ChapterPreviews } from './chapter-previews';
 import { castVoice } from './cast-map';
 import { CastSettings } from './cast-settings';
@@ -371,6 +373,11 @@ export function LongformPage({ mode }: { mode: Mode }) {
             onChange={set}
             onBusy={setImporting}
           />
+          <PacingSettings
+            value={draft.overrides}
+            disabled={locked}
+            onChange={(overrides) => set({ overrides })}
+          />
           <ProductionSettings
             value={draft.overrides}
             disabled={locked}
@@ -532,25 +539,42 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 {passage.error && (
                   <PipelineFailure fallback={passage.error} onDismiss={passage.dismiss} />
                 )}
+                <SpeechCheckReport suspects={passage.suspects} />
                 {passage.empty && (
                   <p role="status" className="text-xs text-muted-foreground">
                     {t('markup.preview_empty')}
                   </p>
                 )}
-                <MarkupTextarea
-                  textareaRef={audiobookInput}
-                  headings
-                  aria-label={t('clone.script')}
-                  className="min-h-96 flex-1 rounded-xl border border-border/40 bg-background/20 focus-within:border-border"
-                  textClassName="px-4 py-3 text-base leading-7"
-                  value={draft.script}
-                  placeholder={t('audiobook.script_placeholder')}
+                <MarkupContextMenu
+                  className="flex min-h-96 flex-1 flex-col"
+                  getTarget={() =>
+                    audiobookInput.current && {
+                      element: audiobookInput.current,
+                      setText: (script) => set({ script }),
+                    }
+                  }
                   disabled={locked}
-                  onValueChange={(script) => {
-                    set({ script });
-                    if (warningsDismissed) setWarningsDismissed(false);
-                  }}
-                />
+                  profiles={profiles}
+                  scriptNames={names}
+                  voiceCast={draft.voiceCast}
+                  onVoiceCast={(voiceCast) => set({ voiceCast })}
+                  onListen={canPreview ? previewSelection : undefined}
+                >
+                  <MarkupTextarea
+                    textareaRef={audiobookInput}
+                    headings
+                    aria-label={t('clone.script')}
+                    className="min-h-96 flex-1 rounded-xl border border-border/40 bg-background/20 focus-within:border-border"
+                    textClassName="px-4 py-3 text-base leading-7"
+                    value={draft.script}
+                    placeholder={t('audiobook.script_placeholder')}
+                    disabled={locked}
+                    onValueChange={(script) => {
+                      set({ script });
+                      if (warningsDismissed) setWarningsDismissed(false);
+                    }}
+                  />
+                </MarkupContextMenu>
               </div>
             ) : (
               <StoryEditor
@@ -651,6 +675,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     source={'longform-' + mode}
                   />
                 )}
+                <SpeechCheckReport chapters={draft.outputChapters} />
               </section>
             )}
           </div>
