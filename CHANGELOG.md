@@ -8,6 +8,14 @@ metadata and the backend fallback mirror it.
 
 ## [Unreleased]
 
+**Highlights**
+- Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
+
+### Changed
+- Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
+- Script editors highlight voice, pause, delivery, expression and chapter markup as you type, flag unrecognized tags, and toolbar inserts undo with Ctrl+Z
+- Stories lines set character, voice and speed from one compact row, are color-coded by character, and chapters show as titled dividers
+
 ## [0.5.7] — 2026-10-05
 
 **VoiceStudio now runs on PCs without a GPU and recovers instead of giving up.** Voice cloning uses the speech-to-text model you installed from Model Catalogue, GPU-less computers get the small CPU PyTorch build, and slow or busy backends are no longer reported as failed.

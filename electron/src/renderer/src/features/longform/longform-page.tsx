@@ -18,7 +18,8 @@ import { saveLocalFile } from '@/lib/local-export';
 import { StoryCast, StoryEditor } from './story-editor';
 import { clearedScriptPatch, scriptSize } from './story-clear';
 import { ConfirmDialog } from '../clone/confirm-dialog';
-import { AudiobookMarkupToolbar } from './audiobook-markup-toolbar';
+import { MarkupToolbar } from './markup-toolbar';
+import { MarkupTextarea } from './markup-textarea';
 import { storyVoicesReady } from './story-inputs';
 import { StorySpeed } from './story-speed';
 import { ProjectSettings } from './project-settings';
@@ -423,22 +424,32 @@ export function LongformPage({ mode }: { mode: Mode }) {
               )}
             </div>
             {mode === 'audiobook' ? (
-              <div className="flex min-h-64 flex-1 flex-col gap-3">
-                <AudiobookMarkupToolbar
-                  textareaRef={audiobookInput}
-                  text={draft.script}
+              <div className="flex min-h-64 flex-1 flex-col gap-2">
+                <MarkupToolbar
+                  getTarget={() =>
+                    audiobookInput.current && {
+                      element: audiobookInput.current,
+                      setText: (script) => set({ script }),
+                    }
+                  }
                   disabled={locked}
-                  setText={(script) => set({ script })}
+                  profiles={profiles}
+                  scriptNames={names}
+                  voiceCast={draft.voiceCast}
+                  onVoiceCast={(voiceCast) => set({ voiceCast })}
+                  allowNewCharacter
                 />
-                <textarea
-                  ref={audiobookInput}
+                <MarkupTextarea
+                  textareaRef={audiobookInput}
+                  headings
                   aria-label={t('clone.script')}
-                  className="min-h-64 flex-1 resize-none bg-transparent text-base leading-7 outline-none"
+                  className="min-h-96 flex-1 rounded-xl border border-border/40 bg-background/20 focus-within:border-border"
+                  textClassName="px-4 py-3 text-base leading-7"
                   value={draft.script}
                   placeholder={t('audiobook.script_placeholder')}
                   disabled={locked}
-                  onChange={(e) => {
-                    set({ script: e.target.value });
+                  onValueChange={(script) => {
+                    set({ script });
                     if (warningsDismissed) setWarningsDismissed(false);
                   }}
                 />
