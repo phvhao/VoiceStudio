@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Đọc từng câu một",
     "phrase_rendering_hint": "Mỗi câu và vế câu được tạo riêng, nên đoạn dài không bị bỏ, lặp hay đảo chữ. Mỗi dấu bên dưới đặt khoảng nghỉ ngay sau nó.",
     "pauses": "Khoảng nghỉ sau mỗi dấu",
-    "mark_sentence": "Cuối câu",
+    "mark_sentence": "Cuối câu hoặc xuống dòng",
     "mark_ellipsis": "Dấu ba chấm",
     "mark_semicolon": "Dấu chấm phẩy",
     "mark_colon": "Dấu hai chấm",

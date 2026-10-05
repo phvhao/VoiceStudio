@@ -17,7 +17,7 @@ import {
 
 // The marks each family covers, as typed in a script.
 const MARKS: Record<PunctuationFamily, string> = {
-  sentence: '. ! ?',
+  sentence: '. ! ? ↵',
   ellipsis: '…',
   semicolon: ';',
   colon: ':',

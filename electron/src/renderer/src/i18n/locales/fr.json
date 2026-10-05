@@ -1872,7 +1872,7 @@
     "phrase_rendering": "Lire phrase par phrase",
     "phrase_rendering_hint": "Chaque phrase et proposition est générée séparément, pour que les longs passages ne sautent, ne répètent ni n’inversent aucun mot. Chaque signe ci-dessous fixe la pause qui le suit.",
     "pauses": "Pause après chaque signe",
-    "mark_sentence": "Fin de phrase",
+    "mark_sentence": "Fin de phrase ou de ligne",
     "mark_ellipsis": "Points de suspension",
     "mark_semicolon": "Point-virgule",
     "mark_colon": "Deux-points",

@@ -1872,7 +1872,7 @@
     "phrase_rendering": "Ler frase por frase",
     "phrase_rendering_hint": "Cada frase e oração é gerada separadamente, para que trechos longos não pulem, repitam nem troquem palavras. Cada sinal abaixo define a pausa que vem depois dele.",
     "pauses": "Pausa após cada sinal",
-    "mark_sentence": "Fim de frase",
+    "mark_sentence": "Fim de frase ou de linha",
     "mark_ellipsis": "Reticências",
     "mark_semicolon": "Ponto e vírgula",
     "mark_colon": "Dois-pontos",

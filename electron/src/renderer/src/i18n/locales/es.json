@@ -1872,7 +1872,7 @@
     "phrase_rendering": "Leer frase por frase",
     "phrase_rendering_hint": "Cada frase y cada oración se genera por separado, así los pasajes largos no saltan, repiten ni intercambian palabras. Cada signo de abajo fija la pausa que le sigue.",
     "pauses": "Pausa tras cada signo",
-    "mark_sentence": "Fin de frase",
+    "mark_sentence": "Fin de frase o de línea",
     "mark_ellipsis": "Puntos suspensivos",
     "mark_semicolon": "Punto y coma",
     "mark_colon": "Dos puntos",

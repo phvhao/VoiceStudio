@@ -1870,7 +1870,7 @@
     "phrase_rendering": "문장 단위로 읽기",
     "phrase_rendering_hint": "문장과 구절마다 따로 생성해 긴 글에서도 단어가 빠지거나 반복되거나 뒤바뀌지 않게 합니다. 아래 각 부호가 그 뒤의 쉼을 정합니다.",
     "pauses": "부호별 쉼",
-    "mark_sentence": "문장 끝",
+    "mark_sentence": "문장 끝 또는 줄바꿈",
     "mark_ellipsis": "말줄임표",
     "mark_semicolon": "세미콜론",
     "mark_colon": "콜론",

@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Baca kalimat demi kalimat",
     "phrase_rendering_hint": "Setiap kalimat dan klausa dibuat terpisah, sehingga bagian panjang tidak melewatkan, mengulang, atau menukar kata. Setiap tanda di bawah menentukan jeda setelahnya.",
     "pauses": "Jeda setelah tiap tanda",
-    "mark_sentence": "Akhir kalimat",
+    "mark_sentence": "Akhir kalimat atau baris",
     "mark_ellipsis": "Elipsis",
     "mark_semicolon": "Titik koma",
     "mark_colon": "Titik dua",

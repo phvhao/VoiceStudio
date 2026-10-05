@@ -58,6 +58,27 @@ def test_pauses_are_set_per_mark_and_the_last_phrase_leaves_the_gap_to_the_calle
                        ("four:", 250), ("five,", 50), ("six!", 0)]
 
 
+
+def test_a_line_break_ends_a_phrase_like_a_full_stop():
+    d = DEFAULT_PUNCTUATION_PAUSES
+    text = "\n".join([
+        "Three pillars:", "(1) change yourself", "(2) attitude is everything", "",
+        "(3) sow and reap",
+    ])
+    assert split_into_phrases(text) == [
+        ("Three pillars:", d["colon"]),
+        ("(1) change yourself", d["sentence"]),
+        ("(2) attitude is everything", d["sentence"]),
+        ("(3) sow and reap", 0),
+    ]
+
+
+def test_a_line_ending_on_its_own_mark_keeps_that_pause_and_is_not_paused_twice():
+    d = DEFAULT_PUNCTUATION_PAUSES
+    assert split_into_phrases("\n".join(["Hello,", "friend.", "Bye.", ""])) == [
+        ("Hello,", d["comma"]), ("friend.", d["sentence"]), ("Bye.", 0),
+    ]
+
 @pytest.mark.parametrize("text", [
     "Dr. Smith arrived.",                 # abbreviation
     "It costs 3.5 dollars.",              # decimal

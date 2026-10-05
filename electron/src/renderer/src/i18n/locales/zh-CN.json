@@ -1870,7 +1870,7 @@
     "phrase_rendering": "逐句朗读",
     "phrase_rendering_hint": "每个句子和分句单独生成，长段落不会漏字、重复或颠倒。下方每个标点设置其后的停顿。",
     "pauses": "各标点后的停顿",
-    "mark_sentence": "句末",
+    "mark_sentence": "句末或换行",
     "mark_ellipsis": "省略号",
     "mark_semicolon": "分号",
     "mark_colon": "冒号",

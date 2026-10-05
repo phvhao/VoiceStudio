@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Satz für Satz lesen",
     "phrase_rendering_hint": "Jeder Satz und Teilsatz wird einzeln erzeugt, damit lange Passagen keine Wörter auslassen, wiederholen oder vertauschen. Jedes Zeichen unten legt die Pause danach fest.",
     "pauses": "Pause nach jedem Zeichen",
-    "mark_sentence": "Satzende",
+    "mark_sentence": "Satz- oder Zeilenende",
     "mark_ellipsis": "Auslassungspunkte",
     "mark_semicolon": "Semikolon",
     "mark_colon": "Doppelpunkt",

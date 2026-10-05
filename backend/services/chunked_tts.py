@@ -300,7 +300,9 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
     follows it, for phrase-by-phrase rendering.
 
     Every sentence end, ellipsis, semicolon, colon and free-standing dash
-    closes a phrase; commas do too when ``split_commas`` is on. A phrase still
+    closes a phrase, and so does a line break (with the sentence pause, unless
+    the line ends on a mark of its own); commas do too when ``split_commas``
+    is on. A phrase still
     longer than ``max_chars`` is cut by :func:`split_text_into_chunks` (which
     prefers commas, then spaces), and each such cut gets the pause of the mark
     it lands on. The last phrase carries ``0``: what follows a paragraph is the
@@ -321,6 +323,17 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
     tail = text[start:].strip()
     if tail:
         pieces.append([tail, None])
+    # A line break ends a phrase like a full stop: list items and verse lines
+    # without punctuation are separate takes. A line that ends on a mark of its
+    # own (a comma that was not a boundary) keeps that mark's pause.
+    lines: List[list] = []
+    for piece, family in pieces:
+        parts = [part.strip() for part in piece.split("\n")]
+        parts = [part for part in parts if part]
+        for k, part in enumerate(parts):
+            last = k == len(parts) - 1
+            lines.append([part, family if last else (_family_of_end(part) or "sentence")])
+    pieces = lines
     # A piece with nothing to say (a lone dash or quote) joins its neighbour.
     merged: List[list] = []
     for piece, family in pieces:

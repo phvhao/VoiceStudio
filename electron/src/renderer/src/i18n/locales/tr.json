@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Cümle cümle oku",
     "phrase_rendering_hint": "Her cümle ve yan cümle ayrı oluşturulur; böylece uzun bölümlerde kelimeler atlanmaz, tekrarlanmaz ya da yer değiştirmez. Aşağıdaki her işaret ardından gelen duraklamayı belirler.",
     "pauses": "Her işaretten sonra duraklama",
-    "mark_sentence": "Cümle sonu",
+    "mark_sentence": "Cümle veya satır sonu",
     "mark_ellipsis": "Üç nokta",
     "mark_semicolon": "Noktalı virgül",
     "mark_colon": "İki nokta",

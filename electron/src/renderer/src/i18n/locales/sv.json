@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Läs mening för mening",
     "phrase_rendering_hint": "Varje mening och bisats skapas för sig, så långa stycken inte hoppar över, upprepar eller byter ord. Varje tecken nedan anger pausen som följer.",
     "pauses": "Paus efter varje tecken",
-    "mark_sentence": "Meningsslut",
+    "mark_sentence": "Menings- eller radslut",
     "mark_ellipsis": "Tre punkter",
     "mark_semicolon": "Semikolon",
     "mark_colon": "Kolon",

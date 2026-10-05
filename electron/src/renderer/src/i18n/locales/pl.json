@@ -1874,7 +1874,7 @@
     "phrase_rendering": "Czytaj zdanie po zdaniu",
     "phrase_rendering_hint": "Każde zdanie i wtrącenie jest tworzone osobno, więc długie fragmenty nie gubią, nie powtarzają ani nie zamieniają słów. Każdy znak poniżej ustala pauzę po nim.",
     "pauses": "Pauza po każdym znaku",
-    "mark_sentence": "Koniec zdania",
+    "mark_sentence": "Koniec zdania lub wiersza",
     "mark_ellipsis": "Wielokropek",
     "mark_semicolon": "Średnik",
     "mark_colon": "Dwukropek",

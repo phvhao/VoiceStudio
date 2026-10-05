@@ -19,7 +19,7 @@ metadata and the backend fallback mirror it.
 - Audiobook says when its default voice is missing and highlights where to pick it; Stories lists inline [voice:] names for casting
 - Listen previews the selected Audiobook text, or the paragraph at the cursor, in the voice in effect there
 - Stories and Audiobook renders honor [[word|respelling]] pronunciation overrides, and a Pronounce button writes one for the selected word
-- Long text is read sentence by sentence in Audiobook, Stories, Clone and Voice Design, joined with a pause you set per punctuation mark; existing books render once more the first time
+- Long text is read sentence by sentence in Audiobook, Stories, Clone and Voice Design, joined with a pause you set per punctuation mark; a line break counts as a full stop; existing books render once more the first time
 - Settings → Reading holds sentence-by-sentence reading, the per-mark pauses and the speech check for the whole app; each workspace opens it from a quick button, and a book can keep its own values
 - Script editors get a right-click menu: cut, copy and paste, every markup insert, and changing or removing the tag under the cursor
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen

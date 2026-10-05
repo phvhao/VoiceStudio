@@ -1978,7 +1978,7 @@
     "phrase_rendering": "Read sentence by sentence",
     "phrase_rendering_hint": "Each sentence and clause is rendered on its own, so long passages don't skip, repeat or swap words. Each mark below sets the pause that follows it.",
     "pauses": "Pause after each mark",
-    "mark_sentence": "End of sentence",
+    "mark_sentence": "End of sentence or line",
     "mark_ellipsis": "Ellipsis",
     "mark_semicolon": "Semicolon",
     "mark_colon": "Colon",

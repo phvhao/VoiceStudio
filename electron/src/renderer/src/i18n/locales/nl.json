@@ -1870,7 +1870,7 @@
     "phrase_rendering": "Zin voor zin voorlezen",
     "phrase_rendering_hint": "Elke zin en bijzin wordt apart gemaakt, zodat lange passages geen woorden overslaan, herhalen of verwisselen. Elk teken hieronder bepaalt de pauze erna.",
     "pauses": "Pauze na elk teken",
-    "mark_sentence": "Einde van een zin",
+    "mark_sentence": "Einde van zin of regel",
     "mark_ellipsis": "Beletselteken",
     "mark_semicolon": "Puntkomma",
     "mark_colon": "Dubbele punt",

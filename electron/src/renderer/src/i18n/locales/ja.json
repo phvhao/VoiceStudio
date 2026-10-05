@@ -1870,7 +1870,7 @@
     "phrase_rendering": "一文ずつ読む",
     "phrase_rendering_hint": "文や節ごとに個別に生成するため、長い文章でも語の抜け・繰り返し・入れ替わりが起きにくくなります。下の各記号でその後の間を設定します。",
     "pauses": "記号ごとの間",
-    "mark_sentence": "文末",
+    "mark_sentence": "文末・改行",
     "mark_ellipsis": "三点リーダー",
     "mark_semicolon": "セミコロン",
     "mark_colon": "コロン",

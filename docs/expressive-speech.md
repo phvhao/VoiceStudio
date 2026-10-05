@@ -31,7 +31,8 @@ its own take, joined with a deliberate silence.
 and Voice Design. The **Phrasing** button next to the quality controls in
 Clone and Voice Design, and **Pauses & phrasing** in the Audiobook and Stories
 setup panel, open the same settings in place. It sets the silence per mark —
-end of sentence (300 ms), ellipsis (500), semicolon (250), colon (250), dash
+end of sentence or line break (300 ms; a line that ends on its own mark keeps
+that mark's pause), ellipsis (500), semicolon (250), colon (250), dash
 (200) and comma (120, used where a long sentence is cut at a comma, or at every
 comma when **Pause at every comma** is on). Turning **Read sentence by
 sentence** off restores one take per paragraph. A book or story can keep its
