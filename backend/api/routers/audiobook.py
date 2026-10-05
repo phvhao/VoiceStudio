@@ -32,7 +32,6 @@ import logging
 import os
 import re
 import shutil
-import tempfile
 import time
 import uuid
 
@@ -91,7 +90,7 @@ HTML_EXPORT_SUFFIX = ".html.zip"
 #: HTML exports wait in this folder of the system temp folder, outside the
 #: outputs, until the app downloads them: each holds a full copy of the book's
 #: audio, so it is served once and removed.
-HTML_EXPORT_DIRNAME = "voicestudio-html-exports"
+HTML_EXPORT_DIRNAME = "html_exports"
 _HTML_EXPORT_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 #: An export nobody downloaded (its save dialog was cancelled) is removed by
 #: the next export once it is this old.
@@ -1852,7 +1851,12 @@ class AudiobookHtmlExportRequest(BaseModel):
 
 
 def _html_export_dir() -> str:
-    return os.path.join(tempfile.gettempdir(), HTML_EXPORT_DIRNAME)
+    # The app's own data folder, not the shared system temp: a fixed name in
+    # a world-writable directory could be pre-created or linked by another
+    # local user, who would then read or swap the book on its way out.
+    from core.config import DATA_DIR
+
+    return os.path.join(DATA_DIR, HTML_EXPORT_DIRNAME)
 
 
 def _remove_quietly(path: str) -> None:

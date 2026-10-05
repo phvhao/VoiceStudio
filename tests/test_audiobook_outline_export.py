@@ -247,11 +247,22 @@ def _book(outputs, name="audiobook_h1.m4b", timeline=True):
 
 @pytest.fixture
 def exports(outputs, tmp_path, monkeypatch):
-    """The temp folder exports wait in, outside the outputs."""
+    """The folder exports wait in: the app's data folder, outside the outputs."""
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr("core.config.DATA_DIR", str(data))
+    # A shared system temp must never be used (another local user could
+    # pre-create or link a fixed-name folder there).
     temp = tmp_path / "system-temp"
     temp.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(temp))
-    return temp / "voicestudio-html-exports"
+    return data / "html_exports"
+
+
+def test_html_exports_stay_out_of_the_shared_temp_folder(outputs, exports, tmp_path):
+    _export(output=_book(outputs))
+    assert list(exports.glob("*.zip"))
+    assert not any((tmp_path / "system-temp").iterdir())
 
 
 def _export(**kw):
