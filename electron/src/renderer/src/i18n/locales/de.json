@@ -1798,7 +1798,6 @@
     "addFirst": "Erste Zeile hinzufügen",
     "linePlaceholder": "Geben Sie einen Dialog oder eine Erzählung ein ... verwenden Sie [Pause 0,5 Sekunden] für eine stille Pause",
     "text": "Text",
-    "voice": "Stimme",
     "defaultVoice": "Standard",
     "preview": "Sehen Sie sich diese Zeile in der Vorschau an",
     "removeLine": "Zeile entfernen",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Für alle Zeilen verwenden",
     "deleteProjectConfirm": "Dieses Projekt dauerhaft löschen?",
     "moveUp": "Nach oben",
-    "moveDown": "Nach unten"
+    "moveDown": "Nach unten",
+    "default_voice_hint": "Liest Zeilen, deren Figur keine eigene Stimme hat.",
+    "inline_voices": "Stimmen im Text"
   },
   "markup": {
     "pause_hint": "Stille Pause einfügen",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Unbekannte Tags werden vorgelesen – prüfe die Schreibweise",
     "guide_select": "Stimme und Vortrag umschließen den markierten Text; alles andere wird am Cursor eingefügt.",
     "line_voice": "Stimme für diese Zeile",
-    "character_voice": "Stimme der Figur"
+    "character_voice": "Stimme der Figur",
+    "preview": "Anhören",
+    "preview_hint": "Markierten Text oder den Absatz am Cursor anhören",
+    "preview_empty": "Dort gibt es nichts zu lesen. Setze den Cursor in einen Absatz oder markiere Text.",
+    "pronounce": "Aussprache",
+    "pronounce_hint": "Wort markieren und eingeben, wie es gelesen werden soll",
+    "guide_pronounce": "Ein Wort an dieser Stelle nach deiner Vorgabe lesen: [[Wort|Aussprache]]"
   },
   "audiobook": {
     "cast": "Besetzung",
@@ -1899,7 +1906,9 @@
       "no_lines": "Fügen Sie mindestens eine gesprochene Zeile hinzu.",
       "no_script": "Schreiben oder importieren Sie ein Skript.",
       "voice": "Wählen Sie eine Standardstimme oder geben Sie jeder Zeile eine Stimme.",
-      "lexicon": "Ein Aussprachewort ist doppelt eingetragen. Entfernen Sie das Duplikat."
+      "lexicon": "Ein Aussprachewort ist doppelt eingetragen. Entfernen Sie das Duplikat.",
+      "default_voice": "Wähle links eine Standardstimme, um das Hörbuch zu erstellen.",
+      "cast_voice": "Ein [voice:]-Name ist einer gelöschten Stimme zugewiesen. Wähle in der Besetzung eine andere."
     },
     "recovery_title": "Unterbrochenes Hörbuch",
     "recovery_progress": "{{done}} von {{total}} Kapiteln sind zwischengespeichert",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Emotionsbeschreibung",
     "emotion_text_ph": "z.B. klingt erschöpft und traurig",
     "emotion_alpha": "Emotionale Stärke",
-    "lex_duplicate": "Verwende nur eine Aussprache pro Wort."
+    "lex_duplicate": "Verwende nur eine Aussprache pro Wort.",
+    "default_voice_hint": "Liest jeden Teil ohne eigenes [voice:]-Tag. Zum Erstellen des Hörbuchs erforderlich."
   },
   "credentials": {
     "microsoft_key": "Microsoft-Übersetzerschlüssel",

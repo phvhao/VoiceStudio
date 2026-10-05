@@ -29,3 +29,16 @@ it('a duplicated pronunciation word only blocks the audiobook', () => {
   expect(generateBlocker({ ...ready, duplicateLexicon: true })).toBeNull();
   expect(generateBlocker({ ...ready, mode: 'audiobook', duplicateLexicon: true })).toBe('lexicon');
 });
+
+it('says which voice is missing instead of a generic voice hint', () => {
+  const book = { ...ready, mode: 'audiobook' as const, voicesReady: false };
+  expect(generateBlocker({ ...book, defaultVoiceReady: false, castReady: false })).toBe(
+    'default_voice',
+  );
+  expect(generateBlocker({ ...book, defaultVoiceReady: true, castReady: false })).toBe(
+    'cast_voice',
+  );
+  // Stories lines can each carry a voice, so no default is required there.
+  expect(generateBlocker({ ...ready, voicesReady: false, defaultVoiceReady: false })).toBe('voice');
+  expect(generateBlocker({ ...ready, voicesReady: false, castReady: false })).toBe('cast_voice');
+});

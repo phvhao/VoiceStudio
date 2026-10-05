@@ -11,6 +11,8 @@ import {
   insertChapter,
   insertToken,
   pauseToken,
+  previewPassage,
+  pronounceSelection,
   tokenizeMarkup,
   wrapSelection,
   type MarkupEdit,
@@ -180,4 +182,71 @@ it('offers every expression tag exactly once', () => {
   const offered = expressionGroups().flatMap((group) => group.tags);
   expect([...offered].sort()).toEqual([...TAGS].sort());
   expect(expressionGroups().some((group) => group.key === 'other')).toBe(false);
+});
+
+describe('previewPassage', () => {
+  const book = [
+    '# One',
+    '[voice:Mara] First paragraph.',
+    '',
+    'Second paragraph, still Mara.',
+    '',
+    '# Two',
+    'Narrated again.',
+  ].join('\n');
+
+  it('previews the paragraph at the caret in the voice in effect there', () => {
+    const caret = book.indexOf('still');
+    expect(previewPassage(book, caret, caret)).toBe('[voice:Mara] Second paragraph, still Mara.');
+  });
+
+  it('previews exactly the selection', () => {
+    const start = book.indexOf('First');
+    expect(previewPassage(book, start, start + 'First paragraph.'.length)).toBe(
+      '[voice:Mara] First paragraph.',
+    );
+  });
+
+  it('starts every chapter on the default voice', () => {
+    const caret = book.indexOf('Narrated');
+    expect(previewPassage(book, caret, caret)).toBe('Narrated again.');
+  });
+
+  it('drops headings and refuses passages with nothing to say', () => {
+    expect(previewPassage('# Title\nBody.', 0, 13)).toBe('Body.');
+    expect(previewPassage('# Title\n[pause 1s]', 0, 0)).toBeNull();
+    expect(previewPassage('', 0, 0)).toBeNull();
+  });
+
+  it('respects a voice reset before the passage', () => {
+    const text = '[voice:Mara] Hi. [voice:] Back to narration.';
+    const start = text.indexOf('Back');
+    expect(previewPassage(text, start, text.length)).toBe('Back to narration.');
+  });
+});
+
+describe('pronunciation overrides', () => {
+  it('highlights [[word|respelling]] as one pronunciation token', () => {
+    const kinds = tokenizeMarkup('Open [[gif|jiff]] and [[Nuh-VAD-uh]] [x]')
+      .filter((segment) => segment.kind !== 'text')
+      .map((segment) => [segment.text, segment.kind]);
+    expect(kinds).toEqual([
+      ['[[gif|jiff]]', 'pronunciation'],
+      ['[[Nuh-VAD-uh]]', 'pronunciation'],
+      ['[x]', 'unknown'],
+    ]);
+  });
+
+  it('respells the selected word with the respelling half selected', () => {
+    const edit = pronounceSelection('Open gif now', 4, 9);
+    expect(edit.text).toBe('Open [[gif|gif]] now');
+    expect(selected(edit)).toBe('gif');
+    expect(edit.selectionStart).toBe('Open [[gif|'.length);
+  });
+
+  it('inserts an empty override with the caret on the word half', () => {
+    const edit = pronounceSelection('ab', 1, 1);
+    expect(edit.text).toBe('a[[|]]b');
+    expect(edit.selectionStart).toBe('a[['.length);
+  });
 });

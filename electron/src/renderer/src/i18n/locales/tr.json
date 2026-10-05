@@ -1798,7 +1798,6 @@
     "addFirst": "İlk Satırı Ekle",
     "linePlaceholder": "Diyaloğa veya anlatıma girin… sessiz bir ara için [0,5 saniye duraklat] kullanın",
     "text": "metin",
-    "voice": "ses",
     "defaultVoice": "Varsayılan",
     "preview": "Bu satırı önizleyin",
     "removeLine": "Satırı kaldır",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Tüm satırlarda kullan",
     "deleteProjectConfirm": "Bu proje kalıcı olarak silinsin mi?",
     "moveUp": "Yukarı taşı",
-    "moveDown": "Aşağı taşı"
+    "moveDown": "Aşağı taşı",
+    "default_voice_hint": "Karakterinin kendi sesi olmayan satırları okur.",
+    "inline_voices": "Metin içi sesler"
   },
   "markup": {
     "pause_hint": "Sessiz bir duraklama ekle",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Tanınmayan etiketler sesli okunur — yazımı kontrol edin",
     "guide_select": "Ses ve okuma biçimi seçili metni sarar; diğerleri imlecin olduğu yere eklenir.",
     "line_voice": "Bu satırın sesi",
-    "character_voice": "Karakterin sesi"
+    "character_voice": "Karakterin sesi",
+    "preview": "Dinle",
+    "preview_hint": "Seçili metni veya imleçteki paragrafı dinleyin",
+    "preview_empty": "Orada okunacak bir şey yok. İmleci bir paragrafa koyun veya metin seçin.",
+    "pronounce": "Telaffuz",
+    "pronounce_hint": "Bir kelime seçin, sonra nasıl okunacağını yazın",
+    "guide_pronounce": "Bir kelimeyi bu noktada kendi istediğiniz gibi okutun: [[kelime|okunuşu]]"
   },
   "audiobook": {
     "cast": "Kadro",
@@ -1899,7 +1906,9 @@
       "no_lines": "Oluşturmak için en az bir konuşma satırı ekleyin.",
       "no_script": "Oluşturmak için bir metin yazın veya içe aktarın.",
       "voice": "Varsayılan bir ses seçin veya her satıra bir ses verin.",
-      "lexicon": "Bir telaffuz sözcüğü iki kez listelenmiş. Oluşturmak için yineleneni kaldırın."
+      "lexicon": "Bir telaffuz sözcüğü iki kez listelenmiş. Oluşturmak için yineleneni kaldırın.",
+      "default_voice": "Sesli kitabı oluşturmak için soldaki panelden varsayılan bir ses seçin.",
+      "cast_voice": "Bir [voice:] adı silinmiş bir sese atanmış. Oyuncu listesinden başka bir ses seçin."
     },
     "recovery_title": "Kesintiye uğrayan sesli kitap",
     "recovery_progress": "{{total}} bölümün {{done}} tanesi önbelleğe alındı",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Duygu açıklaması",
     "emotion_text_ph": "örn. tükenmiş ve üzgün geliyor",
     "emotion_alpha": "Duygu gücü",
-    "lex_duplicate": "Her sözcük için tek bir telaffuz kullanın."
+    "lex_duplicate": "Her sözcük için tek bir telaffuz kullanın.",
+    "default_voice_hint": "Kendi [voice:] etiketi olmayan her bölümü okur. Sesli kitabı oluşturmak için gereklidir."
   },
   "credentials": {
     "microsoft_key": "Microsoft Çevirmen Anahtarı",

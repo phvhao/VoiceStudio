@@ -386,7 +386,7 @@ def synthesize_chapter(
     from services.chunked_tts import (concatenate_audio_chunks,
                                       join_rendered_chunks,
                                       split_text_into_chunks)
-    from services.pronunciation import apply_lexicon
+    from services.pronunciation import apply_inline_overrides, apply_lexicon
 
     from services.chunked_tts import split_paragraphs
 
@@ -399,7 +399,9 @@ def synthesize_chapter(
     planned_gap_ms = 0
     total_join_ms = 0
     for span in spans:
-        text = apply_lexicon(span.text, lexicon) if span.text else ""
+        # Same order as apply_pronunciation: lexicon first, then the script's
+        # own [[word|respelling]] overrides, so an inline override always wins.
+        text = apply_inline_overrides(apply_lexicon(span.text, lexicon)) if span.text else ""
         paragraphs = (split_paragraphs(text) if paragraph_gap_ms > 0 else []) or [text]
         if not span.text:
             paragraphs = []

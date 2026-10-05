@@ -20,6 +20,8 @@ import { clearedScriptPatch, scriptSize } from './story-clear';
 import { ConfirmDialog } from '../clone/confirm-dialog';
 import { MarkupToolbar } from './markup-toolbar';
 import { MarkupTextarea } from './markup-textarea';
+import { previewPassage } from './script-markup';
+import { usePassagePreview } from './passage-preview';
 import { storyVoicesReady } from './story-inputs';
 import { StorySpeed } from './story-speed';
 import { ProjectSettings } from './project-settings';
@@ -39,8 +41,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { DownloadIcon, ListIcon, SparklesIcon } from 'lucide-react';
+import { DownloadIcon, ListIcon, PlayIcon, SparklesIcon, SquareIcon, XIcon } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { SyncedAudiobookPlayer } from './synced-audiobook-player';
@@ -108,11 +111,15 @@ export function LongformPage({ mode }: { mode: Mode }) {
       !castVoice(draft.voiceCast, name) ||
       profiles.some((profile) => profile.id === castVoice(draft.voiceCast, name)),
   );
+  const defaultVoice = profiles.find((profile) => profile.id === draft.voice);
   const voicesReady =
-    castReady &&
-    (mode === 'stories'
-      ? storyVoicesReady(draft, profiles)
-      : profiles.some((profile) => profile.id === draft.voice));
+    castReady && (mode === 'stories' ? storyVoicesReady(draft, profiles) : Boolean(defaultVoice));
+  // Stories reads a profile id inside [voice:…] directly; only readable names
+  // need a mapping, so only those are listed for casting.
+  const inlineNames = useMemo(
+    () => names.filter((name) => !profiles.some((profile) => profile.id === name)),
+    [names, profiles],
+  );
   const warnings = useMemo(
     () =>
       mode === 'audiobook'
@@ -133,8 +140,19 @@ export function LongformPage({ mode }: { mode: Mode }) {
     tts: ttsBlocker,
     usable,
     voicesReady,
+    defaultVoiceReady: Boolean(defaultVoice),
+    castReady,
     duplicateLexicon: duplicateWords(draft.lexicon),
   });
+  const canPreview = ttsBlocker === null && voicesReady && !duplicateWords(draft.lexicon);
+  const passage = usePassagePreview(draft, setImporting);
+  const previewSelection = () => {
+    const input = audiobookInput.current;
+    if (!input) return;
+    void passage.preview(
+      previewPassage(input.value, input.selectionStart ?? 0, input.selectionEnd ?? 0),
+    );
+  };
   const generatePanel = (
     <GeneratePanel
       mode={mode}
@@ -244,11 +262,38 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 onChange={(e) => set({ title: e.target.value })}
               />
             </label>
-            <div className="space-y-1">
-              <h2 className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <FingerprintIcon className="size-4" aria-hidden="true" />
-                {t('stories.voice')}
+            <div
+              role="group"
+              aria-labelledby="longform-default-voice"
+              data-attention={blocker === 'default_voice' ? '' : undefined}
+              className="-mx-1.5 space-y-1 rounded-lg p-1.5 data-attention:bg-amber-500/8 data-attention:ring-1 data-attention:ring-amber-500/60"
+            >
+              <h2
+                id="longform-default-voice"
+                className="flex items-center gap-2 text-xs font-medium text-muted-foreground"
+              >
+                <FingerprintIcon className="size-4 shrink-0" aria-hidden="true" />
+                {t('audiobook.default_voice')}
+                {defaultVoice && (
+                  <span className="ml-auto truncate font-normal text-foreground">
+                    {defaultVoice.name}
+                  </span>
+                )}
               </h2>
+              <p
+                className={cn(
+                  'pb-1 text-[11px] leading-snug',
+                  blocker === 'default_voice'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-muted-foreground',
+                )}
+              >
+                {t(
+                  mode === 'audiobook'
+                    ? 'audiobook.default_voice_hint'
+                    : 'stories.default_voice_hint',
+                )}
+              </p>
               {!profiles.length && (
                 <p className="text-xs text-muted-foreground">{t('stories.noProfiles')}</p>
               )}
@@ -301,9 +346,10 @@ export function LongformPage({ mode }: { mode: Mode }) {
           {mode === 'stories' && (
             <StoryCast draft={draft} profiles={profiles} disabled={locked} onChange={set} />
           )}
-          {mode === 'audiobook' && (
+          {(mode === 'audiobook' || inlineNames.length > 0) && (
             <CastSettings
-              names={names}
+              title={mode === 'stories' ? t('stories.inline_voices') : undefined}
+              names={mode === 'audiobook' ? names : inlineNames}
               cast={draft.voiceCast}
               profiles={profiles}
               disabled={locked}
@@ -314,7 +360,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
             <ChapterPreviews
               draft={draft}
               disabled={locked}
-              canPreview={ttsBlocker === null && voicesReady && !duplicateWords(draft.lexicon)}
+              canPreview={canPreview}
               onBusy={setImporting}
             />
           )}
@@ -424,7 +470,11 @@ export function LongformPage({ mode }: { mode: Mode }) {
               )}
             </div>
             {mode === 'audiobook' ? (
-              <div className="flex min-h-64 flex-1 flex-col gap-2">
+              // No explicit min-height: the default (content size) keeps this
+              // box from shrinking below the toolbar + editor in a short
+              // window, so the page column scrolls instead of the editor
+              // painting over the stats and the finished-audiobook player.
+              <div data-slot="audiobook-editor" className="flex flex-1 flex-col gap-2">
                 <MarkupToolbar
                   getTarget={() =>
                     audiobookInput.current && {
@@ -438,7 +488,55 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   voiceCast={draft.voiceCast}
                   onVoiceCast={(voiceCast) => set({ voiceCast })}
                   allowNewCharacter
+                  actions={
+                    passage.pending ? (
+                      <Button size="xs" variant="secondary" onClick={passage.stop}>
+                        <SquareIcon className="fill-current" />
+                        {t('common.stop')}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={locked || !canPreview}
+                        title={t('markup.preview_hint')}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={previewSelection}
+                      >
+                        <PlayIcon />
+                        {t('markup.preview')}
+                      </Button>
+                    )
+                  }
                 />
+                {passage.output && (
+                  <div className="flex items-center gap-1 rounded-xl border border-border/50 bg-muted/20 py-1 pr-1 pl-3">
+                    <div className="min-w-0 flex-1">
+                      <WaveformPlayer
+                        autoPlay
+                        showWaveform={false}
+                        src={apiPath('/audio/' + encodeURIComponent(passage.output))}
+                        source="passage-preview"
+                      />
+                    </div>
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label={t('common.close')}
+                      onClick={passage.dismiss}
+                    >
+                      <XIcon />
+                    </Button>
+                  </div>
+                )}
+                {passage.error && (
+                  <PipelineFailure fallback={passage.error} onDismiss={passage.dismiss} />
+                )}
+                {passage.empty && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    {t('markup.preview_empty')}
+                  </p>
+                )}
                 <MarkupTextarea
                   textareaRef={audiobookInput}
                   headings

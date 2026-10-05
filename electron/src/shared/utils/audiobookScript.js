@@ -17,6 +17,10 @@ const HEADING_RE = /^[ \t]*#[ \t]+(\S.*)$/gm;
 // Any bracket token — used to strip markup before the word count and to
 // enumerate tokens for validation. Non-greedy, no nested brackets.
 const BRACKET_RE = /\[[^\][]*\]/g;
+// [[word|respelling]] / [[respelling]] pronunciation override (mirrors
+// pronunciation._INLINE_RE, same bound). Spoken as its respelling, so it is
+// neither markup to strip nor an unknown tag.
+const INLINE_OVERRIDE_RE = /\[\[([^\]]{0,256})\]\]/g;
 
 // Recognized (non-voice) bracket tokens, so validation can flag the rest.
 const PAUSE_TOKEN_RE = /^\[\s*pause(?:\s+\d+(?:\.\d+)?(?:\s*(?:ms|s))?)?\s*\]$/i;
@@ -48,7 +52,14 @@ export function parseCastNames(text) {
 
 /** Text with every bracket markup token removed (for a spoken-word count). */
 function stripMarkup(text) {
-  return (text || '').replace(BRACKET_RE, ' ');
+  return speakInlineOverrides(text || '').replace(BRACKET_RE, ' ');
+}
+
+/** Text with each `[[…]]` override replaced by what it speaks. */
+function speakInlineOverrides(text) {
+  return text.replace(INLINE_OVERRIDE_RE, (_, inner) =>
+    inner.includes('|') ? inner.slice(inner.indexOf('|') + 1) : inner,
+  );
 }
 
 /**
@@ -121,8 +132,9 @@ export function validateScript(text, { mappedNames = [], profileIds = [] } = {})
   // 3. Unrecognized bracket tokens — anything outside the known grammar.
   const seenTags = new Set();
   const bre = new RegExp(BRACKET_RE.source, BRACKET_RE.flags);
+  const tagged = norm.replace(INLINE_OVERRIDE_RE, ' ');
   let bm;
-  while ((bm = bre.exec(norm)) !== null) {
+  while ((bm = bre.exec(tagged)) !== null) {
     const tok = bm[0];
     if (bre.lastIndex === bm.index) bre.lastIndex++;
     const lower = tok.toLowerCase();

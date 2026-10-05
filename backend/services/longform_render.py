@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from services.pronunciation import has_inline_overrides
+
 _BITRATE_RE = re.compile(r"^\d{2,3}k$")
 #: Default ceiling for the content-addressed chapter cache. Above this, the
 #: oldest cached chapter WAVs are evicted (LRU by mtime). Override via
@@ -121,6 +123,13 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
 
 # ── Chapter cache key (resume) ──────────────────────────────────────────────
 
+#: Longform renders resolve ``[[word|respelling]]`` overrides since this
+#: revision; before it the brackets reached the engine as text. Keys of text
+#: that carries an override include this marker so those older renders are
+#: never replayed. Text without one keeps its byte-identical key.
+INLINE_OVERRIDES_RENDER = 1
+
+
 def chapter_cache_key(
     spans: Iterable[tuple],
     *,
@@ -138,6 +147,7 @@ def chapter_cache_key(
     string (e.g. ``ref_audio|instruct|seed``) so editing the underlying profile
     also invalidates the cache.
     """
+    spans = list(spans)
     payload = {
         "sr": int(sample_rate),
         "engine": engine_id or "",
@@ -148,6 +158,8 @@ def chapter_cache_key(
                   + ([s[4]] if len(s) > 4 and s[4] else []) for s in spans],
         "voices": {k: voice_sig[k] for k in sorted(voice_sig)} if voice_sig else {},
     }
+    if any(has_inline_overrides(s[1]) for s in spans):
+        payload["inline_overrides"] = INLINE_OVERRIDES_RENDER
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     # Content-addressing only — not a security digest. usedforsecurity=False
     # keeps bandit's B324 (weak-hash) check quiet.
@@ -381,6 +393,8 @@ def segment_cache_key(
         # Absent when 0 so the derivation is byte-identical to pre-#1208 for
         # every normal (non-vary_repeats) render.
         payload["nonce"] = int(nonce)
+    if has_inline_overrides(text):
+        payload["inline_overrides"] = INLINE_OVERRIDES_RENDER
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     # Content-addressing only — not a security digest (see chapter_cache_key).
     return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]

@@ -12,7 +12,7 @@ ignores.
 | You want | Do this | Works on |
 |---|---|---|
 | A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text | Every engine |
-| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Reactions**, **Chapter**; **?** opens the markup guide, and the editor colors each tag | Every engine (Reactions: default engine) |
+| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide, and the editor colors each tag | Every engine (Reactions: default engine) |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
 | Whispering | Style → `whisper` (the voice-design/style field) | Default engine |
@@ -59,9 +59,12 @@ for your engine below.
   clones flat, an animated one clones animated (see the tip in
   [generation-parameters.md](generation-parameters.md)). This is the most
   reliable expressive control in the app.
-- **Pronunciation overrides** — `[[Nuh-VAD-uh]]` inline, or the pronunciation
-  dictionary. Not expression, but often what a "it says this weirdly" problem
-  actually needs.
+- **Pronunciation overrides** — `[[Nuh-VAD-uh]]` or `[[gif|jiff]]` inline, or the
+  pronunciation dictionary. Not expression, but often what a "it says this
+  weirdly" problem actually needs. Inline overrides also work in Stories and
+  Audiobook scripts (the **Pronounce** button writes one for the selected word);
+  long-form renders use the Audiobook project's own pronunciation list rather
+  than the global dictionary.
 
 Pronunciation dictionary matching uses Unicode case-insensitive literal matches. Each matched term uses its own respelling; distinct terms such as Straße and STRASSE can have different respellings. Longer terms win overlaps, and later equal-length case variants retain precedence.
 

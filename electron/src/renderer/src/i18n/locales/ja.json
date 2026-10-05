@@ -1798,7 +1798,6 @@
     "addFirst": "最初の行を追加",
     "linePlaceholder": "ダイアログまたはナレーションを入力します...無音の休憩には [一時停止 0.5 秒] を使用してください",
     "text": "テキスト",
-    "voice": "声",
     "defaultVoice": "デフォルト",
     "preview": "この行をプレビューする",
     "removeLine": "行を削除",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "すべての行に適用",
     "deleteProjectConfirm": "このプロジェクトを完全に削除しますか？",
     "moveUp": "上に移動",
-    "moveDown": "下に移動"
+    "moveDown": "下に移動",
+    "default_voice_hint": "キャラクターに専用の声がない行を読み上げます。",
+    "inline_voices": "本文中の声"
   },
   "markup": {
     "pause_hint": "無音の間を挿入",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "認識できないタグは読み上げられます。綴りを確認してください",
     "guide_select": "声と読み方は選択したテキストを囲み、それ以外はカーソル位置に挿入されます。",
     "line_voice": "この行の声",
-    "character_voice": "キャラクターの声"
+    "character_voice": "キャラクターの声",
+    "preview": "試聴",
+    "preview_hint": "選択したテキスト、またはカーソル位置の段落を試聴します",
+    "preview_empty": "そこには読み上げる内容がありません。段落にカーソルを置くか、テキストを選択してください。",
+    "pronounce": "読み方",
+    "pronounce_hint": "単語を選択して、読み方を入力します",
+    "guide_pronounce": "この箇所だけ単語を指定どおりに読む: [[単語|読み方]]"
   },
   "audiobook": {
     "cast": "キャスト",
@@ -1899,7 +1906,9 @@
       "no_lines": "生成するには、読み上げる行を1行以上追加してください。",
       "no_script": "生成するには、スクリプトを書くかインポートしてください。",
       "voice": "既定の音声を選ぶか、すべての行に音声を割り当ててください。",
-      "lexicon": "発音辞書に同じ単語が2回登録されています。重複を削除してください。"
+      "lexicon": "発音辞書に同じ単語が2回登録されています。重複を削除してください。",
+      "default_voice": "オーディオブックを作成するには、左のパネルでデフォルトの声を選んでください。",
+      "cast_voice": "[voice:] の名前が削除された声に割り当てられています。キャストで別の声を選んでください。"
     },
     "recovery_title": "中断されたオーディオブック",
     "recovery_progress": "{{total}}章中{{done}}章がキャッシュされています",
@@ -1972,7 +1981,8 @@
     "emotion_text": "感情の説明",
     "emotion_text_ph": "例 疲れているように聞こえ、悲しい",
     "emotion_alpha": "感情の強さ",
-    "lex_duplicate": "各単語の発音は1つだけ指定してください。"
+    "lex_duplicate": "各単語の発音は1つだけ指定してください。",
+    "default_voice_hint": "[voice:] タグのない部分をすべて読み上げます。オーディオブックの作成に必要です。"
   },
   "credentials": {
     "microsoft_key": "Microsoft トランスレータ キー",

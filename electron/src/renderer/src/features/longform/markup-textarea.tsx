@@ -24,6 +24,7 @@ export const MARKUP_STYLES: Record<Exclude<MarkupKind, 'text'>, string> = {
   pause: 'rounded-sm bg-amber-500/18 ring-1 ring-amber-500/40',
   delivery: 'rounded-sm bg-violet-500/18 ring-1 ring-violet-500/40',
   expression: 'rounded-sm bg-emerald-500/18 ring-1 ring-emerald-500/40',
+  pronunciation: 'rounded-sm bg-rose-500/18 ring-1 ring-rose-500/40',
   unknown: 'underline decoration-destructive decoration-wavy underline-offset-4',
 };
 

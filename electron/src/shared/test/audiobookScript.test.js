@@ -67,4 +67,10 @@ describe('validateScript', () => {
     const warns = validateScript('# C\nHa [laughter] ha.', {});
     expect(warns.filter((w) => w.type === 'unknown_tag')).toEqual([]);
   });
+  it('reads [[word|respelling]] overrides as speech, not as unknown tags', () => {
+    const script = '# Only respellings\n[[gif|jiff]] [[Nuh-VAD-uh]]\n# C\nA [huh] [[x|y]].';
+    const warns = validateScript(script, {});
+    expect(warns).toEqual([{ type: 'unknown_tag', tag: '[huh]' }]);
+    expect(scriptStats('Open the [[gif|jiff file]] now.').words).toBe(5);
+  });
 });

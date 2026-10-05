@@ -1798,7 +1798,6 @@
     "addFirst": "添加第一句",
     "linePlaceholder": "输入对白或旁白……使用 [pause 0.5s] 插入静音停顿",
     "text": "文本",
-    "voice": "语音",
     "defaultVoice": "默认",
     "preview": "试听这句",
     "removeLine": "移除台词",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "应用到所有行",
     "deleteProjectConfirm": "永久删除此项目？",
     "moveUp": "上移",
-    "moveDown": "下移"
+    "moveDown": "下移",
+    "default_voice_hint": "朗读角色没有专属声音的行。",
+    "inline_voices": "文中声音"
   },
   "markup": {
     "pause_hint": "插入静音停顿",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "无法识别的标签会被读出来——请检查拼写",
     "guide_select": "声音和朗读方式会包裹所选文本；其他内容插入到光标处。",
     "line_voice": "本行声音",
-    "character_voice": "角色声音"
+    "character_voice": "角色声音",
+    "preview": "试听",
+    "preview_hint": "试听所选文本，或光标所在的段落",
+    "preview_empty": "那里没有可朗读的内容。请把光标放在段落中或选中文本。",
+    "pronounce": "读音",
+    "pronounce_hint": "选中一个词，然后输入它的读法",
+    "guide_pronounce": "在此处按你的方式读一个词：[[词|读法]]"
   },
   "audiobook": {
     "cast": "配音角色",
@@ -1899,7 +1906,9 @@
       "no_lines": "请至少添加一行朗读内容后再生成。",
       "no_script": "请编写或导入脚本后再生成。",
       "voice": "请选择默认声音，或为每一行指定声音。",
-      "lexicon": "发音词典中有一个词重复出现。请删除重复项后再生成。"
+      "lexicon": "发音词典中有一个词重复出现。请删除重复项后再生成。",
+      "default_voice": "请在左侧面板选择默认声音以创建有声书。",
+      "cast_voice": "某个 [voice:] 名称对应的声音已被删除。请在角色分配中另选一个。"
     },
     "recovery_title": "已中断的有声读物",
     "recovery_progress": "{{total}} 章中有 {{done}} 章已缓存",
@@ -1972,7 +1981,8 @@
     "emotion_text": "情感描述",
     "emotion_text_ph": "例如：听起来疲惫而悲伤",
     "emotion_alpha": "情感强度",
-    "lex_duplicate": "每个词只保留一种发音。"
+    "lex_duplicate": "每个词只保留一种发音。",
+    "default_voice_hint": "朗读所有没有自身 [voice:] 标签的部分。创建有声书时必须选择。"
   },
   "credentials": {
     "microsoft_key": "Microsoft Translator 密钥",

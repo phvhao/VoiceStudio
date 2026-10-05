@@ -89,6 +89,29 @@ def test_chapter_key_golden_unchanged_by_segment_layer():
     assert key == "ce2accacf51a70d04da0"
 
 
+def test_inline_override_text_never_replays_a_pre_resolution_render(monkeypatch):
+    """Renders made before longform resolved [[…]] spoke the brackets; text
+    carrying an override must key away from them, while every other text keeps
+    the exact key its existing cache was written under."""
+    import services.longform_render as lr
+
+    def keys(text):
+        return (
+            segment_cache_key(text, sample_rate=_SR, engine_id="eng",
+                              voice_id=None, voice_sig=_SIG),
+            chapter_cache_key([(None, text, 0, None)], sample_rate=_SR,
+                              engine_id="eng", voice_sig={"": _SIG}),
+        )
+
+    current = {t: keys(t) for t in ("Say [[gif|jiff]].", "Plain [text] here.")}
+    monkeypatch.setattr(lr, "has_inline_overrides", lambda _text: False)
+    before = {t: keys(t) for t in current}
+    assert current["Plain [text] here."] == before["Plain [text] here."]
+    seg_now, chap_now = current["Say [[gif|jiff]]."]
+    seg_old, chap_old = before["Say [[gif|jiff]]."]
+    assert seg_now != seg_old and chap_now != chap_old
+
+
 # ── one-sentence edit → one segment re-renders ──────────────────────────────
 
 def test_one_sentence_edit_rerenders_exactly_one_segment(tmp_path):

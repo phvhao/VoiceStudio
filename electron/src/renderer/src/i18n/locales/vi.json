@@ -1798,7 +1798,6 @@
     "addFirst": "Thêm dòng đầu tiên",
     "linePlaceholder": "Nhập đoạn hội thoại hoặc tường thuật… sử dụng [tạm dừng 0,5 giây] để nghỉ im lặng",
     "text": "văn bản",
-    "voice": "giọng nói",
     "defaultVoice": "Mặc định",
     "preview": "Xem trước dòng này",
     "removeLine": "Xóa dòng",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Dùng cho mọi dòng",
     "deleteProjectConfirm": "Xóa vĩnh viễn dự án này?",
     "moveUp": "Di chuyển lên",
-    "moveDown": "Di chuyển xuống"
+    "moveDown": "Di chuyển xuống",
+    "default_voice_hint": "Đọc các dòng mà nhân vật chưa có giọng riêng.",
+    "inline_voices": "Giọng chèn trong dòng"
   },
   "markup": {
     "pause_hint": "Chèn khoảng lặng",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Tag không nhận ra sẽ bị đọc thành lời — hãy kiểm tra chính tả",
     "guide_select": "Giọng và cách đọc bao quanh đoạn đã chọn; các tag khác được chèn tại con trỏ.",
     "line_voice": "Giọng cho dòng này",
-    "character_voice": "Giọng của nhân vật"
+    "character_voice": "Giọng của nhân vật",
+    "preview": "Nghe thử",
+    "preview_hint": "Nghe thử đoạn đã chọn, hoặc đoạn văn tại vị trí con trỏ",
+    "preview_empty": "Không có gì để đọc ở đó. Đặt con trỏ vào một đoạn văn hoặc bôi đen một đoạn.",
+    "pronounce": "Phát âm",
+    "pronounce_hint": "Chọn một từ, rồi gõ cách đọc mong muốn",
+    "guide_pronounce": "Đọc một từ theo cách của bạn tại vị trí này: [[từ|cách đọc]]"
   },
   "audiobook": {
     "cast": "Dàn giọng",
@@ -1899,7 +1906,9 @@
       "no_lines": "Thêm ít nhất một dòng thoại để tạo.",
       "no_script": "Viết hoặc nhập kịch bản để tạo.",
       "voice": "Chọn giọng mặc định hoặc gán giọng cho từng dòng.",
-      "lexicon": "Một từ phát âm bị liệt kê hai lần. Xóa mục trùng để tạo."
+      "lexicon": "Một từ phát âm bị liệt kê hai lần. Xóa mục trùng để tạo.",
+      "default_voice": "Chọn giọng mặc định ở cột bên trái để tạo sách nói.",
+      "cast_voice": "Một tên [voice:] đang gán cho giọng đã bị xóa. Hãy chọn giọng khác trong mục phân vai."
     },
     "recovery_title": "Sách nói bị gián đoạn",
     "recovery_progress": "Đã lưu đệm {{done}} trong số {{total}} chương",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Mô tả cảm xúc",
     "emotion_text_ph": "ví dụ: nghe vẻ mệt mỏi và buồn",
     "emotion_alpha": "Độ mạnh của cảm xúc",
-    "lex_duplicate": "Chỉ dùng một cách phát âm cho mỗi từ."
+    "lex_duplicate": "Chỉ dùng một cách phát âm cho mỗi từ.",
+    "default_voice_hint": "Đọc mọi đoạn không có tag [voice:] riêng. Cần chọn để tạo sách nói."
   },
   "credentials": {
     "microsoft_key": "Khóa dịch của Microsoft",

@@ -2,12 +2,15 @@ import { castVoice } from './cast-map';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 export function CastSettings({
+  title,
   names,
   cast,
   profiles,
   disabled,
   onChange,
 }: {
+  /** Panel heading; defaults to the Audiobook "Cast" title. */
+  title?: string;
   names: string[];
   cast: Record<string, string>;
   profiles: { id: string; name: string }[];
@@ -17,7 +20,9 @@ export function CastSettings({
   const { t } = useTranslation();
   return (
     <details className="space-y-3" open={names.length > 0}>
-      <summary className="cursor-pointer text-sm font-medium">{t('audiobook.cast')}</summary>
+      <summary className="cursor-pointer text-sm font-medium">
+        {title ?? t('audiobook.cast')}
+      </summary>
       {!names.length && (
         <p className="text-xs text-muted-foreground">{t('audiobook.cast_empty')}</p>
       )}
@@ -35,7 +40,7 @@ export function CastSettings({
           <div
             className="max-h-48 space-y-1 overflow-y-auto"
             role="group"
-            aria-label={t('audiobook.cast') + ': ' + name}
+            aria-label={(title ?? t('audiobook.cast')) + ': ' + name}
           >
             <Button
               size="sm"

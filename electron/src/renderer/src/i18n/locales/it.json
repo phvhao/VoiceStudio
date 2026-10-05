@@ -1800,7 +1800,6 @@
     "addFirst": "Aggiungi la prima riga",
     "linePlaceholder": "Inserisci un dialogo o una narrazione... usa [pausa 0,5 s] per una pausa silenziosa",
     "text": "testo",
-    "voice": "voce",
     "defaultVoice": "Predefinito",
     "preview": "Anteprima di questa riga",
     "removeLine": "Rimuovi riga",
@@ -1826,7 +1825,9 @@
     "global_speed_apply": "Usa per tutte le righe",
     "deleteProjectConfirm": "Eliminare definitivamente questo progetto?",
     "moveUp": "Sposta su",
-    "moveDown": "Sposta giù"
+    "moveDown": "Sposta giù",
+    "default_voice_hint": "Legge le righe il cui personaggio non ha una voce propria.",
+    "inline_voices": "Voci nel testo"
   },
   "markup": {
     "pause_hint": "Inserisci una pausa di silenzio",
@@ -1858,7 +1859,13 @@
     "guide_unknown": "I tag non riconosciuti vengono letti ad alta voce: controlla l’ortografia",
     "guide_select": "Voce e intonazione racchiudono il testo selezionato; il resto viene inserito al cursore.",
     "line_voice": "Voce per questa riga",
-    "character_voice": "Voce del personaggio"
+    "character_voice": "Voce del personaggio",
+    "preview": "Ascolta",
+    "preview_hint": "Ascolta il testo selezionato o il paragrafo al cursore",
+    "preview_empty": "Qui non c’è nulla da leggere. Metti il cursore in un paragrafo o seleziona del testo.",
+    "pronounce": "Pronuncia",
+    "pronounce_hint": "Seleziona una parola, poi scrivi come va letta",
+    "guide_pronounce": "Leggi una parola a modo tuo in questo punto: [[parola|come dirla]]"
   },
   "audiobook": {
     "cast": "Cast",
@@ -1901,7 +1908,9 @@
       "no_lines": "Aggiungi almeno una riga parlata per generare.",
       "no_script": "Scrivi o importa un copione per generare.",
       "voice": "Scegli una voce predefinita o assegna una voce a ogni riga.",
-      "lexicon": "Una parola di pronuncia è elencata due volte. Rimuovi il duplicato per generare."
+      "lexicon": "Una parola di pronuncia è elencata due volte. Rimuovi il duplicato per generare.",
+      "default_voice": "Scegli una voce predefinita nel pannello a sinistra per creare l’audiolibro.",
+      "cast_voice": "Un nome [voice:] è assegnato a una voce eliminata. Scegline un’altra nel cast."
     },
     "recovery_title": "Audiolibro interrotto",
     "recovery_progress": "{{done}} capitoli su {{total}} sono nella cache",
@@ -1974,7 +1983,8 @@
     "emotion_text": "Descrizione dell'emozione",
     "emotion_text_ph": "es. suona stanco e triste",
     "emotion_alpha": "Forza emotiva",
-    "lex_duplicate": "Usa una sola pronuncia per parola."
+    "lex_duplicate": "Usa una sola pronuncia per parola.",
+    "default_voice_hint": "Legge ogni parte senza un proprio tag [voice:]. Necessaria per creare l’audiolibro."
   },
   "credentials": {
     "microsoft_key": "Chiave del traduttore Microsoft",

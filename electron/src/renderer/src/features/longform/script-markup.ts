@@ -32,6 +32,7 @@ export type MarkupKind =
   | 'pause'
   | 'delivery'
   | 'expression'
+  | 'pronunciation'
   | 'unknown';
 
 export interface MarkupSegment {
@@ -39,9 +40,12 @@ export interface MarkupSegment {
   kind: MarkupKind;
 }
 
-// Any bracket token without nested brackets (mirrors audiobookScript's
-// BRACKET_RE); a negated class with one quantifier, so matching is linear.
-const TOKEN_RE = /\[[^\][]*\]/g;
+// A [[word|respelling]] override (pronunciation._INLINE_RE, bounded the same
+// way), else any bracket token without nested brackets (audiobookScript's
+// BRACKET_RE). Each alternative is a negated class with one quantifier, so
+// matching stays linear.
+const TOKEN_RE = /\[\[[^\]]{0,256}\]\]|\[[^\][]*\]/g;
+const PRONUNCIATION_RE = /^\[\[[^\]]{0,256}\]\]$/;
 // H1 chapter heading, same shape as longform_parser._HEADING_RE.
 const HEADING_RE = /^[ \t]*#[ \t]+\S.*$/gm;
 const VOICE_RE = /^\[voice:([^\][]*)\]$/;
@@ -50,6 +54,7 @@ const DELIVERY_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
 const EXPRESSIONS = new Set(TAGS.map((tag) => tag.toLowerCase()));
 
 export function classifyToken(token: string): MarkupKind {
+  if (PRONUNCIATION_RE.test(token)) return 'pronunciation';
   const voice = VOICE_RE.exec(token);
   if (voice) {
     const name = voice[1].trim();
@@ -228,6 +233,29 @@ export function wrapSelection(
   );
 }
 
+/**
+ * Respell the selection for this occurrence: `[[word|word]]` with the second
+ * half selected, ready to type how it should be read. With no selection, an
+ * empty `[[|]]` with the caret on the word half.
+ */
+export function pronounceSelection(text: string, start: number, end: number): MarkupEdit {
+  const [from, to] = clampRange(text, start, end);
+  const selected = text.slice(from, to);
+  const word = selected.trim().replace(/[[\]|]/g, '');
+  if (!word) return edit(text, to, to, '[[|]]', to + 2);
+  const lead = selected.length - selected.trimStart().length;
+  const trail = selected.length - selected.trimEnd().length;
+  const respelling = from + lead + 3 + word.length;
+  return edit(
+    text,
+    from + lead,
+    to - trail,
+    `[[${word}|${word}]]`,
+    respelling,
+    respelling + word.length,
+  );
+}
+
 export function voiceToken(name: string): string {
   return `[voice:${name}]`;
 }
@@ -303,4 +331,46 @@ export function castNameForProfile(
   let n = 2;
   while (taken(`${base} ${n}`)) n++;
   return `${base} ${n}`;
+}
+
+const BLANK_LINE_RE = /\n[ \t]*\n/g;
+
+/** Whether `text` has anything to say besides markup. */
+const speaks = (text: string) =>
+  tokenizeMarkup(text).some(
+    (segment) =>
+      (segment.kind === 'text' || segment.kind === 'pronunciation') && segment.text.trim(),
+  );
+const VOICE_TOKEN_RE = /\[voice:([^\][]*)\]/g;
+
+/**
+ * The text to audition for a selection: the selected text, or the paragraph
+ * around a bare caret. Chapter headings are dropped (a preview renders one
+ * chapter), and the `[voice:NAME]` in effect where the passage starts is
+ * carried in front of it, so a line inside a character's part is heard in
+ * that character's voice. `null` when there is nothing to speak.
+ */
+export function previewPassage(text: string, start: number, end: number): string | null {
+  let [from, to] = clampRange(text, start, end);
+  if (from === to) {
+    const before = [...text.slice(0, from).matchAll(BLANK_LINE_RE)].pop();
+    from = before ? before.index + before[0].length : 0;
+    const after = new RegExp(BLANK_LINE_RE.source).exec(text.slice(to));
+    to = after ? to + after.index : text.length;
+  }
+  const raw = text.slice(from, to);
+  const passage = raw.replace(HEADING_RE, '').trim();
+  if (!speaks(passage)) return null;
+  // Each chapter starts on the default voice, so look back only to its
+  // heading — including one that opens the passage itself.
+  const opening = new RegExp(HEADING_RE.source, 'm').exec(raw);
+  const startsChapter = opening !== null && !speaks(raw.slice(0, opening.index));
+  const lead = text.slice(0, startsChapter ? from + opening.index + opening[0].length : from);
+  const heading = [...lead.matchAll(HEADING_RE)].pop();
+  const chapter = heading ? lead.slice(heading.index + heading[0].length) : lead;
+  const voice = [...chapter.matchAll(VOICE_TOKEN_RE)].pop();
+  const name = voice?.[1].trim();
+  return name && name !== 'default' && !passage.startsWith('[voice:')
+    ? `${voiceToken(name)} ${passage}`
+    : passage;
 }

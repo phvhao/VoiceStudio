@@ -362,6 +362,11 @@ def inert_entries_for_language(entries, language: str | None) -> list[dict]:
 _INLINE_RE = re.compile(r"\[\[([^\]]{0,256})\]\]")
 
 
+def has_inline_overrides(text: Optional[str]) -> bool:
+    """True when ``text`` carries at least one ``[[…]]`` one-off override."""
+    return bool(text) and "[[" in text and _INLINE_RE.search(text) is not None
+
+
 def apply_inline_overrides(text: str) -> str:
     """Resolve ``[[…]]`` one-off pronunciation overrides to plain spoken text.
 

@@ -1798,7 +1798,6 @@
     "addFirst": "Lägg till första raden",
     "linePlaceholder": "Gå in i dialog eller berättarröst... använd [paus 0,5s] för en tyst paus",
     "text": "text",
-    "voice": "röst",
     "defaultVoice": "Standard",
     "preview": "Förhandsgranska den här raden",
     "removeLine": "Ta bort linjen",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Använd för alla rader",
     "deleteProjectConfirm": "Ta bort projektet permanent?",
     "moveUp": "Flytta upp",
-    "moveDown": "Flytta ned"
+    "moveDown": "Flytta ned",
+    "default_voice_hint": "Läser rader vars karaktär saknar egen röst.",
+    "inline_voices": "Röster i texten"
   },
   "markup": {
     "pause_hint": "Infoga en tyst paus",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Okända taggar läses upp – kontrollera stavningen",
     "guide_select": "Röst och framförande omsluter markerad text; allt annat infogas vid markören.",
     "line_voice": "Röst för den här raden",
-    "character_voice": "Karaktärens röst"
+    "character_voice": "Karaktärens röst",
+    "preview": "Lyssna",
+    "preview_hint": "Lyssna på markerad text eller stycket vid markören",
+    "preview_empty": "Inget att läsa där. Placera markören i ett stycke eller markera text.",
+    "pronounce": "Uttal",
+    "pronounce_hint": "Markera ett ord och skriv hur det ska läsas",
+    "guide_pronounce": "Läs ett ord på ditt sätt på just det här stället: [[ord|uttal]]"
   },
   "audiobook": {
     "cast": "Rollbesättning",
@@ -1899,7 +1906,9 @@
       "no_lines": "Lägg till minst en talad rad för att generera.",
       "no_script": "Skriv eller importera ett manus för att generera.",
       "voice": "Välj en standardröst eller ge varje rad en röst.",
-      "lexicon": "Ett uttalsord finns med två gånger. Ta bort dubbletten för att generera."
+      "lexicon": "Ett uttalsord finns med två gånger. Ta bort dubbletten för att generera.",
+      "default_voice": "Välj en standardröst i panelen till vänster för att skapa ljudboken.",
+      "cast_voice": "Ett [voice:]-namn är kopplat till en borttagen röst. Välj en annan i rollistan."
     },
     "recovery_title": "Avbruten ljudbok",
     "recovery_progress": "{{done}} av {{total}} kapitel är cachade",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Emotionsbeskrivning",
     "emotion_text_ph": "t.ex. låter uttömd och ledsen",
     "emotion_alpha": "Emotionsstyrka",
-    "lex_duplicate": "Ange ett uttal per ord."
+    "lex_duplicate": "Ange ett uttal per ord.",
+    "default_voice_hint": "Läser varje del utan egen [voice:]-tagg. Krävs för att skapa ljudboken."
   },
   "credentials": {
     "microsoft_key": "Microsoft Translator-nyckel",

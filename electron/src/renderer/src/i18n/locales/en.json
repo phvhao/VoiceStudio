@@ -1906,7 +1906,6 @@
     "addFirst": "Add First Line",
     "linePlaceholder": "Enter dialogue or narration… use [pause 0.5s] for a silent break",
     "text": "text",
-    "voice": "voice",
     "defaultVoice": "Default",
     "preview": "Preview this line",
     "removeLine": "Remove line",
@@ -1932,7 +1931,9 @@
     "exportFailed": "Export failed — check the backend is running.",
     "deleteProjectConfirm": "Delete this project permanently?",
     "moveUp": "Move up",
-    "moveDown": "Move down"
+    "moveDown": "Move down",
+    "default_voice_hint": "Reads lines whose character has no voice of its own.",
+    "inline_voices": "Inline voices"
   },
   "markup": {
     "pause_hint": "Insert a silent break",
@@ -1964,7 +1965,13 @@
     "guide_unknown": "Unrecognized tags are read aloud — check the spelling",
     "guide_select": "Voice and delivery wrap the selected text; everything else is inserted at the cursor.",
     "line_voice": "Voice for this line",
-    "character_voice": "Character's voice"
+    "character_voice": "Character's voice",
+    "preview": "Listen",
+    "preview_hint": "Listen to the selected text, or to the paragraph at the cursor",
+    "preview_empty": "Nothing to read there. Put the cursor in a paragraph or select some text.",
+    "pronounce": "Pronounce",
+    "pronounce_hint": "Select a word, then type how it should be read",
+    "guide_pronounce": "Read a word your way in this spot: [[word|how to say it]]"
   },
   "audiobook": {
     "cast": "Cast",
@@ -2012,7 +2019,9 @@
       "no_lines": "Add at least one spoken line to generate.",
       "no_script": "Write or import a script to generate.",
       "voice": "Choose a default voice, or give every line a voice.",
-      "lexicon": "A pronunciation word is listed twice. Remove the duplicate to generate."
+      "lexicon": "A pronunciation word is listed twice. Remove the duplicate to generate.",
+      "default_voice": "Pick a default voice in the left panel to create the audiobook.",
+      "cast_voice": "A [voice:] name is cast to a deleted voice. Pick another one in the cast panel."
     },
     "recovery_title": "Interrupted audiobook",
     "recovery_progress": "{{done}} of {{total}} chapters are cached",
@@ -2080,7 +2089,8 @@
     "emotion_text": "Emotion description",
     "emotion_text_ph": "e.g. sounds exhausted and sad",
     "emotion_alpha": "Emotion strength",
-    "lex_duplicate": "Keep one pronunciation per word."
+    "lex_duplicate": "Keep one pronunciation per word.",
+    "default_voice_hint": "Reads every part without its own [voice:] tag. Needed to create the audiobook."
   },
   "credentials": {
     "microsoft_key": "Microsoft Translator Key",

@@ -213,3 +213,23 @@ def test_synthesize_chapter_applies_lexicon():
     # The engine sees the respelled text, never the original "Dr".
     assert any("Doctor" in t for t in seen)
     assert not any("Dr " in t or t.endswith(" Dr") for t in seen)
+
+
+def test_synthesize_chapter_resolves_inline_pronunciation_overrides():
+    """A script's own [[word|respelling]] reaches the engine as the respelling
+    (it used to arrive with its brackets), and wins over the project lexicon
+    just as it does on single-shot generation."""
+    torch = pytest.importorskip("torch")
+    seen = []
+
+    def synth(text, voice_id, speed=None):
+        seen.append(text)
+        return torch.ones(100, dtype=torch.float32)
+
+    plan = parse_audiobook_script(
+        "Open the [[gif|jiff]] file. Say [[Nuh-VAD-uh]].", default_voice="v"
+    )
+    synthesize_chapter(plan.chapters[0].spans, synth, 16000, lexicon={"gif": "ghif"})
+    spoken = " ".join(seen)
+    assert "jiff" in spoken and "Nuh-VAD-uh" in spoken
+    assert "[[" not in spoken and "]]" not in spoken and "ghif" not in spoken

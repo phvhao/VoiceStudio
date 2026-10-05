@@ -1798,7 +1798,6 @@
     "addFirst": "Tambahkan Baris Pertama",
     "linePlaceholder": "Masuk ke dialog atau narasi… gunakan [jeda 0,5 detik] untuk jeda hening",
     "text": "teks",
-    "voice": "suara",
     "defaultVoice": "Bawaan",
     "preview": "Pratinjau baris ini",
     "removeLine": "Hapus garis",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Gunakan untuk semua baris",
     "deleteProjectConfirm": "Hapus proyek ini secara permanen?",
     "moveUp": "Pindah ke atas",
-    "moveDown": "Pindah ke bawah"
+    "moveDown": "Pindah ke bawah",
+    "default_voice_hint": "Membacakan baris yang karakternya tidak punya suara sendiri.",
+    "inline_voices": "Suara di dalam teks"
   },
   "markup": {
     "pause_hint": "Sisipkan jeda hening",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Tag yang tidak dikenali akan dibacakan — periksa ejaannya",
     "guide_select": "Suara dan gaya baca membungkus teks terpilih; sisanya disisipkan di kursor.",
     "line_voice": "Suara untuk baris ini",
-    "character_voice": "Suara karakter"
+    "character_voice": "Suara karakter",
+    "preview": "Dengarkan",
+    "preview_hint": "Dengarkan teks terpilih atau paragraf di posisi kursor",
+    "preview_empty": "Tidak ada yang bisa dibaca di sana. Letakkan kursor di paragraf atau pilih teks.",
+    "pronounce": "Pelafalan",
+    "pronounce_hint": "Pilih kata, lalu ketik cara membacanya",
+    "guide_pronounce": "Baca kata dengan cara Anda di posisi ini: [[kata|cara mengucapkannya]]"
   },
   "audiobook": {
     "cast": "Pemeran",
@@ -1899,7 +1906,9 @@
       "no_lines": "Tambahkan setidaknya satu baris ucapan untuk membuat.",
       "no_script": "Tulis atau impor naskah untuk membuat.",
       "voice": "Pilih suara bawaan atau beri setiap baris sebuah suara.",
-      "lexicon": "Satu kata pelafalan tercantum dua kali. Hapus duplikatnya untuk membuat."
+      "lexicon": "Satu kata pelafalan tercantum dua kali. Hapus duplikatnya untuk membuat.",
+      "default_voice": "Pilih suara default di panel kiri untuk membuat buku audio.",
+      "cast_voice": "Sebuah nama [voice:] dipetakan ke suara yang sudah dihapus. Pilih suara lain di daftar pemeran."
     },
     "recovery_title": "Buku audio terputus",
     "recovery_progress": "{{done}} dari {{total}} bab telah di-cache",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Deskripsi emosi",
     "emotion_text_ph": "mis. terdengar lelah dan sedih",
     "emotion_alpha": "Kekuatan emosi",
-    "lex_duplicate": "Gunakan satu pelafalan untuk setiap kata."
+    "lex_duplicate": "Gunakan satu pelafalan untuk setiap kata.",
+    "default_voice_hint": "Membacakan setiap bagian tanpa tag [voice:] sendiri. Diperlukan untuk membuat buku audio."
   },
   "credentials": {
     "microsoft_key": "Kunci Penerjemah Microsoft",

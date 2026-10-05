@@ -1802,7 +1802,6 @@
     "addFirst": "Dodaj pierwszą linię",
     "linePlaceholder": "Wprowadź dialog lub narrację… użyj [pauzy 0,5 s], aby zrobić cichą przerwę",
     "text": "tekst",
-    "voice": "głos",
     "defaultVoice": "Domyślne",
     "preview": "Podgląd tej linii",
     "removeLine": "Usuń linię",
@@ -1828,7 +1827,9 @@
     "global_speed_apply": "Użyj dla wszystkich wierszy",
     "deleteProjectConfirm": "Usunąć ten projekt na stałe?",
     "moveUp": "Przenieś w górę",
-    "moveDown": "Przenieś w dół"
+    "moveDown": "Przenieś w dół",
+    "default_voice_hint": "Czyta wiersze, których postać nie ma własnego głosu.",
+    "inline_voices": "Głosy w tekście"
   },
   "markup": {
     "pause_hint": "Wstaw cichą pauzę",
@@ -1860,7 +1861,13 @@
     "guide_unknown": "Nierozpoznane tagi są czytane na głos — sprawdź pisownię",
     "guide_select": "Głos i sposób czytania obejmują zaznaczony tekst; reszta jest wstawiana w miejscu kursora.",
     "line_voice": "Głos dla tego wiersza",
-    "character_voice": "Głos postaci"
+    "character_voice": "Głos postaci",
+    "preview": "Odsłuchaj",
+    "preview_hint": "Odsłuchaj zaznaczony tekst lub akapit przy kursorze",
+    "preview_empty": "Nie ma tu nic do czytania. Umieść kursor w akapicie lub zaznacz tekst.",
+    "pronounce": "Wymowa",
+    "pronounce_hint": "Zaznacz słowo i wpisz, jak ma być czytane",
+    "guide_pronounce": "Przeczytaj słowo po swojemu w tym miejscu: [[słowo|wymowa]]"
   },
   "audiobook": {
     "cast": "Obsada",
@@ -1903,7 +1910,9 @@
       "no_lines": "Dodaj co najmniej jeden mówiony wiersz, aby generować.",
       "no_script": "Napisz lub zaimportuj skrypt, aby generować.",
       "voice": "Wybierz głos domyślny lub przypisz głos do każdego wiersza.",
-      "lexicon": "Słowo wymowy występuje dwa razy. Usuń duplikat, aby generować."
+      "lexicon": "Słowo wymowy występuje dwa razy. Usuń duplikat, aby generować.",
+      "default_voice": "Wybierz głos domyślny w panelu po lewej, aby utworzyć audiobook.",
+      "cast_voice": "Nazwa [voice:] jest przypisana do usuniętego głosu. Wybierz inny w obsadzie."
     },
     "recovery_title": "Przerwana książka audio",
     "recovery_progress": "{{done}} z {{total}} rozdziałów jest w pamięci podręcznej",
@@ -1976,7 +1985,8 @@
     "emotion_text": "Opis emocji",
     "emotion_text_ph": "np. brzmi wyczerpany i smutny",
     "emotion_alpha": "Siła emocji",
-    "lex_duplicate": "Użyj jednej wymowy dla każdego słowa."
+    "lex_duplicate": "Użyj jednej wymowy dla każdego słowa.",
+    "default_voice_hint": "Czyta każdy fragment bez własnego tagu [voice:]. Wymagany do utworzenia audiobooka."
   },
   "credentials": {
     "microsoft_key": "Klucz tłumacza Microsoft",

@@ -15,6 +15,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SmileIcon,
+  SpeechIcon,
   SpellCheckIcon,
   TurtleIcon,
   WindIcon,
@@ -41,6 +42,7 @@ import {
   insertChapter,
   insertToken,
   pauseToken,
+  pronounceSelection,
   sanitizeCastName,
   wrapSelection,
   type DeliveryTag,
@@ -148,6 +150,7 @@ export function MarkupToolbar({
   onVoiceCast,
   allowNewCharacter = false,
   onChapter,
+  actions,
   className,
 }: {
   getTarget(): MarkupTarget | null;
@@ -161,6 +164,8 @@ export function MarkupToolbar({
   allowNewCharacter?: boolean;
   /** Replaces inserting a `# Chapter` heading into the text. */
   onChapter?(): void;
+  /** Extra controls for this editor, placed before the markup guide. */
+  actions?: ReactNode;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -404,6 +409,17 @@ export function MarkupToolbar({
           {t(label)}
         </Button>
       ))}
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={disabled}
+        title={t('markup.pronounce_hint')}
+        onMouseDown={keepFocus}
+        onClick={() => apply(pronounceSelection)}
+      >
+        <SpeechIcon />
+        {t('markup.pronounce')}
+      </Button>
 
       <span aria-hidden="true" className="mx-1 h-4 w-px bg-border" />
 
@@ -466,6 +482,8 @@ export function MarkupToolbar({
         {t('markup.chapter')}
       </Button>
 
+      {actions}
+
       <Popover open={open === 'guide'} onOpenChange={toggle('guide')}>
         <PopoverTrigger
           className={cn(buttonVariants({ variant: 'ghost', size: 'icon-xs' }), 'ml-auto')}
@@ -493,6 +511,10 @@ export function MarkupToolbar({
               <Swatch kind="delivery">[spell]…[/spell]</Swatch>
             </dt>
             <dd className="text-muted-foreground">{t('markup.spell_hint')}</dd>
+            <dt>
+              <Swatch kind="pronunciation">[[gif|jiff]]</Swatch>
+            </dt>
+            <dd className="text-muted-foreground">{t('markup.guide_pronounce')}</dd>
             <dt>
               <Swatch kind="expression">[laughter]</Swatch>
             </dt>

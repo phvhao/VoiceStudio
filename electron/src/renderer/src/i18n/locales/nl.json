@@ -1798,7 +1798,6 @@
     "addFirst": "Eerste regel toevoegen",
     "linePlaceholder": "Voer een dialoog of verhaal in... gebruik [pauze 0,5s] voor een stille pauze",
     "text": "tekst",
-    "voice": "stem",
     "defaultVoice": "Standaard",
     "preview": "Bekijk een voorbeeld van deze regel",
     "removeLine": "Lijn verwijderen",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "Voor alle regels gebruiken",
     "deleteProjectConfirm": "Dit project permanent verwijderen?",
     "moveUp": "Omhoog",
-    "moveDown": "Omlaag"
+    "moveDown": "Omlaag",
+    "default_voice_hint": "Leest regels waarvan het personage geen eigen stem heeft.",
+    "inline_voices": "Stemmen in de tekst"
   },
   "markup": {
     "pause_hint": "Stille pauze invoegen",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "Onbekende tags worden voorgelezen — controleer de spelling",
     "guide_select": "Stem en voordracht omsluiten de geselecteerde tekst; de rest wordt bij de cursor ingevoegd.",
     "line_voice": "Stem voor deze regel",
-    "character_voice": "Stem van het personage"
+    "character_voice": "Stem van het personage",
+    "preview": "Beluisteren",
+    "preview_hint": "Beluister de geselecteerde tekst of de alinea bij de cursor",
+    "preview_empty": "Daar valt niets te lezen. Zet de cursor in een alinea of selecteer tekst.",
+    "pronounce": "Uitspraak",
+    "pronounce_hint": "Selecteer een woord en typ hoe het gelezen moet worden",
+    "guide_pronounce": "Lees een woord op deze plek op jouw manier: [[woord|uitspraak]]"
   },
   "audiobook": {
     "cast": "Cast",
@@ -1899,7 +1906,9 @@
       "no_lines": "Voeg minstens één gesproken regel toe om te genereren.",
       "no_script": "Schrijf of importeer een script om te genereren.",
       "voice": "Kies een standaardstem of geef elke regel een stem.",
-      "lexicon": "Een uitspraakwoord staat er dubbel in. Verwijder het duplicaat om te genereren."
+      "lexicon": "Een uitspraakwoord staat er dubbel in. Verwijder het duplicaat om te genereren.",
+      "default_voice": "Kies links een standaardstem om het luisterboek te maken.",
+      "cast_voice": "Een [voice:]-naam is gekoppeld aan een verwijderde stem. Kies een andere in de cast."
     },
     "recovery_title": "Onderbroken luisterboek",
     "recovery_progress": "{{done}} van {{total}} hoofdstukken zijn gecachet",
@@ -1972,7 +1981,8 @@
     "emotion_text": "Emotie beschrijving",
     "emotion_text_ph": "bijv. klinkt uitgeput en verdrietig",
     "emotion_alpha": "Emotie sterkte",
-    "lex_duplicate": "Gebruik één uitspraak per woord."
+    "lex_duplicate": "Gebruik één uitspraak per woord.",
+    "default_voice_hint": "Leest elk deel zonder eigen [voice:]-tag. Nodig om het luisterboek te maken."
   },
   "credentials": {
     "microsoft_key": "Microsoft Translator-sleutel",

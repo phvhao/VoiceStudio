@@ -1798,7 +1798,6 @@
     "addFirst": "新增第一行",
     "linePlaceholder": "輸入對話或旁白…使用 [暫停 0.5 秒] 進行靜默休息",
     "text": "文字",
-    "voice": "聲音",
     "defaultVoice": "預設",
     "preview": "預覽此行",
     "removeLine": "刪除線",
@@ -1824,7 +1823,9 @@
     "global_speed_apply": "套用到所有行",
     "deleteProjectConfirm": "要永久刪除此專案嗎？",
     "moveUp": "上移",
-    "moveDown": "下移"
+    "moveDown": "下移",
+    "default_voice_hint": "朗讀角色沒有專屬聲音的行。",
+    "inline_voices": "文中聲音"
   },
   "markup": {
     "pause_hint": "插入靜音停頓",
@@ -1856,7 +1857,13 @@
     "guide_unknown": "無法辨識的標籤會被唸出來——請檢查拼字",
     "guide_select": "聲音和朗讀方式會包住所選文字；其他內容插入到游標處。",
     "line_voice": "本行聲音",
-    "character_voice": "角色聲音"
+    "character_voice": "角色聲音",
+    "preview": "試聽",
+    "preview_hint": "試聽所選文字，或游標所在的段落",
+    "preview_empty": "那裡沒有可朗讀的內容。請把游標放在段落中或選取文字。",
+    "pronounce": "讀音",
+    "pronounce_hint": "選取一個詞，然後輸入它的讀法",
+    "guide_pronounce": "在此處依你的方式讀一個詞：[[詞|讀法]]"
   },
   "audiobook": {
     "cast": "配音角色",
@@ -1899,7 +1906,9 @@
       "no_lines": "請至少新增一行朗讀內容後再產生。",
       "no_script": "請撰寫或匯入腳本後再產生。",
       "voice": "請選擇預設聲音，或為每一行指定聲音。",
-      "lexicon": "發音詞典中有一個詞重複出現。請刪除重複項後再產生。"
+      "lexicon": "發音詞典中有一個詞重複出現。請刪除重複項後再產生。",
+      "default_voice": "請在左側面板選擇預設聲音以建立有聲書。",
+      "cast_voice": "某個 [voice:] 名稱對應的聲音已被刪除。請在角色分配中另選一個。"
     },
     "recovery_title": "已中斷的有聲書",
     "recovery_progress": "{{total}} 章中有 {{done}} 章已快取",
@@ -1972,7 +1981,8 @@
     "emotion_text": "情感描述",
     "emotion_text_ph": "例如 聽起來很疲勞和悲傷",
     "emotion_alpha": "情感強度",
-    "lex_duplicate": "每個詞只保留一種發音。"
+    "lex_duplicate": "每個詞只保留一種發音。",
+    "default_voice_hint": "朗讀所有沒有自身 [voice:] 標籤的部分。建立有聲書時必須選擇。"
   },
   "credentials": {
     "microsoft_key": "微軟翻譯金鑰",
