@@ -165,7 +165,7 @@ _SPLIT_CORPUS = [
     ("word " * 30).strip() + ", " + ("word " * 30).strip() + ".",
 ]
 #: ``split_into_phrases`` output over ``_SPLIT_CORPUS`` per PHRASE_SPLIT_REVISION.
-_SPLIT_FINGERPRINTS = {3: "a45424c1f124b203"}
+_SPLIT_FINGERPRINTS = {4: "58d20b27fa0bc6aa"}
 _SHIPPED_MIN_CHARS = __import__("services.chunked_tts", fromlist=["x"]).PHRASE_MIN_CHARS
 
 
@@ -180,13 +180,37 @@ def test_short_phrases_join_the_next_one_and_marked_lines_only(monkeypatch):
         "Main ideas",  # a heading: no mark, so it keeps its own take and pause
         "Be yourself – you are the only one among billions of people.",
         "Habits decide fate. Two or three good habits, kept up, make the difference.",
-        "Live fully.",  # short and last: joins the one before
+        "Act now. Live fully.",  # short and last on its line: joins the one before
     ])
     assert split_into_phrases(text) == [
         ("Main ideas", d["sentence"]),
         ("Be yourself – you are the only one among billions of people.", d["sentence"]),
-        ("Habits decide fate. Two or three good habits, kept up, make the difference. "
-         "Live fully.", 0),
+        ("Habits decide fate. Two or three good habits, kept up, make the difference.",
+         d["sentence"]),
+        ("Act now. Live fully.", 0),
+    ]
+
+
+def test_short_phrases_never_join_across_a_line_break(monkeypatch):
+    """A line or paragraph break keeps its pause: "It stopped." stays apart
+    from the next paragraph, and a short line keeps its own take."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    d = DEFAULT_PUNCTUATION_PAUSES
+    assert split_into_phrases(
+        "It stopped.\n\nIn the morning the town was quiet and nobody spoke of the night."
+    ) == [
+        ("It stopped.", d["sentence"]),
+        ("In the morning the town was quiet and nobody spoke of the night.", 0),
+    ]
+    assert split_into_phrases(
+        "The night was long and nobody in the house could sleep at all. Rain.\n"
+        "Then morning came."
+    ) == [
+        ("The night was long and nobody in the house could sleep at all. Rain.",
+         d["sentence"]),
+        ("Then morning came.", 0),
     ]
 
 

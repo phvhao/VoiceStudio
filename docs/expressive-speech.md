@@ -28,10 +28,11 @@ a long take with near-identical clauses ("Spring is …; Summer is …; Autumn i
 …") can come back with a clause copied, dropped or swapped. VoiceStudio
 therefore reads long text sentence by sentence: every sentence and clause is
 its own take, joined with a deliberate silence. A sentence or clause shorter
-than 40 characters is read together with the next one (the last with the one
-before), up to 120 characters a take: very short takes drift in pitch from one
-another and sound warped, so the engine pauses at those marks itself. A line
-that ends without a mark — a heading or list item — keeps its own take.
+than 40 characters is read together with the next one on its line (the last
+one on a line with the one before), up to 120 characters a take: very short
+takes drift in pitch from one another and sound warped, so the engine pauses at
+those marks itself. A line or paragraph break is never joined across, and a
+line that ends without a mark — a heading or list item — keeps its own take.
 
 **Settings → Reading** holds this for the whole app — Audiobook, Stories, Clone
 and Voice Design. The **Phrasing** button next to the quality controls in

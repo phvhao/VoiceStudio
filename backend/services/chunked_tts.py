@@ -209,9 +209,10 @@ PHRASE_MAX_CHARS = 200
 #: Revision of :func:`split_into_phrases`, folded into the long-form cache keys
 #: of phrase-rendered chapters so a render cut under older rules is never
 #: replayed. Bump it whenever the phrases it returns change (2: a line break
-#: ends a phrase; 3: short phrases join the next one);
+#: ends a phrase; 3: short phrases join the next one; 4: never across a
+#: line break);
 #: ``tests/test_phrase_rendering.py`` fails until you do.
-PHRASE_SPLIT_REVISION = 3
+PHRASE_SPLIT_REVISION = 4
 #: A phrase shorter than this joins the phrase after it. Measured on a
 #: three-minute Vietnamese take: takes under ~45 characters drifted twice as
 #: far in pitch from one another (about 30 Hz against 14 Hz) and came out
@@ -327,42 +328,52 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
     if not text:
         return []
     silence = {**DEFAULT_PUNCTUATION_PAUSES, **(pauses or {})}
+    # Each piece also remembers whether a line break follows it, so the
+    # short-phrase join below never runs two lines together.
     pieces: List[list] = []
     start = 0
     for end, family in _phrase_marks(text, split_commas):
-        piece = text[start:end].strip()
+        segment = text[start:end]
+        piece = segment.strip()
+        if pieces and "\n" in segment[:len(segment) - len(segment.lstrip())]:
+            pieces[-1][2] = True
         if piece:
-            pieces.append([piece, family])
+            pieces.append([piece, family, False])
         start = end
-    tail = text[start:].strip()
+    segment = text[start:]
+    if pieces and "\n" in segment[:len(segment) - len(segment.lstrip())]:
+        pieces[-1][2] = True
+    tail = segment.strip()
     if tail:
-        pieces.append([tail, None])
+        pieces.append([tail, None, False])
     # A line break ends a phrase like a full stop: list items and verse lines
     # without punctuation are separate takes. A line that ends on a mark of its
     # own (a comma that was not a boundary) keeps that mark's pause.
     lines: List[list] = []
-    for piece, family in pieces:
+    for piece, family, broke in pieces:
         parts = [part.strip() for part in piece.split("\n")]
         parts = [part for part in parts if part]
         for k, part in enumerate(parts):
             last = k == len(parts) - 1
-            lines.append([part, family if last else (_family_of_end(part) or "sentence")])
+            lines.append([part, family if last else (_family_of_end(part) or "sentence"),
+                          broke if last else True])
     pieces = lines
     # A piece with nothing to say (a lone dash or quote) joins its neighbour.
     merged: List[list] = []
-    for piece, family in pieces:
+    for piece, family, broke in pieces:
         if merged and not (_SPEAKABLE_RE.search(piece) and _SPEAKABLE_RE.search(merged[-1][0])):
-            merged[-1] = [f"{merged[-1][0]} {piece}", family]
+            merged[-1] = [f"{merged[-1][0]} {piece}", family, broke]
         else:
-            merged.append([piece, family])
+            merged.append([piece, family, broke])
     phrases: List[tuple] = []
-    for piece, family in merged:
+    for piece, family, broke in merged:
         if len(piece) <= _effective_max_chars(piece, max_chars):
-            phrases.append((piece, family))
+            phrases.append((piece, family, broke))
             continue
         parts = split_text_into_chunks(piece, max_chars)
         for k, part in enumerate(parts):
-            phrases.append((part, family if k == len(parts) - 1 else _family_of_end(part)))
+            last = k == len(parts) - 1
+            phrases.append((part, family if last else _family_of_end(part), broke and last))
     phrases = _join_short_phrases(phrases)
     out = [(phrase, int(silence.get(family, 0)) if family else 0) for phrase, family in phrases]
     if out:
@@ -371,26 +382,34 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
 
 
 def _join_short_phrases(phrases: List[tuple]) -> List[tuple]:
-    """Join each phrase shorter than :data:`PHRASE_MIN_CHARS` to the next one
-    (the last one to the one before), so the engine reads them in one take and
-    pauses at the mark itself. A phrase that ended at a bare line break (a
-    heading or list item with no mark of its own) stays apart: only the
-    inserted silence pauses after it. Joins never pass
-    :data:`PHRASE_JOIN_MAX_CHARS`."""
-    def joinable(a: str, b: str) -> bool:
-        return (_family_of_end(a) is not None
-                and len(a) + 1 + len(b) <= min(PHRASE_JOIN_MAX_CHARS,
-                                                 _effective_max_chars(a + " " + b, PHRASE_MAX_CHARS)))
+    """Join each phrase shorter than :data:`PHRASE_MIN_CHARS` to the next one on
+    its line, so the engine reads them in one take and pauses at the mark
+    itself; one with nothing after it on its line joins the phrase before it.
+    Phrases are ``(text, family, ends_line)``. A line break is never joined
+    across, and a phrase that has no mark of its own (a heading or list item)
+    takes no neighbour: both keep the inserted pause. Joins never pass
+    :data:`PHRASE_JOIN_MAX_CHARS`. Returns ``(text, family)`` pairs."""
+    def fits(a: str, b: str) -> bool:
+        return len(a) + 1 + len(b) <= min(PHRASE_JOIN_MAX_CHARS,
+                                          _effective_max_chars(a + " " + b, PHRASE_MAX_CHARS))
 
-    out: List[list] = []
-    for phrase, family in phrases:
-        if out and len(out[-1][0]) < PHRASE_MIN_CHARS and joinable(out[-1][0], phrase):
-            out[-1] = [f"{out[-1][0]} {phrase}", family]
+    def joins(before: list, after: list) -> bool:
+        return (not before[2] and _family_of_end(before[0]) is not None
+                and fits(before[0], after[0]))
+
+    forward: List[list] = []
+    for item in map(list, phrases):
+        if forward and len(forward[-1][0]) < PHRASE_MIN_CHARS and joins(forward[-1], item):
+            forward[-1] = [f"{forward[-1][0]} {item[0]}", item[1], item[2]]
         else:
-            out.append([phrase, family])
-    if len(out) > 1 and len(out[-1][0]) < PHRASE_MIN_CHARS and joinable(out[-2][0], out[-1][0]):
-        out[-2:] = [[f"{out[-2][0]} {out[-1][0]}", out[-1][1]]]
-    return [tuple(item) for item in out]
+            forward.append(item)
+    out: List[list] = []
+    for item in forward:
+        if out and len(item[0]) < PHRASE_MIN_CHARS and joins(out[-1], item):
+            out[-1] = [f"{out[-1][0]} {item[0]}", item[1], item[2]]
+        else:
+            out.append(item)
+    return [(text, family) for text, family, _ in out]
 
 
 def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,
