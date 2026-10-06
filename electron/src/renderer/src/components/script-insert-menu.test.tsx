@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import {
   SCRIPT_UNSUPPORTED_TAGS,
   ScriptInsertMenu,
-  ScriptTagSuggestions,
+  ScriptTagTools,
   useScriptInsertMenu,
 } from './script-insert-menu';
 
@@ -18,7 +18,7 @@ function Editor({ initial }: { initial: string }) {
   return (
     <>
       <ScriptInsertMenu menu={insert} setText={setText} />
-      <ScriptTagSuggestions menu={insert} setText={setText}>
+      <ScriptTagTools menu={insert} setText={setText}>
         <MarkupTextarea
           aria-label="Script"
           textareaRef={ref}
@@ -30,7 +30,7 @@ function Editor({ initial }: { initial: string }) {
           }}
           onKeyDown={insert.onEditorKeyDown}
         />
-      </ScriptTagSuggestions>
+      </ScriptTagTools>
     </>
   );
 }
@@ -46,13 +46,34 @@ const type = (text: string) => {
   element.setSelectionRange(start + text.length, start + text.length);
   fireEvent.input(element);
 };
+/** Click inside a tag, as the editor reads a click it has no layout to hit-test. */
+const clickAt = (offset: number) => {
+  script().setSelectionRange(offset, offset);
+  fireEvent.click(script());
+};
+/** Alt+Enter with the caret at `offset`. */
+const openAt = (offset: number) => {
+  script().setSelectionRange(offset, offset);
+  fireEvent.keyDown(script(), { key: 'Enter', altKey: true });
+};
+const rightClickAt = (offset: number) => {
+  script().setSelectionRange(offset, offset);
+  fireEvent.contextMenu(script());
+};
+const card = (tag: string) => screen.findByRole('dialog', { name: `Tag ${tag}` });
+const noCard = () => expect(screen.queryByRole('dialog', { name: /^Tag / })).toBeNull();
+const INSERT = 'Insert a pause or expression';
+const open = (initial: string) => {
+  render(<Editor initial={initial} />);
+  act(() => script().focus());
+};
 const startTyping = (initial: string) => {
   render(<Editor initial={initial} />);
   act(() => script().focus());
   script().setSelectionRange(initial.length, initial.length);
 };
 
-describe('ScriptTagSuggestions', () => {
+describe('ScriptTagTools', () => {
   it('suggests only the pauses and expressions a single-voice script reads', async () => {
     startTyping('Hello ');
     type('[');
@@ -109,5 +130,129 @@ describe('ScriptTagSuggestions', () => {
       'pause',
       'expression',
     ]);
+  });
+});
+
+describe('ScriptTagTools', () => {
+  afterEach(() => {
+    delete (document as { execCommand?: unknown }).execCommand;
+  });
+
+  it('opens a clicked pause and changes its length as one undoable edit', async () => {
+    const exec = vi.fn((_command: string, _ui?: boolean, _value?: string) => false);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+    open('Wait [pause 1s] here');
+    clickAt(8);
+    const pause = await card('[pause 1s]');
+    expect(script()).toHaveFocus();
+    fireEvent.click(within(pause).getByRole('button', { name: /Short/ }));
+    expect(exec).toHaveBeenCalledWith('insertText', false, '[pause 500ms]');
+    expect(script().value).toBe('Wait [pause 500ms] here');
+    await waitFor(noCard);
+  });
+
+  it('opens with Alt+Enter, sets a custom length, and removes the pause', async () => {
+    open('Wait [pause 1s] here');
+    openAt(6);
+    const pause = await card('[pause 1s]');
+    await waitFor(() =>
+      expect(within(pause).getByRole('button', { name: /Medium/ })).toHaveFocus(),
+    );
+    fireEvent.change(within(pause).getByRole('spinbutton'), { target: { value: '2.5' } });
+    fireEvent.click(within(pause).getByRole('button', { name: 'Apply' }));
+    expect(script().value).toBe('Wait [pause 2.5s] here');
+    await waitFor(noCard);
+    clickAt(8);
+    fireEvent.click(within(await card('[pause 2.5s]')).getByRole('button', { name: 'Remove tag' }));
+    expect(script().value).toBe('Wait here');
+  });
+
+  it('swaps a reaction for another sound', async () => {
+    open('Oh [laughter] no');
+    clickAt(6);
+    fireEvent.click(within(await card('[laughter]')).getByTitle('[sigh]'));
+    expect(script().value).toBe('Oh [sigh] no');
+  });
+
+  it('edits a respelling, or keeps the word', async () => {
+    open('Say [[Nguyen|nwen]] now');
+    clickAt(8);
+    const respelling = await card('[[Nguyen|nwen]]');
+    fireEvent.change(within(respelling).getByRole('textbox'), { target: { value: 'win' } });
+    fireEvent.click(within(respelling).getByRole('button', { name: 'Apply' }));
+    expect(script().value).toBe('Say [[Nguyen|win]] now');
+    await waitFor(noCard);
+    clickAt(8);
+    fireEvent.click(
+      within(await card('[[Nguyen|win]]')).getByRole('button', {
+        name: 'Remove respelling, keep the word',
+      }),
+    );
+    expect(script().value).toBe('Say Nguyen now');
+  });
+
+  it('only removes a tag the page does not read, opened by a click or Alt+Enter', async () => {
+    open('[voice:Mara]Hi [slow]there[/slow]');
+    clickAt(3);
+    const voice = await card('[voice:Mara]');
+    expect(within(voice).getByText(/Not used on this page/)).toBeVisible();
+    expect(
+      within(voice)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Remove tag']);
+    fireEvent.keyDown(script(), { key: 'Escape' });
+    await waitFor(noCard);
+    // From the keyboard the tag arrives with its own kind: still not read here.
+    openAt('[voice:Mara]Hi [sl'.length);
+    const delivery = await card('[slow]');
+    expect(within(delivery).queryByRole('group')).toBeNull();
+    fireEvent.click(
+      within(delivery).getByRole('button', { name: 'Remove this markup, keep the text' }),
+    );
+    expect(script().value).toBe('[voice:Mara]Hi there');
+  });
+
+  it("right-click offers the tag's actions, editing, and only the inserts read here", async () => {
+    open('Wait [pause 1s] here');
+    rightClickAt(8);
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('[pause 1s]')).toBeVisible();
+    const labels = within(menu)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent ?? '');
+    for (const kept of ['Change pause', 'Remove tag', 'Cut', 'Copy', 'Paste', 'Select all'])
+      expect(labels.some((label) => label.startsWith(kept))).toBe(true);
+    expect(labels).toEqual(expect.arrayContaining(['Pause', 'Pronounce', 'Reactions']));
+    for (const dropped of ['Voice', 'Delivery', 'Quieter or louder', 'Chapter'])
+      expect(labels).not.toContain(dropped);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remove tag' }));
+    expect(script().value).toBe('Wait here');
+  });
+
+  it('right-click on a tag the page does not read gives the reason and its removal only', async () => {
+    open('Say [volume -6dB]soft[/volume] now');
+    rightClickAt(7);
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText(/Not used on this page/)).toBeVisible();
+    expect(within(menu).queryByRole('menuitem', { name: /Change volume/ })).toBeNull();
+    fireEvent.click(
+      within(menu).getByRole('menuitem', { name: 'Remove this markup, keep the text' }),
+    );
+    expect(script().value).toBe('Say soft now');
+  });
+
+  it('keeps one popup open at a time with the Insert menu', async () => {
+    open('Wait [pause 1s] here');
+    clickAt(8);
+    await card('[pause 1s]');
+    fireEvent.keyDown(script(), { key: '/', altKey: true });
+    expect(screen.getByRole('dialog', { name: INSERT })).toBeVisible();
+    await waitFor(noCard);
+    // Opening a tag puts the Insert menu away.
+    act(() => script().focus());
+    openAt(8);
+    await card('[pause 1s]');
+    expect(screen.queryByRole('dialog', { name: INSERT })).toBeNull();
   });
 });

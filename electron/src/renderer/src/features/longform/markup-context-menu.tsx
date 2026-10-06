@@ -29,7 +29,9 @@ import {
   ResetDot,
   VoiceDot,
   expressionGroupLabel,
+  removeTagLabel,
   tagActions,
+  unsupportedKind,
   type TagActions,
   type TagProfile,
   type TagToolProps,
@@ -56,6 +58,7 @@ import {
   wrapSelection,
   type DeliveryTag,
   type MarkupEdit,
+  type MarkupKind,
   type MarkupToken,
 } from './script-markup';
 import { voiceAccent } from './voice-palette';
@@ -397,17 +400,23 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
           onClick={act.selectRespelling}
         />
       )}
-      <Item
-        icon={<Trash2Icon />}
-        label={
-          token.kind === 'delivery' || token.kind === 'volume'
-            ? t('context.remove_markup')
-            : token.kind === 'pronunciation'
-              ? t('context.keep_word')
-              : t('context.remove_tag')
-        }
-        onClick={act.remove}
-      />
+      <Item icon={<Trash2Icon />} label={t(removeTagLabel(token.kind))} onClick={act.remove} />
+      <ContextMenu.Separator className={SEPARATOR} />
+    </>
+  );
+}
+
+/** A right-clicked tag the page does not read: why it does nothing here, and its removal. */
+function UnsupportedTagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps }) {
+  const { t } = useTranslation();
+  const act = tagActions(tools, token);
+  return (
+    <>
+      <p className="truncate px-2 py-1 font-mono text-[11px] text-muted-foreground">{token.text}</p>
+      <p className="max-w-64 px-2 pb-1 text-xs leading-snug text-muted-foreground">
+        {t('editor.hint_unsupported')}
+      </p>
+      <Item icon={<Trash2Icon />} label={t(removeTagLabel(token.kind))} onClick={act.remove} />
       <ContextMenu.Separator className={SEPARATOR} />
     </>
   );
@@ -440,8 +449,11 @@ export function MarkupContextMenu({
   const { t } = useTranslation();
   const gainText = useVoiceGainText();
   const { getTarget, headings = false, voiceCast, onVoiceCast } = tools;
+  // Only the markup this page reads is offered (`heading` stands for chapters).
+  const reads = (kind: MarkupKind) => !tools.unsupported?.includes(kind);
   const [token, setToken] = useState<MarkupToken | null>(null);
   const [selection, setSelection] = useState(false);
+  const unread = token && unsupportedKind(tools, token);
   const capture = () => {
     const element = getTarget()?.element;
     if (!element) return;
@@ -482,7 +494,12 @@ export function MarkupContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={POPUP} finalFocus={() => getTarget()?.element ?? true}>
-            {token && <TagItems token={token} tools={tools} />}
+            {token &&
+              (unread ? (
+                <UnsupportedTagItems token={{ ...token, kind: unread }} tools={tools} />
+              ) : (
+                <TagItems token={token} tools={tools} />
+              ))}
             <Item
               icon={<ScissorsIcon />}
               label={t('context.cut')}
@@ -510,90 +527,104 @@ export function MarkupContextMenu({
               onClick={selectAll}
             />
             <ContextMenu.Separator className={SEPARATOR} />
-            <Submenu icon={<PauseIcon />} label={t('audiobook.insert_pause')}>
-              <PauseItems
-                choose={(ms) =>
-                  run((value, start, end) => insertToken(value, start, end, pauseToken(ms)))
-                }
-              />
-            </Submenu>
-            <Submenu icon={<AudioLinesIcon />} label={t('audiobook.insert_voice')}>
-              <VoiceItems
-                tools={tools}
-                choose={(name) => run((value, start, end) => applyVoice(value, start, end, name))}
-                chooseProfile={(profile) =>
-                  run((value, start, end) =>
-                    applyVoice(
-                      value,
-                      start,
-                      end,
-                      castProfileVoice(profile, voiceCast, onVoiceCast),
-                    ),
-                  )
-                }
-              />
-              <ContextMenu.Separator className={SEPARATOR} />
-              <Item
-                icon={<RotateCcwIcon />}
-                label={t('markup.voice_reset')}
-                onClick={() =>
-                  run((value, start, end) => insertToken(value, start, end, VOICE_RESET_TOKEN))
-                }
-              />
-            </Submenu>
-            <Submenu icon={<WandSparklesIcon />} label={t('context.delivery')}>
-              {DELIVERY_TAGS.map((tag) => (
-                <Item
-                  key={tag}
-                  label={t(DELIVERY_LABELS[tag])}
-                  hint={`[${tag}]`}
-                  onClick={() =>
-                    run((value, start, end) =>
-                      wrapSelection(value, start, end, `[${tag}]`, `[/${tag}]`),
-                    )
+            {reads('pause') && (
+              <Submenu icon={<PauseIcon />} label={t('audiobook.insert_pause')}>
+                <PauseItems
+                  choose={(ms) =>
+                    run((value, start, end) => insertToken(value, start, end, pauseToken(ms)))
                   }
                 />
-              ))}
-            </Submenu>
-            <Submenu icon={<Volume2Icon />} label={t('editor.volume_wrap')}>
-              {VOLUME_PRESETS.map((preset) => (
-                <Item
-                  key={preset.id}
-                  label={t(preset.label)}
-                  hint={gainText(preset.db)}
-                  onClick={() =>
+              </Submenu>
+            )}
+            {reads('voice') && (
+              <Submenu icon={<AudioLinesIcon />} label={t('audiobook.insert_voice')}>
+                <VoiceItems
+                  tools={tools}
+                  choose={(name) => run((value, start, end) => applyVoice(value, start, end, name))}
+                  chooseProfile={(profile) =>
                     run((value, start, end) =>
-                      wrapSelection(value, start, end, volumeToken(preset.db), VOLUME_CLOSE),
-                    )
-                  }
-                />
-              ))}
-            </Submenu>
-            <Item
-              icon={<SpeechIcon />}
-              label={t('markup.pronounce')}
-              onClick={() => run(pronounceSelection)}
-            />
-            <Submenu icon={<SmileIcon />} label={t('audiobook.insert_reactions')}>
-              <ExpressionItems
-                choose={(tag) => run((value, start, end) => insertToken(value, start, end, tag))}
-              />
-            </Submenu>
-            <Item
-              icon={<HeadingIcon />}
-              label={t('markup.chapter')}
-              onClick={() =>
-                onChapter
-                  ? onChapter()
-                  : run((value, start) =>
-                      insertChapter(
+                      applyVoice(
                         value,
                         start,
-                        t('stories.chapterN', { n: countHeadings(value) + 1 }),
+                        end,
+                        castProfileVoice(profile, voiceCast, onVoiceCast),
                       ),
                     )
-              }
-            />
+                  }
+                />
+                <ContextMenu.Separator className={SEPARATOR} />
+                <Item
+                  icon={<RotateCcwIcon />}
+                  label={t('markup.voice_reset')}
+                  onClick={() =>
+                    run((value, start, end) => insertToken(value, start, end, VOICE_RESET_TOKEN))
+                  }
+                />
+              </Submenu>
+            )}
+            {reads('delivery') && (
+              <Submenu icon={<WandSparklesIcon />} label={t('context.delivery')}>
+                {DELIVERY_TAGS.map((tag) => (
+                  <Item
+                    key={tag}
+                    label={t(DELIVERY_LABELS[tag])}
+                    hint={`[${tag}]`}
+                    onClick={() =>
+                      run((value, start, end) =>
+                        wrapSelection(value, start, end, `[${tag}]`, `[/${tag}]`),
+                      )
+                    }
+                  />
+                ))}
+              </Submenu>
+            )}
+            {reads('volume') && (
+              <Submenu icon={<Volume2Icon />} label={t('editor.volume_wrap')}>
+                {VOLUME_PRESETS.map((preset) => (
+                  <Item
+                    key={preset.id}
+                    label={t(preset.label)}
+                    hint={gainText(preset.db)}
+                    onClick={() =>
+                      run((value, start, end) =>
+                        wrapSelection(value, start, end, volumeToken(preset.db), VOLUME_CLOSE),
+                      )
+                    }
+                  />
+                ))}
+              </Submenu>
+            )}
+            {reads('pronunciation') && (
+              <Item
+                icon={<SpeechIcon />}
+                label={t('markup.pronounce')}
+                onClick={() => run(pronounceSelection)}
+              />
+            )}
+            {reads('expression') && (
+              <Submenu icon={<SmileIcon />} label={t('audiobook.insert_reactions')}>
+                <ExpressionItems
+                  choose={(tag) => run((value, start, end) => insertToken(value, start, end, tag))}
+                />
+              </Submenu>
+            )}
+            {reads('heading') && (
+              <Item
+                icon={<HeadingIcon />}
+                label={t('markup.chapter')}
+                onClick={() =>
+                  onChapter
+                    ? onChapter()
+                    : run((value, start) =>
+                        insertChapter(
+                          value,
+                          start,
+                          t('stories.chapterN', { n: countHeadings(value) + 1 }),
+                        ),
+                      )
+                }
+              />
+            )}
             {onListen && (
               <>
                 <ContextMenu.Separator className={SEPARATOR} />

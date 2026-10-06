@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import { ScriptPanel } from './script-panel';
 
@@ -18,6 +18,15 @@ vi.mock('@/lib/store/clone-settings', () => ({
 }));
 
 const INSERT = 'Insert a pause or expression';
+
+/** The script box, focused, with the caret at `offset`. */
+function scriptAt(offset: number) {
+  const textarea = screen.getByRole('textbox', { name: 'Script' }) as HTMLTextAreaElement;
+  act(() => textarea.focus());
+  textarea.setSelectionRange(offset, offset);
+  return textarea;
+}
+const card = (tag: string) => screen.findByRole('dialog', { name: `Tag ${tag}` });
 
 function openAt(offset: number) {
   render(<ScriptPanel />);
@@ -132,6 +141,66 @@ describe('ScriptPanel', () => {
   it('shows the character count', () => {
     render(<ScriptPanel />);
     expect(screen.getByText('11 characters')).toBeInTheDocument();
+  });
+
+  describe('tags', () => {
+    afterEach(() => {
+      delete (document as { execCommand?: unknown }).execCommand;
+    });
+
+    it('opens a clicked pause and changes it through the undo stack', async () => {
+      const exec = vi.fn((_command: string, _ui?: boolean, _value?: string) => false);
+      Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+      const onUserEdit = vi.fn();
+      script = 'Wait [pause 1s] here';
+      render(<ScriptPanel onUserEdit={onUserEdit} />);
+      fireEvent.click(scriptAt(8));
+      const pause = await card('[pause 1s]');
+      fireEvent.click(within(pause).getByRole('button', { name: /Short/ }));
+
+      expect(exec).toHaveBeenCalledWith('insertText', false, '[pause 500ms]');
+      expect(setCloneSetting).toHaveBeenLastCalledWith('text', 'Wait [pause 500ms] here');
+      expect(onUserEdit).toHaveBeenCalled();
+    });
+
+    it('opens a tag with Alt+Enter and swaps a reaction', async () => {
+      script = 'Oh [laughter] no';
+      render(<ScriptPanel />);
+      fireEvent.keyDown(scriptAt(4), { key: 'Enter', altKey: true });
+      const reaction = await card('[laughter]');
+      await waitFor(() => expect(within(reaction).getByTitle('[laughter]')).toHaveFocus());
+      fireEvent.click(within(reaction).getByTitle('[sigh]'));
+
+      expect(setCloneSetting).toHaveBeenLastCalledWith('text', 'Oh [sigh] no');
+    });
+
+    it('removes a tag from the right-click menu, which offers no voice or chapter markup', async () => {
+      script = 'Wait [pause 1s] here';
+      render(<ScriptPanel />);
+      fireEvent.contextMenu(scriptAt(8));
+      const menu = await screen.findByRole('menu');
+      expect(within(menu).queryByRole('menuitem', { name: 'Voice' })).toBeNull();
+      expect(within(menu).queryByRole('menuitem', { name: 'Chapter' })).toBeNull();
+      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remove tag' }));
+
+      expect(setCloneSetting).toHaveBeenLastCalledWith('text', 'Wait here');
+    });
+
+    it('offers only removal for a voice tag, which Clone does not read', async () => {
+      script = '[voice:Mara]Hello';
+      render(<ScriptPanel />);
+      fireEvent.click(scriptAt(3));
+      const voice = await card('[voice:Mara]');
+      expect(within(voice).getByText(/Not used on this page/)).toBeVisible();
+      expect(
+        within(voice)
+          .getAllByRole('button')
+          .map((button) => button.textContent),
+      ).toEqual(['Remove tag']);
+      fireEvent.click(within(voice).getByRole('button', { name: 'Remove tag' }));
+
+      expect(setCloneSetting).toHaveBeenLastCalledWith('text', 'Hello');
+    });
   });
 
   it('closes the caret menu on window resize without treating Window as a DOM node', () => {

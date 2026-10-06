@@ -55,6 +55,7 @@ metadata and the backend fallback mirror it.
 - Settings → General → Spellcheck while writing (off by default) checks scripts, lines, transcripts and test phrases in Vietnamese and English; dubbing segments and pasted translations, always checked before, follow it too
 - Spellchecking never downloads a dictionary: Windows and macOS check offline with the system's checker, and Linux uses only dictionaries already on the computer
 - Typing [ in Clone and Voice Design suggests pauses and reactions, and voice, delivery and volume tags there are underlined as not used on the page
+- Clone and Voice Design open a card for a clicked pause, reaction or respelling (or Alt+Enter on it) and add the tag-aware right-click menu; tags those pages do not read can only be removed
 
 ## [0.5.7] — 2026-10-05
 

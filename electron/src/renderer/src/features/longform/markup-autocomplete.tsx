@@ -73,6 +73,9 @@ const GROUP_LABELS: Record<SuggestionGroup, string> = {
   expression: 'audiobook.insert_reactions',
 };
 
+/** Every kind of tag the suggestions can offer; each is named after its markup kind. */
+export const SUGGESTION_GROUPS = Object.keys(GROUP_LABELS) as SuggestionGroup[];
+
 /** The voices a script can switch to; a single-voice editor has none. */
 type VoiceContext = Partial<Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>>;
 

@@ -54,7 +54,7 @@ import { Input } from '@/components/ui/input';
 import {
   SCRIPT_UNSUPPORTED_TAGS,
   ScriptInsertMenu,
-  ScriptTagSuggestions,
+  ScriptTagTools,
   useScriptInsertMenu,
 } from '@/components/script-insert-menu';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
@@ -511,7 +511,11 @@ export function DesignPage() {
               </label>
               <ScriptInsertMenu menu={insert} setText={setScript} />
             </div>
-            <ScriptTagSuggestions menu={insert} setText={setScript}>
+            <ScriptTagTools
+              menu={insert}
+              setText={setScript}
+              className="flex min-h-40 flex-1 flex-col"
+            >
               <MarkupTextarea
                 id="design-script"
                 textareaRef={scriptRef}
@@ -526,7 +530,7 @@ export function DesignPage() {
                 }}
                 onKeyDown={insert.onEditorKeyDown}
               />
-            </ScriptTagSuggestions>
+            </ScriptTagTools>
           </div>
           <div className="mx-auto w-full max-w-4xl shrink-0 px-6 pb-4">
             {designBlocker === 'engine' && !generation.isGenerating && (

@@ -50,6 +50,7 @@ import {
   VOLUME_CLOSE,
   VOLUME_PRESETS,
   changeDeliveryKind,
+  classifyToken,
   cleanRespelling,
   deliveryKind,
   expressionGroups,
@@ -72,6 +73,7 @@ import {
   volumeOpening,
   type DeliveryTag,
   type MarkupEdit,
+  type MarkupKind,
   type MarkupToken,
 } from './script-markup';
 import { voiceAccent } from './voice-palette';
@@ -105,6 +107,12 @@ export interface TagToolProps {
   defaultVoiceName?: string;
   /** Audition `from…to` of the script, such as one voice's part. */
   onListenRange?(from: number, to: number): void;
+  /**
+   * Markup this page does not read (voice switches, delivery and volume on
+   * Clone and Voice Design; `heading` for chapters): such a tag can only be
+   * removed, and none of these is offered to insert.
+   */
+  unsupported?: readonly MarkupKind[];
 }
 
 export const DELIVERY_LABELS: Record<DeliveryTag, string> = {
@@ -120,6 +128,47 @@ export const DELIVERY_ICONS: Record<DeliveryTag, ComponentType<{ className?: str
   emphasis: BoldIcon,
   spell: SpellCheckIcon,
 };
+
+/**
+ * The kind of a tag the page does not read (`TagToolProps.unsupported`), or
+ * `null`. The editor marks such a tag `unknown`; its own kind still says how
+ * it goes, such as a delivery pair that keeps its words.
+ */
+export function unsupportedKind(
+  tools: Pick<TagToolProps, 'unsupported'>,
+  token: MarkupToken,
+): MarkupToken['kind'] | null {
+  const kind = classifyToken(token.text) as MarkupToken['kind'];
+  return tools.unsupported?.includes(kind) ? kind : null;
+}
+
+/** The label key of what removing a tag does: unwrap a pair, keep a respelled word, or drop it. */
+export function removeTagLabel(kind: MarkupToken['kind']): string {
+  if (kind === 'delivery' || kind === 'volume') return 'context.remove_markup';
+  return kind === 'pronunciation' ? 'context.keep_word' : 'context.remove_tag';
+}
+
+/** The label key of a tag kind, as the toolbar names it. */
+function tagKindLabel(token: MarkupToken): string {
+  switch (token.kind) {
+    case 'voice':
+      return 'audiobook.insert_voice';
+    case 'voiceReset':
+      return 'markup.voice_reset';
+    case 'pause':
+      return 'audiobook.insert_pause';
+    case 'delivery':
+      return DELIVERY_LABELS[deliveryKind(token.text) ?? 'slow'];
+    case 'volume':
+      return 'markup.volume';
+    case 'expression':
+      return 'audiobook.insert_reactions';
+    case 'pronunciation':
+      return 'markup.pronounce';
+    case 'unknown':
+      return 'editor.card_unknown_title';
+  }
+}
 
 /** The label key of an expression group: its sound, or "Reactions" for the rest. */
 export function expressionGroupLabel(key: string): string {
@@ -495,8 +544,10 @@ interface BodyProps {
   onDone(): void;
 }
 
-function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>) {
+function TagCardBody({ token: shown, tools, focusRef, onDone }: Omit<BodyProps, 'act'>) {
   const { t } = useTranslation();
+  const unread = unsupportedKind(tools, shown);
+  const token = unread ? { ...shown, kind: unread } : shown;
   const act = tagActions(tools, token);
   const props = { token, tools, act, focusRef, onDone };
   const remove = (
@@ -512,6 +563,7 @@ function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>)
       {t('context.remove_tag')}
     </Button>
   );
+  if (unread) return <UnsupportedBody {...props} />;
   switch (token.kind) {
     case 'voice':
     case 'voiceReset':
@@ -540,6 +592,40 @@ function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>)
         </>
       );
   }
+}
+
+/** A tag this page does not read: what it is, why it does nothing here, and its removal. */
+function UnsupportedBody({ token, act, focusRef, onDone }: BodyProps) {
+  const { t } = useTranslation();
+  const pair = token.kind === 'delivery' || token.kind === 'volume';
+  const Icon = pair ? RemoveFormattingIcon : Trash2Icon;
+  return (
+    <>
+      <Header
+        icon={<CircleAlertIcon className="size-3.5 shrink-0 text-destructive" />}
+        title={t(tagKindLabel(token))}
+        token={token}
+      >
+        {t('editor.hint_unsupported')}
+      </Header>
+      <Footer
+        end={
+          <Button
+            ref={(node) => void (focusRef.current = node)}
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              act.remove();
+              onDone();
+            }}
+          >
+            <Icon />
+            {t(removeTagLabel(token.kind))}
+          </Button>
+        }
+      />
+    </>
+  );
 }
 
 /** `[voice:NAME]` and `[voice:]`: who reads from here, who that is cast to, and how loud. */

@@ -1,5 +1,9 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { MarkupAutocomplete, useMarkupAutocomplete } from './markup-autocomplete';
+import {
+  MarkupAutocomplete,
+  SUGGESTION_GROUPS,
+  useMarkupAutocomplete,
+} from './markup-autocomplete';
 import { MarkupContextMenu } from './markup-context-menu';
 import { MarkupEditorContext, type MarkupEditorEvents } from './markup-editor-context';
 import { MarkupTagCard, type TagActivation, type TagToolProps } from './markup-tag-card';
@@ -8,13 +12,17 @@ import { MarkupTagCard, type TagActivation, type TagToolProps } from './markup-t
  * What makes the tags of a script editor interactive: the right-click menu
  * around it, the card a clicked tag opens (or Alt+Enter on it), and the
  * suggestions shown while a tag is typed after `[`. Wrap a `MarkupTextarea`
- * in it; the textarea finds the tools through `MarkupEditorContext`.
+ * in it; the textarea finds the tools through `MarkupEditorContext`. With
+ * `unsupported`, a page offers only the markup it reads (Clone and Voice
+ * Design: pauses, reactions and respellings).
  */
 export function MarkupEditorTools({
   children,
   disabled,
   onChapter,
   onListen,
+  otherPopupOpen = false,
+  onOpen,
   className,
   ...tools
 }: TagToolProps & {
@@ -24,26 +32,40 @@ export function MarkupEditorTools({
   onChapter?(): void;
   /** Audition the passage at the caret. */
   onListen?(): void;
+  /** A popup of the page's own is open at the editor (an Insert menu): the card makes way. */
+  otherPopupOpen?: boolean;
+  /** The card, the menu or the suggestions opened: the page puts its own popups away. */
+  onOpen?(): void;
   className?: string;
 }) {
   const [card, setCard] = useState<TagActivation | null>(null);
-  if (disabled && card) setCard(null);
+  if ((disabled || otherPopupOpen) && card) setCard(null);
   const activations = useRef(0);
+  const { unsupported } = tools;
+  const groups = useMemo(
+    () => unsupported && SUGGESTION_GROUPS.filter((group) => !unsupported.includes(group)),
+    [unsupported],
+  );
   const suggestions = useMarkupAutocomplete({
     ...tools,
+    groups,
     disabled,
     // One popup at a time: typing a new tag puts the card away.
-    onOpen: () => setCard(null),
+    onOpen: () => {
+      setCard(null);
+      onOpen?.();
+    },
   });
   // The editor calls these between renders: they read the latest state.
-  const latest = useRef({ card, suggestions });
+  const latest = useRef({ card, suggestions, onOpen });
   useLayoutEffect(() => {
-    latest.current = { card, suggestions };
+    latest.current = { card, suggestions, onOpen };
   });
   const events = useMemo<MarkupEditorEvents>(
     () => ({
       onTokenActivate(token, handle, via) {
         latest.current.suggestions.close();
+        latest.current.onOpen?.();
         setCard({ token, handle, via, id: ++activations.current });
       },
       onEditorKeyDown: (event, handle) => latest.current.suggestions.onKeyDown(event, handle),
@@ -76,6 +98,7 @@ export function MarkupEditorTools({
           if (!open) return;
           setCard(null);
           suggestions.close();
+          onOpen?.();
         }}
       >
         <MarkupEditorContext.Provider value={events}>{children}</MarkupEditorContext.Provider>

@@ -11,7 +11,7 @@ ignores.
 
 | You want | Do this | Works on |
 |---|---|---|
-| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text — on Clone and Voice Design, ⊕ Insert (or **Alt+/**) offers the Audiobook pause lengths and a custom one, and typing `[` suggests pauses and reactions; tags are highlighted as you type, and voice, delivery and volume tags, which only Audiobook and Stories read, are underlined there as not used on the page (the engine would read them aloud) | Every engine |
+| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text — on Clone and Voice Design, ⊕ Insert (or **Alt+/**) offers the Audiobook pause lengths and a custom one, and typing `[` suggests pauses and reactions; tags are highlighted as you type, clicking a pause, reaction or respelling (or **Alt+Enter** on it) opens a card to change it, and right-clicking offers the same; voice, delivery and volume tags, which only Audiobook and Stories read, are underlined there as not used on the page (the engine would read them aloud), and their card only removes them — see [The script editor](#the-script-editor) | Every engine |
 | Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Volume**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
 | Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
 | One passage quieter or louder (a whisper, a shout) | Wrap it in `[volume -6dB]…[/volume]` — the toolbar's **Volume** does it for the selected text — see [Voice volume](#voice-volume) | Every engine |
@@ -140,6 +140,16 @@ tag offers the same actions. Typing `[` suggests voices (the script's names
 and your voice profiles), pauses, delivery, volume steps and reactions; ↑↓ choose, **Enter** or **Tab** inserts and
 **Esc** closes. Tags inside a `# Chapter` line are part of the title, so they
 are not clickable there.
+
+On Clone and Voice Design the same cards and right-click menu work for the
+markup a single-voice script reads: **`[pause …]`** (a preset, a typed length,
+or remove), **reactions** (swap or remove) and **`[[word|respelling]]`** (edit
+the respelling, or keep the word). A voice, delivery or volume tag there says
+it is not used on the page and offers only its removal. The right-click menu
+keeps cut, copy, paste and select all, and inserts pauses, reactions and
+**Pronounce**; voices, delivery, volume and chapters stay in Audiobook and
+Stories. Edits undo with **Ctrl+Z**, and only one of the card, the menu, the
+`[` suggestions and ⊕ Insert is open at a time.
 
 ## Voice volume
 
