@@ -3231,6 +3231,7 @@ def _make_room_before_tts_load() -> None:
     instead of after the idle timeout — and only when free memory is actually
     tight, so a roomy machine pays nothing.
     """
+    _check_recognizer_gives_way("load")
     try:
         from services.memory_budget import available_memory
         free_gb = (available_memory() or {}).get("ram_available_gb")
@@ -3246,20 +3247,40 @@ def _make_room_before_tts_load() -> None:
 
 
 def _release_idle_tts_memory(stage):
-    """Drop capture-ASR, TTS side caches, and allocator caches. Best-effort;
-    never raises (a cleanup failure must not break the load/generate that called
-    it). Shared by the cold-load and warm-generate make-room paths so the
-    eviction recipe cannot drift between them (#730/#1190)."""
+    """Drop capture-ASR, the speech check's recognizer, TTS side caches, and
+    allocator caches. Best-effort; never raises (a cleanup failure must not
+    break the load/generate that called it). Shared by the cold-load and
+    warm-generate make-room paths so the eviction recipe cannot drift between
+    them (#730/#1190)."""
     try:
         try:
             from services.asr_backend import release_idle_capture_backend
             release_idle_capture_backend(0.0)  # 0s idle = release if unleased
         except Exception:  # noqa: BLE001 -- best-effort, never blocks the caller
             logger.debug("capture-ASR pre-%s release failed", stage, exc_info=True)
+        try:
+            from services.asr_backend import release_check_recognizer
+            # Between two checks, even mid-render: the render's next check
+            # loads it again, which costs less than starving synthesis.
+            release_check_recognizer()
+        except Exception:  # noqa: BLE001 -- best-effort, never blocks the caller
+            logger.debug("speech-check ASR pre-%s release failed", stage, exc_info=True)
         release_tts_side_caches()
         free_vram()
     except Exception:  # noqa: BLE001 -- a cleanup failure must never break the caller
         logger.debug("pre-%s memory reclaim skipped", stage, exc_info=True)
+
+
+def _check_recognizer_gives_way(stage):
+    """The speech check's recognizer, kept loaded between a render's checks,
+    gives way once the memory it takes runs low — VRAM for one on a GPU,
+    which the RAM-based make-room policy never looks at, RAM for one on the
+    CPU. Costs nothing while none is loaded; best-effort, never raises."""
+    try:
+        from services.asr_backend import release_check_recognizer_when_memory_low
+        release_check_recognizer_when_memory_low()
+    except Exception:  # noqa: BLE001 -- best-effort, never blocks the caller
+        logger.debug("speech-check ASR pre-%s release failed", stage, exc_info=True)
 
 
 def _should_make_room_for_generate():
@@ -3305,6 +3326,7 @@ def make_room_before_generate():
     abandoned worker; only a crash-isolated subprocess engine can (see
     services.subprocess_backend).
     """
+    _check_recognizer_gives_way("generate")
     if not _should_make_room_for_generate():
         return
     _release_idle_tts_memory("generate")
@@ -3542,6 +3564,15 @@ async def idle_worker():
                 free_vram()
         except Exception:  # noqa: BLE001 — the reaper must never kill idle_worker
             logger.warning("idle capture-ASR release failed", exc_info=True)
+        # The speech check's recognizer goes when its render ends; this catches
+        # one a render stopped using (stuck, or a lease never released).
+        try:
+            from services.asr_backend import release_check_recognizer
+
+            if release_check_recognizer(idle_s=idle_timeout):
+                free_vram()
+        except Exception:  # noqa: BLE001 — the reaper must never kill idle_worker
+            logger.warning("idle speech-check ASR release failed", exc_info=True)
         # Same bargain for the AudioSeal watermark models, which loaded on the
         # first embed and were never released. Deliberately only here and not
         # in the make-room paths: watermarking runs immediately *after* a

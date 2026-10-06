@@ -36,12 +36,24 @@ import os
 import sys
 from typing import TYPE_CHECKING
 
+from services.language_codes import engine_language_code
 from services.subprocess_backend import SubprocessBackend
 
 if TYPE_CHECKING:
     import torch  # noqa: F401
 
 logger = logging.getLogger("omnivoice.dots_tts")
+
+
+def sidecar_language(language: object) -> "str | None":
+    """What the sidecar is sent for a request's ``language``. dots.tts takes
+    2-letter ISO codes ("ZH") or names; the pickers' labels ("Chinese
+    (Simplified)") are neither, so a language with a 2-letter code is sent
+    as that code, anything else as given."""
+    if not language:
+        return None
+    code = engine_language_code(language)
+    return code if code and len(code) == 2 else str(language)
 
 
 class DotsTTSBackend(SubprocessBackend):
@@ -183,9 +195,9 @@ class DotsTTSBackend(SubprocessBackend):
                 "(upstream requires prompt_audio_path when prompt_text is set)."
             )
 
-        language = kw.get("language")
+        language = sidecar_language(kw.get("language"))
         if language:
-            forwarded["language"] = str(language)
+            forwarded["language"] = language
 
         # OmniVoice's generic num_step default is 16; dots.tts's own default
         # is 10. Honor an explicit value, else use the dots-appropriate 10.

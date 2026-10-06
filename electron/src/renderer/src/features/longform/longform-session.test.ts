@@ -114,6 +114,29 @@ it('keeps the phrases to listen to when a chapter comes from the cache', async (
     { title: 'One', status: 'cached', suspects: ['The lamp held.'] },
   ]);
 });
+it('keeps how many phrases the speech check could not listen to, and why', async () => {
+  const check = { checked: 0, retaken: 0, unchecked: 4, suspect: [], unavailable: true };
+  fetchMock.mockResolvedValue(
+    eventResponse([
+      { type: 'started', chapters: 3 },
+      { type: 'chapter', index: 0, title: 'One', speech_check: check },
+      { type: 'chapter', index: 1, title: 'Two', speech_check: { ...check, unchecked: 'x' } },
+      {
+        type: 'chapter',
+        index: 2,
+        title: 'Three',
+        speech_check: { ...check, unchecked: 2, no_recognizer: true },
+      },
+      { type: 'done', output: 'new.m4b', failed_chapters: [] },
+    ]),
+  );
+  await renderLongform('audiobook');
+  expect(longformSession.state.drafts.audiobook.outputChapters).toEqual([
+    { title: 'One', status: 'done', unchecked: 4 },
+    { title: 'Two', status: 'done' },
+    { title: 'Three', status: 'done', unchecked: 2, noRecognizer: true },
+  ]);
+});
 it('stop aborts the network request and blocks duplicate renders', async () => {
   fetchMock.mockImplementation(
     (_url, options) =>

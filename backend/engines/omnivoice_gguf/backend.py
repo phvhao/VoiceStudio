@@ -642,6 +642,7 @@ def _make_backend_class():
                     ref_audio=kw.get("ref_audio"),
                     ref_text=str(ref_text_path) if ref_text_path else None,
                     language=kw.get("language"),
+                    text=text,
                     instruct=kw.get("instruct"),
                     duration=kw.get("duration"),
                     seed=kw.get("seed"),
@@ -686,6 +687,7 @@ def _make_backend_class():
             ref_audio: Optional[str],
             ref_text: Optional[str],
             language: Optional[str],
+            text: str = "",
             instruct: Optional[str] = None,
             duration: Optional[float] = None,
             seed: Optional[int] = None,
@@ -694,14 +696,17 @@ def _make_backend_class():
             chunk_duration: Optional[float] = None,
             chunk_threshold: Optional[float] = None,
         ) -> list[str]:
-            """Compose argv from typed Path objects only (T-04-02)."""
+            """Compose argv from typed Path objects only (T-04-02).
+
+            ``text`` only picks the Kurdish variety its script is written in.
+            """
             argv: list[str] = [
                 str(_binary_path()),
                 "--model", str(base),
                 "--codec", str(tokenizer),
                 "-o", str(out_path),
             ]
-            lang = _iso_to_omnivoice_lang(language)
+            lang = _iso_to_omnivoice_lang(language, text)
             if lang:
                 argv += ["--lang", lang]
             if instruct:
@@ -811,34 +816,27 @@ def _make_backend_class():
     return _OmniVoiceGGUFBackend_cls
 
 
-def _iso_to_omnivoice_lang(code: Optional[str]) -> Optional[str]:
-    """Map ISO-639 codes (and a few aliases) to omnivoice-tts language labels.
+def _iso_to_omnivoice_lang(code: Optional[str], text: str = "") -> Optional[str]:
+    """Map a language as the app spells it to an omnivoice-tts language name.
 
-    ``omnivoice-tts`` expects names like ``English``, ``French``, etc.
-    per the README example. Anything we don't recognize is dropped (the
-    binary will auto-detect from the prompt).
+    ``omnivoice-tts`` takes names like ``English`` per the README example.
+    ISO codes, the pickers' labels and codes ("Arabic", "cmn-Hans") and
+    OmniVoice's own names resolve through the vocabulary the in-process model
+    reads, to its name for that language ("Standard Arabic", "Chinese");
+    ``text`` picks the Kurdish variety by its script. A language the
+    vocabulary lacks is passed on capitalized, as before.
     """
     if not code:
         return None
     c = code.strip().lower()
     if c in ("auto", "multi", ""):
         return None
-    return _ISO_TO_OV.get(c, c.capitalize())
+    from omnivoice.utils.lang_map import LANG_NAME_TO_ID, lang_display_name
+    from services.language_codes import omnivoice_language
 
-
-_ISO_TO_OV = {
-    "en": "English",
-    "fr": "French",
-    "de": "German",
-    "es": "Spanish",
-    "it": "Italian",
-    "pt": "Portuguese",
-    "zh": "Chinese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "ar": "Arabic",
-    "ru": "Russian",
-}
+    language_id = omnivoice_language(code, text)
+    name = next((name for name, value in LANG_NAME_TO_ID.items() if value == language_id), None)
+    return lang_display_name(name) if name else c.capitalize()
 
 
 def __getattr__(name: str):

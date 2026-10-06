@@ -56,13 +56,19 @@ def available_memory() -> dict:
     return out
 
 
-def low_memory_warning(headroom_gb: float = _LOW_RAM_HEADROOM_GB) -> Optional[str]:
+def low_memory_warning(headroom_gb: float = _LOW_RAM_HEADROOM_GB, *,
+                       vram: bool = True) -> Optional[str]:
     """A one-line advisory when free memory is below ``headroom_gb``, else None.
 
     Checks free VRAM on a dedicated-GPU host, otherwise free system RAM (the
-    figure that matters on MPS/CPU). Pure given ``available_memory`` output —
-    ``_format`` does the wording — so the threshold logic is unit-testable."""
-    return _format(available_memory(), headroom_gb)
+    figure that matters on MPS/CPU). ``vram=False`` checks system RAM on a GPU
+    host too, for weights that sit there (a model on the CPU): free VRAM says
+    nothing about them. Pure given ``available_memory`` output — ``_format``
+    does the wording — so the threshold logic is unit-testable."""
+    mem = available_memory()
+    if not vram:
+        mem = {key: value for key, value in mem.items() if not key.startswith("vram_")}
+    return _format(mem, headroom_gb)
 
 
 def _format(mem: dict, headroom_gb: float) -> Optional[str]:

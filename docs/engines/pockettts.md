@@ -55,7 +55,9 @@ for this model.
 
 - Output is 24 kHz mono.
 - Six languages, one model per language, chosen by the `language` you
-  request; cloning takes a short reference clip.
+  request; cloning takes a short reference clip. The language pickers offer
+  only these six, any spelling of them works (Portuguese, pt, pt-BR), and
+  another language is refused before the engine starts.
 - Runs in a crash-isolated sidecar process: from its own environment after
   a one-click install, otherwise from VoiceStudio's (where `uv sync --extra
   pockettts` puts it). A wedged generation is hard-killed by a watchdog and its memory reclaimed —

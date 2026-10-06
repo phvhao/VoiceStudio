@@ -245,6 +245,27 @@ def list_loaded() -> dict:
         logger.warning("Loaded-model inventory unavailable for dictation")
         degraded_sources.append("dictation")
 
+    # 6b. The speech check's recognizer — loaded for a render that checks its
+    #     reading and released when the render ends.
+    try:
+        import services.asr_backend as ab
+
+        check = getattr(ab, "_check_backend", None)
+        if check is not None and ab._owns_check_weights(check) and check.execution_evidence_loaded():
+            key = getattr(ab, "_check_backend_key", None) or ()
+            models.append({
+                "id": "speech-check-asr",
+                "name": f"{getattr(check, 'display_name', type(check).__name__)} (speech check)",
+                "checkpoint": (key[-1] if key else None) or type(check).__name__,
+                "device": _backend_device(check),
+                "vram_mb": 0,
+                "unloadable": True,
+                "note": "released when the render ends",
+            })
+    except Exception:
+        logger.warning("Loaded-model inventory unavailable for the speech check")
+        degraded_sources.append("speech-check")
+
     # 7. Offline translation can remain resident when the user opts out of the
     # default post-job release. Keep it visible and manually unloadable.
     try:
@@ -322,6 +343,17 @@ async def unload(model_id: str) -> dict:
             return {"unloaded": model_id, "success": True}
         return {"unloaded": model_id, "success": False, "reason": "in use by dictation"}
 
+    # A render that is still checking loads it again at its next check; only
+    # a transcription in progress keeps it.
+    if model_id == "speech-check-asr":
+        import services.asr_backend as ab
+
+        if getattr(ab, "_check_backend", None) is None:
+            return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+        if ab.release_check_recognizer():
+            return {"unloaded": model_id, "success": True}
+        return {"unloaded": model_id, "success": False, "reason": "in use by the speech check"}
+
     if model_id == "translation:nllb":
         from api.routers import dub_translate as dt
 
@@ -369,9 +401,11 @@ async def unload(model_id: str) -> dict:
 
 
 async def unload_all() -> dict:
-    """Release shared/alternate TTS, diarisation, sidecars, dictation and translation."""
+    """Release shared/alternate TTS, diarisation, sidecars, dictation, the
+    speech check's recognizer and translation."""
     results = {}
-    model_ids = ["tts", "diarization", "sidecars", "capture-asr", "translation:nllb"]
+    model_ids = ["tts", "diarization", "sidecars", "capture-asr", "speech-check-asr",
+                 "translation:nllb"]
     try:
         model_ids.extend(
             entry["id"]

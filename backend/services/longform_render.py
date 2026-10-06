@@ -851,14 +851,17 @@ def _count(value) -> Optional[int]:
 def valid_speech_check(record) -> Optional[dict]:
     """A speech-check result as it is kept with cached audio, or ``None``.
 
-    ``{"checked", "retaken", "unchecked", "suspect", "unavailable"}``: takes
-    listened to, takes rendered again, takes the check could not listen to (no
-    working recognizer), the phrases that still differ (``{"text",
-    "score"}``), and whether the recognizer was missing. The record travels
-    with the audio — a segment's sidecar, a chapter's timeline — so a render
-    that reuses the audio still reports what was found; it is checked on the
-    way in because a sidecar is only a file on disk. Readers ignore keys they
-    do not know."""
+    ``{"checked", "retaken", "unchecked", "suspect", "unavailable",
+    "no_recognizer"}``: takes listened to, takes rendered again, takes the
+    check could not listen to (no recognizer installed, or one that heard no
+    words or failed), the phrases that still differ (``{"text", "score"}``),
+    whether the check turned itself off, and whether takes went unheard
+    because no recognizer was installed (``False`` in records kept before
+    that was said).
+    The record travels with the audio — a segment's sidecar, a chapter's
+    timeline — so a render that reuses the audio still reports what was
+    found; it is checked on the way in because a sidecar is only a file on
+    disk. Readers ignore keys they do not know."""
     if not isinstance(record, dict):
         return None
     counts = {key: _count(record.get(key, 0)) for key in ("checked", "retaken", "unchecked")}
@@ -875,7 +878,8 @@ def valid_speech_check(record) -> Optional[dict]:
         if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(score):
             continue
         suspects.append({"text": item["text"][:300], "score": round(float(score), 2)})
-    return {**counts, "suspect": suspects, "unavailable": record.get("unavailable") is True}
+    return {**counts, "suspect": suspects, "unavailable": record.get("unavailable") is True,
+            "no_recognizer": record.get("no_recognizer") is True}
 
 
 # ── Loudness normalization ──────────────────────────────────────────────────

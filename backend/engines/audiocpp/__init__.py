@@ -500,14 +500,8 @@ class AudioCPPBackend(TTSBackend):
         # verified spelling against app/server/runtime.cpp.
         instruct = kw.get("instruct") or kw.get("description") or None
 
-        language = kw.get("language")
-        if language and str(language).strip().lower() not in {
-            "auto", "en", "english", "zh", "chinese",
-        }:
-            logger.info(
-                "audio.cpp (Breeze-TTS-2) is en+zh only; ignoring "
-                "language=%r.", language,
-            )
+        # The request names no language: Breeze-TTS-2 reads English or Chinese
+        # from the text, and the check above refuses any other language.
         if kw.get("speed", 1.0) != 1.0:
             logger.info("audio.cpp: speed is not supported; ignoring.")
 

@@ -41,6 +41,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from services.language_codes import engine_language_code
 from services.subprocess_backend import SubprocessBackend
 from engines.supertonic3 import constants as st3_constants
 
@@ -57,6 +58,13 @@ def _own_venv_python() -> "Path | None":
     from services.sidecar_install import engine_venv_python
 
     return engine_venv_python(_VENV_ENV_VAR)
+
+
+def sidecar_language(language: object) -> "str | None":
+    """What the sidecar is sent for a request's ``language``: its ISO 639
+    code, which the SDK takes. A picked name used to reach the sidecar as-is
+    and lose all but two letters: "Swedish" became "sw"."""
+    return engine_language_code(language) or (None if language is None else str(language))
 
 
 # Absolute path to the sidecar script ‑‑ same pattern as IndexTTS's
@@ -217,7 +225,7 @@ class Supertonic3Backend(SubprocessBackend):
             )
             voice = st3_constants.DEFAULT_VOICE
 
-        language = kw.get("language")
+        lang = sidecar_language(kw.get("language"))
         speed = float(kw.get("speed", 1.0))
         speed = max(0.7, min(2.0, speed))
 
@@ -230,7 +238,7 @@ class Supertonic3Backend(SubprocessBackend):
         # ``total_steps`` all qualify.
         forwarded = {
             "voice": voice,
-            "lang": language if language is None else str(language),
+            "lang": lang,
             "speed": speed,
             "total_steps": total_steps,
         }

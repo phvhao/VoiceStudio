@@ -562,12 +562,19 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     </Button>
                   </div>
                 )}
-                {(passage.error || passage.suspects.length > 0 || passage.empty) && (
+                {(passage.error ||
+                  passage.suspects.length > 0 ||
+                  passage.unchecked > 0 ||
+                  passage.empty) && (
                   <div className="shrink-0 space-y-2 border-b border-border/50 p-2">
                     {passage.error && (
                       <PipelineFailure fallback={passage.error} onDismiss={passage.dismiss} />
                     )}
-                    <SpeechCheckReport suspects={passage.suspects} />
+                    <SpeechCheckReport
+                      suspects={passage.suspects}
+                      unchecked={passage.unchecked}
+                      noRecognizer={passage.noRecognizer}
+                    />
                     {passage.empty && (
                       <p role="status" className="px-1 text-xs text-muted-foreground">
                         {t('markup.preview_empty')}

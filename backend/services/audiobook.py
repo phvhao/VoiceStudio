@@ -837,7 +837,8 @@ _PROBE_SECONDS = 30
 
 def speech_check_record() -> dict:
     """An empty speech-check result (``longform_render.valid_speech_check``)."""
-    return {"checked": 0, "retaken": 0, "unchecked": 0, "suspect": [], "unavailable": False}
+    return {"checked": 0, "retaken": 0, "unchecked": 0, "suspect": [], "unavailable": False,
+            "no_recognizer": False}
 
 
 def add_speech_check(total: dict, part: dict) -> None:
@@ -845,7 +846,8 @@ def add_speech_check(total: dict, part: dict) -> None:
     for key in ("checked", "retaken", "unchecked"):
         total[key] += part.get(key, 0)
     total["suspect"].extend(part.get("suspect") or [])
-    total["unavailable"] = bool(total["unavailable"] or part.get("unavailable"))
+    for flag in ("unavailable", "no_recognizer"):
+        total[flag] = bool(total.get(flag) or part.get(flag))
 
 
 def speech_check_answers(verifier, audio, sample_rate: int) -> bool:
@@ -860,14 +862,19 @@ def speech_check_answers(verifier, audio, sample_rate: int) -> bool:
         return False
     if getattr(verifier, "checked", 0):
         return True
+    hear = getattr(verifier, "hear", None)
     transcribe = getattr(verifier, "transcribe", None)
-    if transcribe is None or audio is None:
+    if (hear is None and transcribe is None) or audio is None:
         return False
     try:
         may_answer = getattr(verifier, "may_answer", None)
         if may_answer is not None and not may_answer():
             return False
-        return transcribe(audio[..., :int(sample_rate * _PROBE_SECONDS)], sample_rate) is not None
+        head = audio[..., :int(sample_rate * _PROBE_SECONDS)]
+        if hear is not None and getattr(verifier, "sample_rate", sample_rate) == sample_rate:
+            # Asked the way the checks ask (the render's language, timed).
+            return hear(head) is not None
+        return transcribe(head, sample_rate) is not None
     except Exception:  # noqa: BLE001 — a check never fails a render
         return False
 
@@ -888,9 +895,9 @@ def _span_check(verifier, before: tuple, paragraphs: list) -> dict:
     """What the speech check found in the takes of one span just rendered.
 
     A take the recognizer could not judge — too short — needs no check; one
-    long enough that it did not listen to (no working recognizer, a failed
-    transcription) is counted ``unchecked``, so the span is never kept as
-    checked."""
+    long enough that it did not listen to (no recognizer installed, or one
+    that heard no words or failed) is counted ``unchecked``, so the span is
+    never kept as checked; ``no_recognizer`` says it was the first."""
     from services.speech_verify import checkable
 
     checked, retaken, suspects = before
@@ -900,7 +907,8 @@ def _span_check(verifier, before: tuple, paragraphs: list) -> dict:
     return {"checked": listened, "retaken": verifier.retaken - retaken,
             "unchecked": unchecked,
             "suspect": [dict(item) for item in verifier.suspect[suspects:]],
-            "unavailable": bool(unchecked and getattr(verifier, "unavailable", False))}
+            "unavailable": bool(unchecked and getattr(verifier, "unavailable", False)),
+            "no_recognizer": bool(unchecked and getattr(verifier, "no_recognizer", False))}
 
 
 def _cached_check(segment_cache, span, nonce: int, samples: int) -> Optional[dict]:

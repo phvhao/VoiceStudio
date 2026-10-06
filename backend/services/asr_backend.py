@@ -328,10 +328,16 @@ def _decode_audio_16k_mono(audio_path: str):
     error. This also fixes the imageio case a PATH-prepend can't: its binary is
     named ``ffmpeg-<plat>-vN.exe``, not ``ffmpeg``, so bare lookup never finds
     it. Mirrors whisperx.audio.load_audio's command exactly (16 kHz, mono, s16le).
+
+    A waveform instead of a path is already that (see
+    ``ASRBackend.accepts_waveform``) and is returned as it is.
     """
     import subprocess
 
     import numpy as np
+
+    if not isinstance(audio_path, (str, os.PathLike)):
+        return np.asarray(audio_path, dtype=np.float32).reshape(-1)
 
     from services.ffmpeg_utils import MediaToolUnavailableError, find_ffmpeg
 
@@ -367,6 +373,13 @@ def _decode_audio_16k_mono(audio_path: str):
         stderr = (e.stderr or b"").decode(errors="replace")[:500]
         raise RuntimeError(f"Failed to decode audio for transcription: {stderr}") from e
     return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+
+
+def _audio_label(audio) -> str:
+    """What a transcribe log line names: the path, or the length of a waveform."""
+    if isinstance(audio, (str, os.PathLike)):
+        return str(audio)
+    return f"<{getattr(audio, 'shape', (0,))[-1] / 16000:.1f} s of 16 kHz audio>"
 
 
 # ── Protocol ────────────────────────────────────────────────────────────────
@@ -438,6 +451,10 @@ class ASRBackend(ABC):
     # per-engine notes; an unverified `rocm` claim would route ROCm hosts to a
     # broken GPU path, strictly worse than the honest `cpu_fallback`.)
     gpu_compat: tuple[str, ...] = ("cpu",)
+    # Set when ``transcribe()`` also takes a 16 kHz mono float32 waveform in
+    # place of ``audio_path``, so a caller holding audio in memory (the speech
+    # check) skips the temp WAV and the ffmpeg decode.
+    accepts_waveform: bool = False
 
     def execution_evidence_loaded(self) -> bool:
         """Whether this instance has live model state worth reporting."""
@@ -464,6 +481,7 @@ class ASRBackend(ABC):
         """Return the raw Whisper output dict. Callers (`segment_transcript`)
         know how to read it — this stays deliberately untyped so new engines
         that already speak the shape plug in with zero adapter work.
+        ``audio_path`` may be a waveform where ``accepts_waveform`` says so.
         """
 
     def ensure_loaded(self) -> None:
@@ -662,6 +680,7 @@ class WhisperXBackend(ASRBackend):
     # claimed — CTranslate2 has no upstream HIP build, so a ROCm host honestly
     # gets cpu_fallback rather than a false GPU promise.
     gpu_compat = ("cuda", "cpu")
+    accepts_waveform = True
 
     def __init__(self):
         self._model_name = os.environ.get("ASR_MODEL_WHISPERX", "large-v3")
@@ -1040,7 +1059,8 @@ class WhisperXBackend(ASRBackend):
                    language: str | None = None, task: str = "transcribe") -> dict:
         import whisperx  # used for whisperx.align() below
         self._ensure_asr()
-        logger.info("whisperx transcribing %s (word_timestamps=%s)", audio_path, word_timestamps)
+        logger.info("whisperx transcribing %s (word_timestamps=%s)",
+                    _audio_label(audio_path), word_timestamps)
         # Decode via VoiceStudio's validated ffmpeg, NOT whisperx.load_audio's bare
         # "ffmpeg" PATH lookup which yields [WinError 193] -> "no segments" on
         # Windows (#479). Same 16 kHz mono s16le array whisperx expects.
@@ -1118,6 +1138,7 @@ class FasterWhisperBackend(ASRBackend):
     display_name = "Faster-Whisper (CTranslate2 — Linux/Windows/macOS)"
     # CTranslate2: CUDA or CPU (no upstream ROCm/HIP build — see WhisperX note).
     gpu_compat = ("cuda", "cpu")
+    accepts_waveform = True  # WhisperModel.transcribe takes the array as is
 
     def __init__(self, model_name: str | None = None):
         # Defaulting to the CTranslate2-converted large-v3 repo. Matches
@@ -1233,7 +1254,7 @@ class FasterWhisperBackend(ASRBackend):
         self._ensure_model()
         logger.info(
             "faster-whisper transcribing %s (word_timestamps=%s)",
-            audio_path, word_timestamps,
+            _audio_label(audio_path), word_timestamps,
         )
         # faster-whisper returns a generator of Segment objects + an Info
         # struct. Materialise the generator so downstream consumers can
@@ -1313,6 +1334,7 @@ class MLXWhisperBackend(ASRBackend):
     id = "mlx-whisper"
     display_name = "MLX Whisper (Apple Silicon CoreML)"
     gpu_compat = ("mps", "cpu")
+    accepts_waveform = True
 
     def __init__(self, model_name: str | None = None):
         self._model_name = model_name or os.environ.get(
@@ -1349,7 +1371,7 @@ class MLXWhisperBackend(ASRBackend):
         import mlx_whisper
         logger.info(
             "MLX Whisper transcribing %s (model=%s, word_timestamps=%s)",
-            audio_path, self._model_name, word_timestamps,
+            _audio_label(audio_path), self._model_name, word_timestamps,
         )
         # Decode once here, rather than handing mlx_whisper a path. Given a
         # path it calls whisper.audio.load_audio, which shells out to a bare
@@ -3331,17 +3353,21 @@ def _release_reference_backend(backend: ASRBackend) -> None:
         logger.warning("reference ASR fallback unload failed")
 
 
+def _transcript_text(result: dict | None) -> str:
+    """The words of a ``transcribe()`` result, ``""`` when it heard none."""
+    result = result or {}
+    text = result.get("text") or " ".join(
+        (seg.get("text") or "").strip() for seg in result.get("segments", [])
+    )
+    return (text or "").strip()
+
+
 def _try_reference_candidates(
     candidates: list[ASRBackend], audio_path: str, *, release_after: bool,
 ) -> str:
     for backend in candidates:
         try:
-            result = backend.transcribe(audio_path, word_timestamps=False) or {}
-            candidate_text = result.get("text") or " ".join(
-                (seg.get("text") or "").strip()
-                for seg in result.get("segments", [])
-            )
-            candidate_text = (candidate_text or "").strip()
+            candidate_text = _transcript_text(backend.transcribe(audio_path, word_timestamps=False))
             if candidate_text:
                 return candidate_text
         except Exception:  # noqa: BLE001 - try the next local engine
@@ -3436,6 +3462,477 @@ def transcribe_reference(audio_path: str, *, release_after: bool = False) -> str
             while len(_ref_transcript_cache) > _REF_TRANSCRIPT_CACHE_MAX:
                 _ref_transcript_cache.popitem(last=False)
     return text or None
+
+
+# ── Speech-check recognizer: one warm model per render ──────────────────────
+#
+# The speech check (services.speech_verify) transcribes every phrase a render
+# speaks. It used to ask transcribe_reference, which builds a fresh backend per
+# call for the whisper family: faster-whisper large-v3 loaded again before
+# every checked phrase (2.9–3.5 s on an RTX 3060, 6 loads for 6 phrases),
+# detected the language again, and filled the cache that exists for voice
+# references with takes. Now one instance of the selected engine serves a
+# whole render: the render holds a lease (check_recognizer_lease) while it
+# checks, and the model is released when the last lease ends.
+#
+# It never keeps memory synthesis needs. After each check it is released when
+# the memory its weights take runs low (memory_budget: free VRAM for one on a
+# GPU, free RAM for one on the CPU), and the make-room, idle and Unload paths
+# release it between two checks (release_check_recognizer); the render's next
+# check loads it again. A check in progress is never interrupted: _check_lock
+# serializes the checks with every load and release of the instance; a release
+# that finds it busy declines, except the one when the last render ends, which
+# waits for that check to finish. No check waits on another for longer than
+# CHECK_WAIT_S: a transcription that wedges (#730) leaves the takes after it
+# unchecked instead of stalling every render behind it. mlx-whisper keeps its
+# weights in the library's own singleton (resident by design) and a
+# crash-isolated sidecar runs its own process, so the check holds those
+# without ever unloading them.
+_check_backend: ASRBackend | None = None
+#: What ``_check_backend`` was built for: ``("selected", engine id, model)``
+#: or ``("fallback", snapshot)``.
+_check_backend_key: tuple | None = None
+_check_lock = threading.Lock()
+#: How long a check waits while another holds the recognizer: several times a
+#: cold large-v3 load plus one take's transcription on a CPU. A holder past it
+#: is stuck or crawling — an in-process CTranslate2 call can wedge on a
+#: VRAM-starved GPU, and nothing can stop it (#730) — so the waiting check
+#: gives way, its take unchecked, and later checks do not queue behind it.
+CHECK_WAIT_S = float(os.environ.get("OMNIVOICE_SPEECH_CHECK_WAIT_S", "120"))
+_CHECK_WAIT_SLICE_S = 0.5
+#: When the holder of ``_check_lock`` took it (``None`` while it is free).
+_check_held_since: float | None = None
+#: The holder a stuck check was last reported for (logged once each).
+_check_stall_reported: float | None = None
+#: Guards the lease count only; never held across a load or a transcription.
+_check_leases_lock = threading.Lock()
+_check_leases: int = 0
+_check_last_used: float = 0.0
+#: Selections whose recognizer failed to load (or that this host cannot run)
+#: while a render held a lease: not tried again until a render starts. A
+#: model that is not installed is never remembered — the disk is asked at
+#: every check, so one installed during a render answers from its next take.
+_check_unusable: set = set()
+
+
+def _take_check_lock(wait: float | None = None) -> bool:
+    """Take ``_check_lock``; ``False`` when another check holds it past the
+    wait. Waits up to ``wait`` seconds (``CHECK_WAIT_S`` by default), and
+    never for a holder that has held it ``CHECK_WAIT_S`` already: that one is
+    stuck, and waiting on it would only stall this render too."""
+    global _check_held_since
+    end = time.monotonic() + (CHECK_WAIT_S if wait is None else wait)
+    while True:
+        since = _check_held_since
+        limit = end if since is None else min(end, since + CHECK_WAIT_S)
+        remaining = limit - time.monotonic()
+        if _check_lock.acquire(timeout=max(0.0, min(_CHECK_WAIT_SLICE_S, remaining))):
+            _check_held_since = time.monotonic()
+            return True
+        if remaining <= _CHECK_WAIT_SLICE_S:
+            return False
+
+
+def _let_go_of_check_lock() -> None:
+    global _check_held_since
+    _check_held_since = None
+    _check_lock.release()
+
+
+def _report_check_stalled(min_age: float = 0.0) -> None:
+    """The recognizer could not be had: say why, once per holder — when it
+    has held it ``min_age`` seconds at least."""
+    global _check_stall_reported
+    since = _check_held_since
+    if since is None or since == _check_stall_reported or time.monotonic() - since < min_age:
+        return
+    _check_stall_reported = since
+    logger.warning(
+        "speech check: a check has held the speech recognizer for %.0f s — its "
+        "transcription is stuck or crawling (#730): takes stay unchecked and the "
+        "recognizer stays loaded until it returns. Restart the backend if it never "
+        "does.", time.monotonic() - since)
+
+
+class CheckRecognizerLease:
+    """One render's hold on the speech check's recognizer: loaded at its first
+    check, it stays loaded between the render's checks until :meth:`release`
+    (or the end of a ``with`` block). Releasing twice does nothing."""
+
+    def __init__(self):
+        global _check_leases
+        with _check_leases_lock:
+            # A render that starts tries every recognizer again, also while
+            # others still run: one may have been repaired since they found it
+            # unusable.
+            _check_unusable.clear()
+            _check_leases += 1
+        self._held = True
+
+    def release(self) -> None:
+        global _check_leases
+        with _check_leases_lock:
+            if not self._held:
+                return
+            self._held = False
+            _check_leases = max(0, _check_leases - 1)
+            if _check_leases:
+                return
+        _release_when_unleased()
+
+    def __enter__(self) -> "CheckRecognizerLease":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.release()
+
+
+def check_recognizer_lease() -> CheckRecognizerLease:
+    """Keep the speech check's recognizer loaded until this render ends."""
+    return CheckRecognizerLease()
+
+
+def _release_when_unleased() -> None:
+    """The last lease ended: release the recognizer once a check still in
+    progress has finished, on a thread of its own — the render that ended
+    never waits for another render's check, and an unload (garbage
+    collection, freeing device memory) never stalls the server's event loop.
+    A render that starts meanwhile keeps the model."""
+    threading.Thread(target=release_check_recognizer,
+                     kwargs={"unleased_only": True, "wait": True},
+                     name="speech-check-release", daemon=True).start()
+
+
+def _owns_check_weights(backend: ASRBackend) -> bool:
+    """Whether unloading ``backend`` frees weights the speech check loaded:
+    not mlx-whisper's library singleton, a sidecar process, or the dictation
+    engine other features keep warm."""
+    return not (
+        isinstance(backend, MLXWhisperBackend)
+        or getattr(type(backend), "_is_subprocess_isolated", False)
+        or backend is _capture_backend
+    )
+
+
+def _drop_check_backend(backend: ASRBackend) -> None:
+    """Let go of a recognizer the check held, unloading the weights it owns.
+    Never raises."""
+    if not _owns_check_weights(backend):
+        return
+    try:
+        backend.unload()
+    except Exception:  # noqa: BLE001 — a failed unload must not fail a render
+        logger.warning("speech check: recognizer unload failed", exc_info=True)
+
+
+def release_check_recognizer(*, idle_s: float | None = None, now: float | None = None,
+                             unleased_only: bool = False, wait: bool = False) -> bool:
+    """Unload the speech check's recognizer now; ``True`` when one was released.
+
+    Declines while a check is transcribing — unless ``wait``, which releases
+    it once that check is done (giving up, like a check, on one that is
+    stuck) — with ``unleased_only`` while a render holds a lease, and with
+    ``idle_s`` when it was used within that many seconds. A render that is
+    still checking loads it again at its next check. Never raises."""
+    global _check_backend, _check_backend_key
+    if not _take_check_lock(None if wait else 0.0):
+        _report_check_stalled(min_age=CHECK_WAIT_S)
+        return False
+    try:
+        if unleased_only and _check_leases:
+            return False
+        backend = _check_backend
+        if backend is None:
+            return False
+        moment = time.monotonic() if now is None else now
+        if idle_s is not None and moment - _check_last_used < idle_s:
+            return False
+        _check_backend = _check_backend_key = None
+        _drop_check_backend(backend)
+    finally:
+        _let_go_of_check_lock()
+    logger.info("Released the speech check's recognizer (%s).", type(backend).__name__)
+    return True
+
+
+def _weights_in_ram(backend: ASRBackend) -> bool:
+    """Whether ``backend`` keeps its weights in system RAM, also on a GPU
+    host: it loaded on the CPU (whisperx and faster-whisper record where —
+    CTranslate2 has no ROCm build, honours a CPU pin and falls back to the
+    CPU when a load runs out of VRAM), or its engine runs only there."""
+    device = getattr(backend, "_device", None)
+    if isinstance(device, str) and device:
+        return device.split(":", 1)[0] == "cpu"
+    return "cuda" not in getattr(type(backend), "gpu_compat", ("cpu",))
+
+
+def _check_memory_low(backend: ASRBackend) -> str | None:
+    """The low-memory advisory when the memory ``backend``'s weights take is
+    below what synthesis needs, else ``None``: free VRAM for a recognizer on
+    a GPU, free RAM for one on the CPU (``memory_budget``) — unloading that
+    one frees no VRAM, and it holds RAM a synthesis on the CPU needs."""
+    try:
+        from services.memory_budget import low_memory_warning
+
+        return low_memory_warning(vram=not _weights_in_ram(backend))
+    except Exception:  # noqa: BLE001 — unknown: keep the model
+        return None
+
+
+def release_check_recognizer_when_memory_low() -> bool:
+    """Release the speech check's recognizer before a model load or a
+    generate when the memory it takes runs low (VRAM for one on a GPU, RAM
+    for one on the CPU): the GPU guard the RAM-based make-room policy does
+    not provide. Free when nothing is loaded; never blocks and never raises.
+    ``True`` when one was released."""
+    backend = _check_backend
+    if backend is None or not _owns_check_weights(backend) or _check_memory_low(backend) is None:
+        return False
+    return release_check_recognizer()
+
+
+def _settle_check_backend() -> None:
+    """After a check (``_check_lock`` held): note the use, and release the
+    recognizer when no render holds it or the memory it takes is low."""
+    global _check_backend, _check_backend_key, _check_last_used
+    backend = _check_backend
+    if backend is None:
+        return
+    _check_last_used = time.monotonic()
+    if _check_leases:
+        if not _owns_check_weights(backend):
+            return
+        low = _check_memory_low(backend)
+        if low is None:
+            return
+        logger.info("speech check: releasing the recognizer until the next check — %s", low)
+    _check_backend = _check_backend_key = None
+    _drop_check_backend(backend)
+
+
+def _selected_check_backend() -> ASRBackend | None:
+    """The selected offline engine, loaded once while renders hold leases
+    (``_check_lock`` held). ``None`` exactly where transcribe_reference skips
+    it: no installed model (it never downloads one), it does not load, or it
+    is the TTS model's own pipeline (pytorch-whisper)."""
+    global _check_backend, _check_backend_key
+    bid = active_backend_id()
+    key = ("selected", bid, _offline_asr_repo(bid))
+    if _check_backend is not None and _check_backend_key == key:
+        return _check_backend
+    selected_remote = bid == "openai-compat-asr"
+    # Read from disk at every check, never remembered: a model installed while
+    # a render runs answers from the render's next take.
+    if asr_model_missing_error(require_installed=not selected_remote) is not None:
+        return None
+    if _check_leases and key in _check_unusable:
+        return None
+    backend = None
+    # Asked before it loads, as auto-detect asks (a pinned engine skips that):
+    # CTranslate2 without its cuDNN 8 does not raise, it kills the process
+    # (#1371), and the availability probe is what preloads cuDNN 8.
+    if bid not in _REGISTRY or _probe_available(_REGISTRY[bid]):
+        if _check_backend is not None:
+            # Another model is loaded (the selection changed): free it first.
+            _drop_check_backend(_check_backend)
+            _check_backend = _check_backend_key = None
+        try:
+            # `load_*`: a broken deep import chain falls through cleanly.
+            backend = load_active_asr_backend(
+                require_installed=not selected_remote, defer_pytorch=True,
+            )
+        except Exception:  # noqa: BLE001 — the next installed recognizer answers
+            logger.warning("speech check: the selected speech recognizer did not load",
+                           exc_info=True)
+            backend = None
+        if isinstance(backend, PyTorchWhisperBackend):
+            backend = None
+    if backend is None:
+        if _check_leases:
+            _check_unusable.add(key)
+        return None
+    _check_backend, _check_backend_key = backend, key
+    return backend
+
+
+def _english_only(model_name: str | None) -> bool:
+    name = (model_name or "").lower()
+    return name.endswith(".en") or "distil" in name
+
+
+def _decoder_language(backend: ASRBackend, code: str | None) -> str | None:
+    """``code`` when ``backend`` is a Whisper model whose decoder knows it,
+    else ``None`` — it then detects the language itself. A code the decoder
+    does not know raises, and failed checks turn the speech check off."""
+    if not code:
+        return None
+    if isinstance(backend, FasterWhisperBackend):
+        backend._ensure_model()
+        known = getattr(backend._model, "supported_languages", None)
+    elif isinstance(backend, WhisperXBackend):
+        backend._ensure_asr()
+        known = getattr(getattr(backend._asr, "model", None), "supported_languages", None)
+    elif isinstance(backend, MLXWhisperBackend):
+        try:
+            from mlx_whisper.tokenizer import LANGUAGES
+        except Exception:  # noqa: BLE001 — unknown: let it detect
+            return None
+        known = ["en"] if _english_only(backend._model_name) else list(LANGUAGES)
+    else:
+        return None
+    try:
+        return code if code in (known or ()) else None
+    except TypeError:
+        return None
+
+
+def _check_with(backend: ASRBackend, source, language: str | None) -> str:
+    """What ``backend`` hears in the take: ``""`` when nothing, or when it
+    fails (the next installed recognizer is asked)."""
+    try:
+        options = transcribe_request_kwargs(
+            backend, {"language": _decoder_language(backend, language)})
+        return _transcript_text(backend.transcribe(
+            source(backend), word_timestamps=False, **options))
+    except Exception:  # noqa: BLE001 — try the next installed recognizer
+        logger.warning("speech check: %s failed", getattr(backend, "id", type(backend).__name__),
+                       exc_info=True)
+        if (_check_leases and backend is _check_backend and _owns_check_weights(backend)
+                and not backend.execution_evidence_loaded()):
+            # It did not even load: the rest of the render asks the next
+            # recognizer instead of loading this one again for every take
+            # (``_check_lock`` is held whenever ``_check_backend`` is asked).
+            _forget_check_backend()
+        return ""
+
+
+def _forget_check_backend() -> None:
+    """Drop the recognizer that failed to load, until a render starts."""
+    global _check_backend, _check_backend_key
+    if _check_backend_key is not None:
+        _check_unusable.add(_check_backend_key)
+    backend, _check_backend, _check_backend_key = _check_backend, None, None
+    if backend is not None:
+        _drop_check_backend(backend)
+
+
+def _check_with_fallback(backend: ASRBackend, source, language: str | None) -> str:
+    """Ask one of :func:`_installed_reference_fallbacks`. With no selected
+    engine loaded, the faster-whisper fallback is the check's recognizer and
+    stays loaded like one; next to the selected engine it is loaded for this
+    take only, as for a reference."""
+    global _check_backend, _check_backend_key
+    if not getattr(backend, "_reference_ephemeral", False):
+        return _check_with(backend, source, language)
+    key = ("fallback", getattr(backend, "_model_name", None))
+    if not _take_check_lock():
+        _report_check_stalled()
+        return ""
+    try:
+        if _check_leases and key in _check_unusable:
+            return ""
+        if _check_backend is None or _check_backend_key == key:
+            if _check_backend is None:
+                _check_backend, _check_backend_key = backend, key
+            text = _check_with(_check_backend, source, language)
+            _settle_check_backend()
+            return text
+    finally:
+        _let_go_of_check_lock()
+    try:
+        return _check_with(backend, source, language)
+    finally:
+        _release_reference_backend(backend)
+
+
+def _check_wav(audio) -> str:
+    """The take as a temp 16 kHz WAV, for a recognizer that reads files."""
+    import tempfile
+
+    import numpy as np
+    import torch
+
+    from services.audio_io import atomic_save_wav
+
+    handle, path = tempfile.mkstemp(prefix="voicestudio-verify-", suffix=".wav")
+    os.close(handle)
+    atomic_save_wav(path, torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32)), 16000)
+    return path
+
+
+def transcribe_check(audio, *, language: str | None = None) -> str | None:
+    """What one rendered take says, for the speech check, or ``None`` when no
+    installed recognizer can say.
+
+    ``audio`` is the take as a 16 kHz mono float32 array; a recognizer that
+    reads files gets it as a temp WAV. ``language`` is a Whisper language code
+    (``services.speech_verify.recognizer_language``) or ``None``; a model that
+    does not know the code detects the language instead. Asks what
+    :func:`transcribe_reference` asks, in the same order, and never downloads
+    weights: the selected offline engine — kept loaded while a render holds a
+    :class:`CheckRecognizerLease` — then the installed dictation engine, then
+    the installed fallbacks; the first that hears words answers. Nothing is
+    cached: every take is new audio."""
+    paths: list[str] = []
+
+    def source(backend):
+        if getattr(backend, "accepts_waveform", False):
+            return audio
+        if not paths:
+            paths.append(_check_wav(audio))
+        return paths[0]
+
+    try:
+        return _transcribe_check(source, language)
+    finally:
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def _transcribe_check(source, language: str | None) -> str | None:
+    text = ""
+    if not _take_check_lock():
+        # Another check is stuck holding the recognizer: this take stays
+        # unchecked rather than waiting on it (failed checks turn the check
+        # off for the chapter).
+        _report_check_stalled()
+        return None
+    try:
+        selected = _selected_check_backend()
+        if selected is not None:
+            text = _check_with(selected, source, language)
+            _settle_check_backend()
+    finally:
+        _let_go_of_check_lock()
+    if text:
+        return text
+    candidates: list[ASRBackend] = [selected] if selected is not None else []
+    if asr_model_missing_error(purpose="dictation", require_installed=True) is None:
+        try:
+            capture = get_capture_asr_backend()
+            if not isinstance(capture, PyTorchWhisperBackend) and not any(
+                type(item) is type(capture) and item.id == capture.id for item in candidates
+            ):
+                candidates.append(capture)
+                text = _check_with(capture, source, language)
+        except Exception:  # noqa: BLE001 — the installed fallbacks are next
+            logger.warning("speech check: dictation ASR unavailable")
+    if text:
+        return text
+    fallbacks = _installed_reference_fallbacks(candidates)
+    for backend in fallbacks:
+        text = _check_with_fallback(backend, source, language)
+        if text:
+            return text
+    if not candidates and not fallbacks:
+        logger.info("speech check: no installed speech recognizer — the take stays "
+                    "unchecked (no silent download).")
+    else:
+        logger.warning("speech check: the installed speech recognizers heard no words in the take")
+    return None
 
 
 _capture_backend: ASRBackend | None = None

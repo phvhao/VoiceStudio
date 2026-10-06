@@ -62,6 +62,9 @@ metadata and the backend fallback mirror it.
 - Background checks while the app is idle use much less CPU: the performance preset reads the model cache once per check instead of 17 times, and the diarisation status reads only its own model folders
 - On Linux with XDG_CACHE_HOME set, model completeness, free-space and offline-loading checks look in the cache folder Hugging Face actually uses
 - Audiobook, Batch and Dub no longer grey out Arabic, Kurdish and both Chinese scripts for the default model, and their language lists no longer rebuild on every keystroke
+- Every language the Audiobook, Batch and Dub pickers offer for the default model now reaches it as that language; Arabic, Chinese, Kurdish (Sorani when written in Arabic script) and a few others were read as Auto, and Audiobook and Stories chapters cached in them render again once
+- Other engines accept every spelling of a language they speak, such as Clone's Standard Arabic or either Chinese script, and get their own code for it: Confucius4 was sent German as "ge", Supertonic-3 Swedish as Swahili's "sw" and MOSS-TTS-v1.5 "cmn-Hans" as a name it does not know; chapters cached that way render again once
+- PocketTTS's language lists offer only the six languages it speaks instead of every language it then refused, and a region tag such as pt-BR reaches it as Portuguese
 - The app asks the backend less while idle: one worker check serves every page, batch status runs on one schedule, a model load refreshes engines once when it ends, and dictation shortcut settings are re-read when changed instead of every 10 seconds
 - The status bar no longer misses running batch jobs while Settings → Updates shows an available update
 - After the backend restarts, the status bar and Settings show its models, jobs and workers straight away instead of the stopped backend's for up to 30 seconds
@@ -75,6 +78,8 @@ metadata and the backend fallback mirror it.
 - Re-exporting a book whose chapters are all cached no longer waits for the model to load
 - The speech check's sentences to listen to survive cached and partly edited re-renders, and sentences it could not listen to are rendered again and checked once a recognizer is installed
 - Audiobook chapters rendered on a remote worker are watermarked once instead of twice, and turning the speech check on or off no longer renders them again
+- The speech check loads its speech recognizer once per render instead of before every sentence and is told the book's language: after the first sentence a check takes about 0.6 s instead of 4 s (faster-whisper large-v3, RTX 3060); the recognizer is released when the render ends or the memory it holds runs low, a hung check never stalls other renders, and a render trace shows its time
+- Audiobook and Stories say how many sentences the speech check could not check and why: no speech recognizer installed, or the installed one heard no words in them (as in a near-silent take), with the chapters to listen to
 
 ## [0.5.7] — 2026-10-05
 

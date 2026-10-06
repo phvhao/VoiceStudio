@@ -22,7 +22,12 @@ vi.mock('@/lib/reading-settings', async () => {
 });
 
 import { ReadingForm } from '@/components/reading-settings';
-import { blankLongformDraft, suspectPhrases } from './longform-session';
+import {
+  blankLongformDraft,
+  recognizerMissing,
+  suspectPhrases,
+  uncheckedPhrases,
+} from './longform-session';
 import { PacingSettings, SpeechCheckReport } from './pacing-settings';
 import { storyChunkBody } from './story-preview';
 
@@ -130,4 +135,49 @@ it('reads the phrases a render still heard differently', () => {
   );
   expect(screen.getByText('Sentences to listen to again: 1')).toBeVisible();
   expect(screen.getByText(/Mùa Thu là vụ thu hoạch/)).toBeVisible();
+});
+
+it('says how many sentences the check could not listen to, and why', () => {
+  expect(uncheckedPhrases({ speech_check: { unchecked: 3, suspect: [] } })).toBe(3);
+  expect(uncheckedPhrases({ speech_check: { unchecked: '3' } })).toBe(0);
+  expect(uncheckedPhrases({})).toBe(0);
+  expect(recognizerMissing({ speech_check: { unchecked: 3, no_recognizer: true } })).toBe(true);
+  // Older backends never said why: no install advice is made up for them.
+  expect(recognizerMissing({ speech_check: { unchecked: 3, unavailable: true } })).toBe(false);
+  const install = /No speech recognizer is installed/;
+  const listen = /heard no words in them or could not run/;
+  // No recognizer installed: install one; nothing to listen for.
+  const { unmount } = render(
+    <SpeechCheckReport
+      chapters={[
+        { title: 'One', status: 'done', unchecked: 2, noRecognizer: true },
+        { title: 'Two', status: 'cached', unchecked: 3, noRecognizer: true },
+      ]}
+    />,
+  );
+  expect(screen.getByText('Sentences not checked: 5')).toBeVisible();
+  expect(screen.getByText(install)).toBeVisible();
+  expect(screen.queryByText(listen)).toBeNull();
+  expect(screen.queryByText(/Sentences to listen to again/)).toBeNull();
+  unmount();
+  // A recognizer is installed and heard no words (a near-silent take): no
+  // install advice, but where to listen.
+  const heard = render(
+    <SpeechCheckReport
+      chapters={[
+        { title: 'One', status: 'done' },
+        { title: 'Two', status: 'cached', unchecked: 1 },
+      ]}
+    />,
+  );
+  expect(screen.getByText('Sentences not checked: 1')).toBeVisible();
+  expect(screen.getByText(listen)).toBeVisible();
+  expect(screen.getByText('Two · 1')).toBeVisible();
+  expect(screen.queryByText(install)).toBeNull();
+  heard.unmount();
+  // A passage preview: its own count, beside what still sounded different.
+  render(<SpeechCheckReport suspects={['The lamp held for forty years.']} unchecked={1} />);
+  expect(screen.getByText('Sentences to listen to again: 1')).toBeVisible();
+  expect(screen.getByText('Sentences not checked: 1')).toBeVisible();
+  expect(screen.getByText(listen)).toBeVisible();
 });

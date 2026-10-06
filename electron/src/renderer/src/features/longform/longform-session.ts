@@ -48,6 +48,10 @@ export interface AudiobookRenderChapter {
   error?: string;
   /** Phrases the speech check still heard differently after its retakes. */
   suspects?: string[];
+  /** Phrases the speech check could not listen to (newer backends). */
+  unchecked?: number;
+  /** They went unheard because no speech recognizer was installed (newer backends). */
+  noRecognizer?: boolean;
   /** What voice leveling measured per voice in this chapter (newer backends, leveling on). */
   levels?: VoiceLevels;
   /** The script gave the chapter no title (its `title` is then blank). */
@@ -62,6 +66,21 @@ export function suspectPhrases(event: Record<string, unknown>): string[] {
         .filter((text): text is string => typeof text === 'string' && text.length > 0)
         .slice(0, 50)
     : [];
+}
+/** How many phrases a render's speech check could not listen to (newer backends). */
+export function uncheckedPhrases(event: Record<string, unknown>): number {
+  const unchecked = (event.speech_check as { unchecked?: unknown } | undefined)?.unchecked;
+  return typeof unchecked === 'number' && Number.isInteger(unchecked) && unchecked > 0
+    ? unchecked
+    : 0;
+}
+/**
+ * Whether the phrases a render's speech check could not listen to went
+ * unheard because no speech recognizer was installed — not because the one
+ * installed heard no words in them or failed (newer backends).
+ */
+export function recognizerMissing(event: Record<string, unknown>): boolean {
+  return (event.speech_check as { no_recognizer?: unknown } | undefined)?.no_recognizer === true;
 }
 export interface Draft extends BookOptions {
   importText: string;
@@ -781,6 +800,12 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
                 ? { duration_ms: Number(event.duration_ms) }
                 : {}),
               ...(suspectPhrases(event).length ? { suspects: suspectPhrases(event) } : {}),
+              ...(uncheckedPhrases(event)
+                ? {
+                    unchecked: uncheckedPhrases(event),
+                    ...(recognizerMissing(event) ? { noRecognizer: true } : {}),
+                  }
+                : {}),
               ...(chapterLevels(event) ? { levels: chapterLevels(event) } : {}),
               ...(event.type === 'chapter_error'
                 ? {

@@ -14,8 +14,12 @@
   whose takes wait for a recognizer, while none is installed.
 * What the speech check found is kept with the audio, so a cached chapter
   still lists the phrases to listen to; takes it could not listen to are never
-  kept as checked, and are checked once a recognizer answers. A remote chapter
-  is never checked, so the check does not move its key.
+  kept as checked, and are checked once a recognizer answers; the result says
+  whether no recognizer was installed or the one installed heard no words. A
+  remote chapter is never checked, so the check does not move its key.
+* A language the engine now receives otherwise (OmniVoice read "Arabic" as
+  Auto) renders again once, in all three cache layers; every other keeps its
+  cache.
 
 Stub engine throughout — no model, no GPU. App modules are resolved at call
 time: other suites reload them.
@@ -508,7 +512,8 @@ def _recognizer(monkeypatch, stub: _Engine, *, answers=True, misheard=()):
         return ("nothing like the script at all" if any(m in text for m in misheard)
                 else text)
 
-    monkeypatch.setattr(speech, "SpeechVerifier", lambda sr: real(sr, transcribe=transcribe))
+    monkeypatch.setattr(speech, "SpeechVerifier",
+                        lambda sr, **kw: real(sr, transcribe=transcribe, **kw))
     return state
 
 
@@ -642,7 +647,7 @@ def test_without_a_recognizer_installed_a_cached_chapter_loads_no_model(
     _use_engine(router, monkeypatch, stub)
     installed = {"value": False}
     monkeypatch.setattr(asr, "reference_recognizer_installed", lambda: installed["value"])
-    monkeypatch.setattr(asr, "transcribe_reference", lambda _path, **_kw: None)
+    monkeypatch.setattr(asr, "transcribe_check", lambda _audio, **_kw: None)
     cache = _cache(tmp_path)
     chapter = _chapter(_LAMP, _RIVER)
     opts = ab.ExpressiveOptions(verify_speech=True)
@@ -658,12 +663,33 @@ def test_without_a_recognizer_installed_a_cached_chapter_loads_no_model(
     assert second[2] is True and second[0] == first[0]
     # Once a recognizer is installed, the render asks it and checks the takes.
     installed["value"] = True
-    monkeypatch.setattr(asr, "transcribe_reference", lambda _path, **_kw: "speech")
+    monkeypatch.setattr(asr, "transcribe_check", lambda _audio, **_kw: "speech")
     monkeypatch.setattr(router, "_prepare_synth", prepare)
     stub.calls.clear()
     path, _dur, cached, _stats = _run(router, chapter, cache, opts=opts)
     assert cached is False and set(stub.calls) == {_LAMP, _RIVER}
     assert _checked(router, path)["unchecked"] == 0
+
+
+@pytest.mark.parametrize("installed", [False, True], ids=["none installed", "heard no words"])
+def test_unheard_takes_say_whether_a_recognizer_was_missing(installed, engine, tmp_path,
+                                                            monkeypatch):
+    """A near-silent take an installed recognizer heard no words in is
+    unchecked too, and is no reason to tell the user to install one: the
+    result says which it was, and keeps saying it from the cache."""
+    router = engine
+    ab = _mod("services.audiobook")
+    asr = _mod("services.asr_backend")
+    stub = _Engine()
+    monkeypatch.setattr(asr, "reference_recognizer_installed", lambda: installed)
+    monkeypatch.setattr(asr, "transcribe_check", lambda _audio, **_kw: None)
+    cache = _cache(tmp_path)
+    opts = ab.ExpressiveOptions(verify_speech=True)
+    path, _d, _c, stats = router._render_chapter_cached(_chapter(_LAMP, _RIVER), stub.synth, SR,
+                                                        "eng", _resolve, cache, opts=opts)
+    assert stats["speech_check"]["unchecked"] == 2
+    assert stats["speech_check"]["no_recognizer"] is (not installed)
+    assert _checked(router, path)["no_recognizer"] is (not installed)
 
 
 def test_the_speech_check_does_not_move_a_remote_chapter(engine, tmp_path):
@@ -690,3 +716,63 @@ def test_the_speech_check_does_not_move_a_remote_chapter(engine, tmp_path):
     _call, path = router._remote_chapter_call(
         chapter, opts=ab.ExpressiveOptions(verify_speech=True), **kw)
     assert path == plain_path and os.path.exists(path) and not os.path.exists(legacy)
+
+
+# ── A language the engine now receives otherwise ────────────────────────────
+
+def test_a_language_the_engine_now_receives_otherwise_renders_again(
+        engine, preset, tmp_path, monkeypatch):
+    """OmniVoice read the pickers' "Arabic" as Auto and now receives Standard
+    Arabic's id: a chapter cached under "Arabic" before renders again — once,
+    every take of it, so an edit never joins takes read as Auto to hinted
+    ones — while a language it receives as before keeps its cache."""
+    router = engine
+    ab = _mod("services.audiobook")
+    codes = _mod("services.language_codes")
+    stub = _Engine()
+    cache = _cache(tmp_path)
+    chapter = _chapter(_LAMP, _RIVER)
+    edited = _chapter(_LAMP, "The river ran under the old bridge.")
+    opts = ab.ExpressiveOptions()
+
+    def render(language, script=chapter):
+        return router._render_chapter_cached(script, stub.synth, SR, "omnivoice", _resolve, cache,
+                                             language=language, opts=opts)
+
+    def outline(language):
+        return router._chapter_cache_state(
+            chapter, decision=types.SimpleNamespace(remote=False), default_voice=None,
+            language=language, opts=opts, voice_map=None, lexicon=None, cache_dir=cache)[1]
+
+    real = codes.language_input_changed
+    monkeypatch.setattr(codes, "language_input_changed", lambda *_a: False)  # a build before
+    for language in ("Arabic", "English"):
+        render(language)
+    monkeypatch.setattr(codes, "language_input_changed", real)
+    stub.calls.clear()
+    assert outline("English") is True and outline("Arabic") is False
+    _path, _d, cached, _s = render("English")
+    assert cached is True and stub.calls == []
+    _path, _d, cached, stats = render("Arabic", edited)
+    assert cached is False and stats["cached"] == 0 and len(stub.calls) == 2
+    stub.calls.clear()
+    _path, _d, cached, _s = render("Arabic", edited)
+    assert cached is True and stub.calls == []
+
+
+def test_a_remote_chapter_in_such_a_language_renders_again(engine, tmp_path, monkeypatch):
+    router = engine
+    ab = _mod("services.audiobook")
+    codes = _mod("services.language_codes")
+    chapter = _chapter(_LAMP)
+
+    def remote(language):
+        return router._remote_chapter_call(
+            chapter, engine_id="omnivoice", default_voice=None, voice_map=None,
+            language=language, lexicon=None, opts=ab.ExpressiveOptions(),
+            cache_dir=_cache(tmp_path))[1]
+
+    now = {language: remote(language) for language in ("Arabic", "English")}
+    monkeypatch.setattr(codes, "language_input_changed", lambda *_a: False)  # a build before
+    assert remote("Arabic") != now["Arabic"]
+    assert remote("English") == now["English"]

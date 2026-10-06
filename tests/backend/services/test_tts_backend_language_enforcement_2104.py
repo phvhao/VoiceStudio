@@ -169,9 +169,9 @@ def test_check_language_skips_when_no_preference_expressed(_StubBackend, auto_va
 
 def test_check_language_skips_for_multi_engine(_StubBackend):
     """``["multi"]`` is the open-ended contract: OmniVoice's 600-language
-    zero-shot, mlx-audio's per-model multiplexer, PocketTTS' own
-    per-engine strict check. The base class must NOT clobber their
-    semantics with a 2-letter-code check."""
+    zero-shot, mlx-audio's per-model multiplexer, a sidecar that maps the
+    language itself. The base class must NOT clobber their semantics with a
+    2-letter-code check."""
     be = _StubBackend(["multi"], display_name="VoiceStudio (k2-fsa/OmniVoice, 600+ languages)")
     for lang in ("pl", "ar", "vi", "th", "anything"):
         be._check_language(lang)

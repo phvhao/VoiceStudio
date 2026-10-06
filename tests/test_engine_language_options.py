@@ -19,11 +19,12 @@ def test_finite_language_options_without_loading_models(engine, allowed, rejecte
 
 
 def test_open_ended_engine_keeps_all_language_options(tts):
-    from omnivoice.utils.lang_map import LANG_NAME_TO_ID
+    from omnivoice.utils.lang_map import LANG_IDS, LANG_NAME_TO_ID
     options = tts.language_options('omnivoice')
     assert options == sorted(options)
     assert set(LANG_NAME_TO_ID) <= set(options)
-    assert set(tts._OMNIVOICE_PICKER_NAMES.values()) <= set(LANG_NAME_TO_ID)
+    # Every extra name reaches the model as an id it was trained with.
+    assert all(tts.omnivoice_language(name) in LANG_IDS for name in options)
 
 
 def _picker_languages():
@@ -73,8 +74,9 @@ def test_unreadable_kokoro_metadata_uses_declared_set_not_all_languages(tmp_path
     table.write_text("ALIASES = get_aliases()\n")
     monkeypatch.setattr(importlib.metadata, 'distribution', lambda _: SimpleNamespace(locate_file=lambda _: table))
     options = tts._installed_kokoro_language_options()
-    assert options == ['chinese', 'english', 'french', 'hindi', 'italian', 'japanese',
-                       'portuguese', 'spanish']
+    assert options == ['chinese', 'chinese (simplified)', 'chinese (traditional)', 'english',
+                       'french', 'hindi', 'italian', 'japanese', 'mandarin', 'portuguese',
+                       'spanish']
     assert 'bengali' not in options
 
 

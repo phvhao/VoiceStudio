@@ -1195,12 +1195,20 @@ def _reading_units(text: str, reading: Optional[dict]):
     return [p for p, _ in phrases], [ms for _, ms in phrases]
 
 
-def _reading_verifier(reading: Optional[dict], sample_rate: int):
+def _reading_verifier(reading: Optional[dict], sample_rate: int, language=None):
     if not reading or not reading.get("verify"):
         return None
     from services.speech_verify import SpeechVerifier
 
-    return SpeechVerifier(sample_rate)
+    return SpeechVerifier(sample_rate, language=language)
+
+
+def _reading_lease(reading: Optional[dict]):
+    """The request's hold on the speech check's recognizer: one loaded model
+    for all its takes (holds nothing when the check is off)."""
+    from services.speech_verify import recognizer_lease
+
+    return recognizer_lease(checking=bool(reading and reading.get("verify")))
 
 
 def _render_take(text: str, take, verifier):
@@ -1225,6 +1233,7 @@ def _run_inference(
     max_chunk_chars=None, crossfade_ms=None, *, dropped_sink=None, reading=None,
 ):
     import torch
+    check_lease = _reading_lease(reading)
     try:
         if used_seed is not None:
             torch.manual_seed(used_seed)
@@ -1275,7 +1284,7 @@ def _run_inference(
             # Settings → Reading (when asked for): a take per sentence/clause,
             # joined with each mark's silence, each listened back if checked.
             units = _reading_units(text, reading)
-            verifier = _reading_verifier(reading, sr)
+            verifier = _reading_verifier(reading, sr, language)
             text_chunks, gaps = units if units is not None else (
                 split_text_into_chunks(text, _max_chars), None)
             if len(text_chunks) > 1:
@@ -1307,6 +1316,8 @@ def _run_inference(
         raise e
     except Exception as e:
         _oom_friendly_reraise(e)
+    finally:
+        check_lease.release()
 
 
 def _run_backend_inference(
@@ -1326,6 +1337,7 @@ def _run_backend_inference(
     narrower protocol unchanged.
     """
     import torch
+    check_lease = _reading_lease(reading)
     try:
         if used_seed is not None:
             torch.manual_seed(used_seed)
@@ -1381,7 +1393,7 @@ def _run_backend_inference(
             _max_chars = DEFAULT_MAX_CHUNK_CHARS if max_chunk_chars is None else max_chunk_chars
             _xfade_ms = DEFAULT_CROSSFADE_MS if crossfade_ms is None else crossfade_ms
             units = _reading_units(text, reading)
-            verifier = _reading_verifier(reading, sr)
+            verifier = _reading_verifier(reading, sr, language)
             text_chunks, gaps = units if units is not None else (
                 split_text_into_chunks(text, _max_chars), None)
             if len(text_chunks) > 1:
@@ -1427,6 +1439,8 @@ def _run_backend_inference(
         if rewritten is not e:
             raise rewritten from e
         _oom_friendly_reraise(e)
+    finally:
+        check_lease.release()
 
 
 # #1257: the language picker offers all 646 languages regardless of engine,
@@ -2594,7 +2608,7 @@ async def generate_speech(
                 skip = (getattr(_backend, "applies_own_mastering", False)
                         if _backend is not None else False)
                 if sr not in _verifiers:
-                    _verifiers[sr] = _reading_verifier(_reading, sr)
+                    _verifiers[sr] = _reading_verifier(_reading, sr, language)
 
                 def _take(attempt):
                     # A speech-check retake moves the chunk seed again.
@@ -2677,6 +2691,8 @@ async def generate_speech(
             def _line(obj) -> bytes:
                 return (json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8")
 
+            # Every chunk's takes are checked by one loaded recognizer.
+            check_lease = _reading_lease(_reading)
             try:
                 if _has_pause or len(_text_chunks) <= 1:
                     # Single-shot pipeline, unchanged — streamed as one chunk.
@@ -2885,6 +2901,7 @@ async def generate_speech(
                 )
                 yield _line({"type": "error", **stream_generation_failure(exc)})
             finally:
+                check_lease.release()
                 # Ownership of the temp reference clip moves to this generator
                 # in stream mode (the route returns before rendering starts).
                 if cleanup_ref and ref_lease is not None:

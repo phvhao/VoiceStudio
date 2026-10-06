@@ -80,6 +80,11 @@ class OmniVoiceSubprocessBackend(SubprocessBackend):
                 kw["ref_audio"], kw["ref_text"] = selected_audio, selected_text
             elif ref_text:
                 kw["ref_text"] = selected_text
+        if "language" in kw:
+            # The id the model knows ("Arabic" as "arb"), as in-process.
+            from services.language_codes import omnivoice_language
+
+            kw["language"] = omnivoice_language(kw["language"], text)
         try:
             return super().generate(text, **kw)
         finally:

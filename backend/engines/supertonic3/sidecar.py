@@ -225,10 +225,12 @@ def _normalize_lang(raw) -> str | None:
     """Map OmniVoice's language sentinel to the SDK's language codes.
 
     The SDK accepts ISO-639-1 codes plus ``"na"`` (language-agnostic for
-    Supertonic-3). The parent sends either a raw 2-letter code, the
+    Supertonic-3). The parent sends the language's ISO code, the
     string ``"auto"`` (OmniVoice's sentinel), or ``None``. All three
     of ``"auto"``, ``""``, ``None`` map to ``"na"`` so the SDK's
-    multilingual fallback engages cleanly.
+    multilingual fallback engages cleanly. A region tag keeps its
+    language ("en-us" → "en"); a code is never cut to two letters, which
+    read Hawaiian ("haw") as Hausa.
     """
     if raw is None:
         return "na"
@@ -237,7 +239,7 @@ def _normalize_lang(raw) -> str | None:
     s = raw.strip().lower()
     if not s or s == "auto":
         return "na"
-    return s[:2]
+    return s.replace("_", "-").split("-", 1)[0]
 
 
 def _handle_synthesize(msg: dict, stdout) -> None:

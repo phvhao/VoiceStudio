@@ -79,6 +79,8 @@ Two more fallback chains run at load time:
 - Transcribes are time-bounded: each dub chunk by
   `OMNIVOICE_TRANSCRIBE_CHUNK_TIMEOUT_S` (default 120 s), whole files by
   `OMNIVOICE_ASR_TRANSCRIBE_TIMEOUT_S` (default 300 s). Raise them for very
-  long files on slow hardware.
+  long files on slow hardware. A speech check of the reading waits at most
+  `OMNIVOICE_SPEECH_CHECK_WAIT_S` (default 120 s) for another render's check
+  to finish; past it the sentence stays unchecked.
 
 Speed comparisons across engines live in [performance](../performance.md).

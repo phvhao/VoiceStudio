@@ -42,6 +42,7 @@ import math
 import os
 from typing import TYPE_CHECKING
 
+from services.language_codes import engine_language_code
 from services.subprocess_backend import SubprocessBackend
 
 if TYPE_CHECKING:
@@ -53,6 +54,21 @@ logger = logging.getLogger("omnivoice.moss_tts_v15")
 #: translate OmniVoice's ``duration`` (seconds) into the model's ``tokens``
 #: duration-control argument.
 TOKENS_PER_SECOND: float = 12.5
+
+
+def sidecar_language(language: object) -> "str | None":
+    """What the sidecar is sent for a request's ``language``: the ISO code
+    of a language the sidecar names for MOSS, however the request spells it
+    (the pickers' "Chinese (Simplified)" and "cmn-Hans", Clone's "Standard
+    Arabic", "pt-BR"), else the value as given — a MOSS language name passes
+    through, as before. MOSS reads a language's *name*, word for word; those
+    spellings reached it as names it does not know."""
+    if not language:
+        return None
+    from engines.moss_tts_v15.main import _ISO_TO_NAME
+
+    code = engine_language_code(language)
+    return code if code in _ISO_TO_NAME else str(language)
 
 
 class MossTTSV15Backend(SubprocessBackend):
@@ -185,9 +201,9 @@ class MossTTSV15Backend(SubprocessBackend):
         if ref_text:
             forwarded["ref_text"] = ref_text
 
-        language = kw.get("language")
+        language = sidecar_language(kw.get("language"))
         if language:
-            forwarded["language"] = str(language)
+            forwarded["language"] = language
 
         duration = kw.get("duration")
         if duration is not None:

@@ -32,6 +32,14 @@ from typing import Literal, Optional
 
 import torch
 
+from services.language_codes import (
+    PICKER_LANGUAGE_CODES,
+    declared_language,
+    engine_language_code,
+    language_code,
+    omnivoice_language,
+)
+
 logger = logging.getLogger("omnivoice.tts")
 
 
@@ -329,28 +337,11 @@ class TTSBackend(ABC):
         return None
 
     def _normalize_language_code(self, language: object) -> Optional[str]:
-        """Resolve picker names and region tags without treating unknown names as Auto."""
-        if language is None:
-            return None
-        if not isinstance(language, str):
-            raise ValueError("Language must be a string or None")
-        value = language.strip().lower()
-        if not value or value == "auto":
-            return None
-        from omnivoice.utils.lang_map import LANG_NAME_TO_ID
+        """Resolve picker names and region tags without treating unknown names as Auto.
 
-        # Reuse the same complete, bundled mapping as the language picker.
-        aliases = {"mandarin": "zh", "arabic": "ar", "tagalog": "tl"}
-        if value in aliases:
-            return aliases[value]
-        if value in LANG_NAME_TO_ID:
-            return LANG_NAME_TO_ID[value]
-        head = value.replace("_", "-").split("-", 1)[0]
-        if head.isascii() and head.isalpha() and len(head) in (2, 3):
-            return head
-        # A supplied but unrecognized language remains explicit, so a finite
-        # engine rejects it instead of silently using its default language.
-        return value
+        The same vocabulary as the pickers (see ``services.language_codes``).
+        """
+        return language_code(language)
 
     def _check_language(self, language: object) -> Optional[str]:
         """Reject caller-supplied languages outside this engine's declared
@@ -369,14 +360,15 @@ class TTSBackend(ABC):
         ``_language_rejection_or`` (api/routers/generation.py:1055) turns
         it into the standard "Engine X can't speak 'Y' …" message.
 
-        3-letter ISO 639 codes (``cmn``, ``zho``, …) are intentionally
-        NOT mapped to their 2-letter equivalent here: the convention
-        varies per engine (``cmn`` is Mandarin to one, undefined to
-        another) and a wrong fold silently mis-routes. Engines that
-        advertise a 3-letter set must override ``_check_language`` (or
-        accept the 3-letter token as-is and validate themselves); the
-        base class only enforces exact 2-letter matches against the
-        declared set, which covers the common case.
+        Returns the declared entry the language matched, which callers pass
+        on to the model: every spelling of a declared language is accepted
+        (the pickers' "Chinese (Simplified)" and "cmn-Hans", Clone's
+        "Standard Arabic" on an "ar" engine). An exact entry wins, so an
+        engine that declares a 3-letter code receives it. Codes are matched
+        through an explicit table of codes for the same language
+        (``services.language_codes``), never by their first letters:
+        Cantonese ("yue") is not Mandarin, so a "zh" engine refuses it.
+        ``language_options`` lists exactly what this accepts.
         """
         supported = self.supported_languages
         # open-ended: the engine handles its own checks.
@@ -385,10 +377,9 @@ class TTSBackend(ABC):
         code = self._normalize_language_code(language)
         if code is None:
             return  # no preference → caller leaves it to the engine
-        # Region tags resolve to their base language; three-letter codes
-        # remain exact rather than guessing from their first two letters.
-        if code in supported:
-            return code
+        declared = declared_language(code, supported)
+        if declared is not None:
+            return declared
         # Build the user-facing list. ``multi`` is not in here because
         # ``supported`` already short-circuited above; entries are rendered
         # in declared order so the message matches ``list_backends()``.
@@ -1434,6 +1425,10 @@ def generate_with_cached_ref(model, *, ref_audio, ref_text, **gen_kw):
     # TypeError on an unknown kwarg.
     with engine_in_use(OmniVoiceBackend(model=model)):
         cache_ref = bool(gen_kw.pop("cache_ref", True))
+        # The model knows its own names and ids only: the pickers' "Arabic" or
+        # "cmn-Hans" used to reach it as Auto, without a language hint.
+        if "language" in gen_kw:
+            gen_kw["language"] = omnivoice_language(gen_kw["language"], gen_kw.get("text"))
         # Stays in gen_kw too: the model needs it on the inline branch, and it is inert
         # on the prompt branch (that prompt is already encoded).
         preprocess_prompt = bool(gen_kw.get("preprocess_prompt", True))
@@ -1647,7 +1642,9 @@ class OmniVoiceBackend(TTSBackend):
                     for i, text in enumerate(texts)]
 
         gen_kw = dict(
-            language=kw.get("language"),
+            # An id per line, as generate_with_cached_ref resolves one.
+            language=[omnivoice_language(language, text)
+                      for language, text in zip(_items(kw.get("language")), texts)],
             instruct=kw.get("instruct"),
             duration=kw.get("duration"),
             speed=kw.get("speed", 1.0),
@@ -2355,6 +2352,24 @@ def _kokoro_supported_labels(aliases: dict, lang_codes: dict) -> list[str]:
     return sorted(labels.values())
 
 
+def _kokoro_code(language: str, aliases: dict, lang_codes: dict) -> Optional[str]:
+    """Kokoro's single-letter code for ``language`` in these tables, or None."""
+    key = language.strip().lower()
+    iso = _KOKORO_ISO_BY_FULL_NAME.get(key, key)
+    code = aliases.get(iso, iso)
+    if code not in lang_codes:
+        # Labels from newer installed tables must remain selectable even when
+        # they have no entry in our compatibility map of full names.
+        code = next((candidate for candidate, label in lang_codes.items()
+                     if str(label).strip().lower() == key), code)
+    if code not in lang_codes:
+        # Any other spelling of a language Kokoro has: the pickers'
+        # "Chinese (Simplified)" and "cmn-Hans", "Mandarin", "es-MX".
+        iso = engine_language_code(language) or ""
+        code = aliases.get(iso, iso)
+    return code if code in lang_codes else None
+
+
 def resolve_kokoro_lang_code(language: str) -> str:
     """Map a full language name / ISO code to Kokoro's single-letter
     `lang_code`, against the AUTHORITATIVE table read from the installed
@@ -2368,15 +2383,8 @@ def resolve_kokoro_lang_code(language: str) -> str:
     """
     from mlx_audio.tts.models.kokoro.pipeline import ALIASES, LANG_CODES
 
-    key = language.strip().lower()
-    iso = _KOKORO_ISO_BY_FULL_NAME.get(key, key)
-    code = ALIASES.get(iso, iso)
-    if code not in LANG_CODES:
-        # Labels from newer installed tables must remain selectable even when
-        # they have no entry in our compatibility map of full names.
-        code = next((candidate for candidate, label in LANG_CODES.items()
-                     if str(label).strip().lower() == key), code)
-    if code not in LANG_CODES:
+    code = _kokoro_code(language, ALIASES, LANG_CODES)
+    if code is None:
         supported = ", ".join(_kokoro_supported_labels(ALIASES, LANG_CODES))
         raise ValueError(
             f"mlx-audio's Kokoro model (mlx-community/Kokoro-82M-bf16) doesn't "
@@ -2734,9 +2742,10 @@ class MLXAudioBackend(TTSBackend):
                 # code (auto, chinese, english, etc.)" — a full name, not a
                 # 2-letter code). Kokoro's strict validation doesn't apply to
                 # them. Curated models are checked against their documented
-                # set instead of silently speaking a language they don't know.
-                self._check_language(language)
-                code = self._normalize_language_code(language)
+                # set instead of silently speaking a language they don't know,
+                # and receive the entry the check matched ("Standard Arabic"
+                # reaches OuteTTS as "ar"); a custom repo declares no set.
+                code = self._check_language(language) or self._normalize_language_code(language)
                 if self._curated_key() == "qwen3-tts":
                     # mlx-audio Qwen's codec_language_id uses full names.
                     qwen_languages = {
@@ -3829,51 +3838,35 @@ def output_sample_rate(backend_id: str) -> Optional[int]:
         return None  # Model-specific or unavailable metadata remains unknown.
 
 
-#: Names the Electron pickers send (electron/src/shared/utils/languages.js) for
-#: languages OmniVoice's vocabulary spells another way: the macrolanguage whose
-#: standard member it lists (Standard Arabic, Northern and Central Kurdish), both
-#: Chinese scripts, or an alternative name. OmniVoice reads them as it reads
-#: Auto, without a language hint. Without these, Audiobook, Batch and Dub showed
-#: Arabic, Chinese and Kurdish as unsupported by the default model.
-_OMNIVOICE_PICKER_NAMES = {
-    "arabic": "standard arabic",
-    "chinese (simplified)": "chinese",
-    "chinese (traditional)": "chinese",
-    "haitian creole": "haitian",
-    "kurdish": "northern kurdish",
-    "kyrgyz": "kirghiz",
-    "pashto": "pushto",
-    "punjabi": "panjabi",
-}
-
-
 def language_options(backend_id: str) -> Optional[list[str]]:
     """Picker names for a finite engine; None leaves unknown/model-specific sets open.
 
+    OmniVoice's names (the Clone and Design pickers) and the other pickers'
+    labels are both listed, for every language the engine speaks.
     Adapter constructors configure references only. Never load weights or call
     get_active_tts_backend here: discovery must not switch or unload an engine.
     """
-    from omnivoice.utils.lang_map import LANG_NAME_TO_ID
+    from omnivoice.utils.lang_map import LANG_IDS, LANG_NAME_TO_ID
 
     backend = None
     try:
         # The native OmniVoice adapters use this exact vocabulary at inference,
-        # and the pickers' own names for languages it has.
+        # and the pickers' own names for languages it has: Arabic reaches the
+        # model as Standard Arabic, Kurdish as Northern or Central Kurdish.
         if backend_id in {"omnivoice", "omnivoice-subprocess", "omnivoice-gguf"}:
             return sorted(set(LANG_NAME_TO_ID) | {
-                name for name, vocabulary_name in _OMNIVOICE_PICKER_NAMES.items()
-                if vocabulary_name in LANG_NAME_TO_ID})
+                name for name in PICKER_LANGUAGE_CODES if omnivoice_language(name) in LANG_IDS})
         backend = get_backend_class(backend_id)()
         if backend_id == "mlx-audio" and backend.model_identity() == backend.CURATED_MODELS.get("kokoro"):
             return _installed_kokoro_language_options()
         declared = backend.supported_languages
         if not declared or "multi" in declared:
             return None
-        codes = {backend._normalize_language_code(code) for code in declared}
-        candidates = set(LANG_NAME_TO_ID) | {"mandarin", "arabic", "tagalog"}
+        candidates = set(LANG_NAME_TO_ID) | set(PICKER_LANGUAGE_CODES)
         candidates.update(name.lower() for name in backend.language_display_names.values())
+        # The same match TTSBackend._check_language makes before synthesis.
         return sorted(name for name in candidates
-                      if backend._normalize_language_code(name) in codes)
+                      if declared_language(backend._normalize_language_code(name), declared))
     except Exception:  # Optional metadata must not take down discovery.
         logger.debug("Could not resolve language options for %s", backend_id, exc_info=True)
         return None
@@ -3945,8 +3938,9 @@ def _installed_kokoro_language_options() -> list[str]:
     except Exception:
         logger.warning("Kokoro language tables unreadable; using the declared set", exc_info=True)
         aliases, languages = _KOKORO_FALLBACK_TABLES
-    return sorted(name for name, code in LANG_NAME_TO_ID.items()
-                  if aliases.get(_KOKORO_ISO_BY_FULL_NAME.get(name, code), code) in languages)
+    # The same resolution resolve_kokoro_lang_code makes before synthesis.
+    return sorted(name for name in set(LANG_NAME_TO_ID) | set(PICKER_LANGUAGE_CODES)
+                  if _kokoro_code(name, aliases, languages))
 
 
 

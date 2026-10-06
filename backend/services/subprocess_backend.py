@@ -787,7 +787,11 @@ class SubprocessBackend(TTSBackend):
         sample rate. Negotiates float32 with capable sidecars and accepts
         legacy int16 frames from existing installations.
         """
-        self._check_language(kw.get("language"))
+        language = self._check_language(kw.get("language"))
+        if language is not None:
+            # The declared code the check matched, not the caller's spelling:
+            # sidecars read codes, and "German" reached Confucius4 as "ge".
+            kw["language"] = language
         # On-pool callers (every HTTP/dub/batch generate, dispatched via
         # run_on_gpu_pool_guarded) already own a pool slot; re-acquiring would
         # self-deadlock on a 1-worker (MPS) pool, so skip it. Off-pool callers

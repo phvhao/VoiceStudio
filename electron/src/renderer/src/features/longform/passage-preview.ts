@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiJson, describeError } from '@/lib/api/client';
 import { beginAppActivity } from '@/lib/app-activity';
-import { chapterPreviewBody, suspectPhrases, type Draft } from './longform-session';
+import {
+  chapterPreviewBody,
+  recognizerMissing,
+  suspectPhrases,
+  uncheckedPhrases,
+  type Draft,
+} from './longform-session';
+
+/** No phrase the speech check could not listen to. */
+const ALL_HEARD = { unchecked: 0, noRecognizer: false };
 
 /**
  * Audition a passage of the manuscript on the chapter-preview endpoint: the
@@ -10,8 +19,11 @@ import { chapterPreviewBody, suspectPhrases, type Draft } from './longform-sessi
  */
 export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void) {
   const [output, setOutput] = useState<string | null>(null);
-  // What the speech check (when on) still heard differently in this passage.
+  // What the speech check (when on) still heard differently in this passage,
+  // and how many of its phrases it could not listen to (and whether that was
+  // for want of a speech recognizer).
   const [suspects, setSuspects] = useState<string[]>([]);
+  const [unheard, setUnheard] = useState(ALL_HEARD);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   // The caret sat somewhere with nothing to speak (a heading, a lone tag).
@@ -34,6 +46,7 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
     setError(null);
     setOutput(null);
     setSuspects([]);
+    setUnheard(ALL_HEARD);
     try {
       const result = await apiJson<{ output: string; speech_check?: unknown }>(
         '/audiobook/preview',
@@ -46,6 +59,10 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
       if (!current.signal.aborted) {
         setOutput(result.output);
         setSuspects(suspectPhrases(result));
+        setUnheard({
+          unchecked: uncheckedPhrases(result),
+          noRecognizer: recognizerMissing(result),
+        });
       }
     } catch (cause) {
       if (!current.signal.aborted) setError(describeError(cause));
@@ -64,6 +81,8 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
     pending,
     empty,
     suspects,
+    unchecked: unheard.unchecked,
+    noRecognizer: unheard.noRecognizer,
     preview,
     stop: () => controller.current?.abort(),
     dismiss: () => {
@@ -71,6 +90,7 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
       setError(null);
       setEmpty(false);
       setSuspects([]);
+      setUnheard(ALL_HEARD);
     },
   };
 }

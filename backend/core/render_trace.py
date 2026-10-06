@@ -17,7 +17,8 @@ from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-_STAGES = frozenset({'synthesis', 'join', 'effects', 'save', 'watermark', 'mux', 'cache'})
+_STAGES = frozenset({'synthesis', 'join', 'effects', 'save', 'watermark', 'mux', 'cache',
+                     'speech_check'})
 _current: ContextVar[RenderTrace | None] = ContextVar('render_trace', default=None)
 _recent: deque = deque(maxlen=32)
 _recent_lock = threading.Lock()

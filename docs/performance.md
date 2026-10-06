@@ -218,9 +218,10 @@ Subprocess-engine unload skips a sidecar while an operation holds its lock, incl
 
 - **Top toolbar → Flush** (the button next to the model-status badge). The
   dropdown lists every model currently in memory — the TTS model, its
-  co-loaded ASR, the diarization pipeline, and any resident engines or
-  sidecars — with its device and VRAM use, and a per-model **Unload** button
-  where unloading is possible (WhisperX is released together with the TTS
+  co-loaded ASR, the diarization pipeline, the speech check's recognizer while
+  a render checks its reading (released when the render ends), and any
+  resident engines or sidecars — with its device and VRAM use, and a
+  per-model **Unload** button where unloading is possible (WhisperX is released together with the TTS
   model, so it has no button of its own). An engine left resident after you
   switched away from it is marked *"not active — safe to unload"*. Below the
   list are the two bulk actions:
@@ -240,7 +241,7 @@ Subprocess-engine unload skips a sidecar while an operation holds its lock, incl
 curl -X POST "http://127.0.0.1:3900/system/flush-memory"                    # flush caches
 curl -X POST "http://127.0.0.1:3900/system/flush-memory?unload_model=true"  # + unload TTS model
 curl "http://127.0.0.1:3900/model/loaded"                                   # what's resident
-# unload one model — ids: tts | diarization | sidecar:<id> | sidecars
+# unload one model by its /model/loaded id, e.g. tts | diarization | sidecar:<id> | sidecars | speech-check-asr
 curl -X POST "http://127.0.0.1:3900/model/unload/tts"
 ```
 
@@ -384,7 +385,8 @@ log. Nothing is uploaded automatically; you choose whether to share the bundle.
 
 Each record has a random correlation ID, render surface, total elapsed seconds,
 transport outcome, and per-stage elapsed seconds, call counts and failure counts:
-`synthesis`, `join`, `effects`, `save`, `watermark`, `cache`, and `mux` where used.
+`synthesis`, `join`, `effects`, `save`, `watermark`, `cache`, `mux`, and
+`speech_check` (the reading check's recognizer) where used.
 Scripts, voice names, file paths, audio and exception messages are never recorded.
 The recorder is in-memory, bounded, and behaves the same on every supported OS.
 

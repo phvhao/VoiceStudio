@@ -299,7 +299,8 @@ def test_a_mismatched_take_is_retaken_and_the_best_take_kept():
     verifier = SpeechVerifier(24000, transcribe=lambda audio, sr: heard[audio.label])
     chosen = verifier.render("The lamp held for forty years.", lambda attempt: next(takes))
     assert chosen.label == "good"
-    assert verifier.stats() == {"checked": 1, "retaken": 1, "suspect": [], "unavailable": False}
+    assert verifier.stats() == {"checked": 1, "retaken": 1, "suspect": [], "unavailable": False,
+                                "no_recognizer": False}
 
 
 def test_a_phrase_that_keeps_failing_is_reported_once_retries_run_out():

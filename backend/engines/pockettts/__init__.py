@@ -50,6 +50,11 @@ logger = logging.getLogger("omnivoice.engines.pockettts")
 
 _VENV_ENV_VAR = "OMNIVOICE_POCKETTTS_DIR"
 
+#: The languages PocketTTS ships a model for, one model each.
+LANGUAGES = ("en", "fr", "de", "pt", "it", "es")
+#: Three-letter spellings of them the sidecar has always read.
+_SIDECAR_SPELLINGS = {"eng": "en", "fra": "fr", "deu": "de", "por": "pt", "ita": "it", "esp": "es"}
+
 
 def _own_venv_python() -> "Path | None":
     """The venv the one-click installer made for this engine, if any."""
@@ -183,9 +188,15 @@ class PocketTTSBackend(SubprocessBackend):
 
     @property
     def supported_languages(self) -> list[str]:
-        # Protocol tag; six languages (en/fr/de/pt/it/es), one model per
-        # language, selected via the language kwarg.
-        return ["multi"]
+        # One model per language, selected via the language kwarg. Declared,
+        # so the pickers offer exactly these and the shared guard refuses any
+        # other language before the sidecar starts; the sidecar receives the
+        # code the guard matched, so "pt-BR" reaches it as "pt".
+        return list(LANGUAGES)
+
+    def _normalize_language_code(self, language: object) -> "str | None":
+        code = super()._normalize_language_code(language)
+        return _SIDECAR_SPELLINGS.get(code, code)
 
 
 __all__ = ["PocketTTSBackend"]

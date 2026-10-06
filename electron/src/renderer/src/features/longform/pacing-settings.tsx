@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { AudioWaveformIcon } from 'lucide-react';
+import { AudioWaveformIcon, EarOffIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   ReadingForm,
@@ -70,13 +70,24 @@ export function PacingSettings({
   );
 }
 
-/** Phrases the speech check still heard differently, grouped by chapter. */
+/**
+ * Phrases the speech check still heard differently, grouped by chapter, and
+ * how many it could not listen to: with no speech recognizer installed it
+ * says to install one; where the one installed heard no words or failed, it
+ * says to listen to them, and in which chapters.
+ */
 export function SpeechCheckReport({
   chapters,
   suspects,
+  unchecked = 0,
+  noRecognizer = false,
 }: {
   chapters?: AudiobookRenderChapter[];
   suspects?: string[];
+  /** A passage's phrases the check could not listen to (chapters carry their own). */
+  unchecked?: number;
+  /** A passage's: they went unheard for want of a speech recognizer. */
+  noRecognizer?: boolean;
 }) {
   const { t } = useTranslation();
   const groups = chapters
@@ -90,27 +101,75 @@ export function SpeechCheckReport({
       ? [{ title: '', texts: suspects }]
       : [];
   const count = groups.reduce((sum, group) => sum + group.texts.length, 0);
-  if (!count) return null;
+  // A count kept with a saved draft is read back as it was stored.
+  const unheard = (
+    chapters
+      ? chapters.map((chapter, index) => ({
+          title: chapterName(t, chapters, index),
+          count: chapter.unchecked,
+          missing: chapter.noRecognizer === true,
+        }))
+      : [{ title: '', count: unchecked, missing: noRecognizer }]
+  ).filter(
+    (group): group is { title: string; count: number; missing: boolean } =>
+      Number.isInteger(group.count) && Number(group.count) > 0,
+  );
+  const notChecked = unheard.reduce((sum, group) => sum + group.count, 0);
+  const notHeard = unheard.filter((group) => !group.missing);
+  if (!count && !notChecked) return null;
   return (
     <div
       role="status"
-      className="space-y-2 rounded-xl border border-amber-500/40 bg-amber-500/8 p-3 text-xs"
+      className={`space-y-2 rounded-xl border p-3 text-xs ${
+        count ? 'border-amber-500/40 bg-amber-500/8' : 'border-border/60 bg-muted/30'
+      }`}
     >
-      <p className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-300">
-        <AudioWaveformIcon className="size-4 shrink-0" aria-hidden="true" />
-        {t('pacing.suspect_title', { count })}
-      </p>
-      <p className="text-muted-foreground">{t('pacing.suspect_hint')}</p>
-      <ul className="max-h-48 space-y-1.5 overflow-y-auto">
-        {groups.map((group) =>
-          group.texts.map((text, index) => (
-            <li key={`${group.title}-${index}`} className="leading-relaxed">
-              {group.title && <span className="me-1.5 text-muted-foreground">{group.title} ·</span>}
-              “{text}”
-            </li>
-          )),
-        )}
-      </ul>
+      {count > 0 && (
+        <>
+          <p className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-300">
+            <AudioWaveformIcon className="size-4 shrink-0" aria-hidden="true" />
+            {t('pacing.suspect_title', { count })}
+          </p>
+          <p className="text-muted-foreground">{t('pacing.suspect_hint')}</p>
+          <ul className="max-h-48 space-y-1.5 overflow-y-auto">
+            {groups.map((group) =>
+              group.texts.map((text, index) => (
+                <li key={`${group.title}-${index}`} className="leading-relaxed">
+                  {group.title && (
+                    <span className="me-1.5 text-muted-foreground">{group.title} ·</span>
+                  )}
+                  “{text}”
+                </li>
+              )),
+            )}
+          </ul>
+        </>
+      )}
+      {notChecked > 0 && (
+        <div className="space-y-0.5">
+          <p className="flex items-center gap-2 font-medium">
+            <EarOffIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {t('pacing.unchecked_title', { count: notChecked })}
+          </p>
+          {notHeard.length < unheard.length && (
+            <p className="ps-6 text-muted-foreground">{t('pacing.unchecked_no_recognizer')}</p>
+          )}
+          {notHeard.length > 0 && (
+            <>
+              <p className="ps-6 text-muted-foreground">{t('pacing.unchecked_unheard')}</p>
+              {chapters && (
+                <ul className="max-h-32 space-y-0.5 overflow-y-auto ps-6">
+                  {notHeard.map((group, index) => (
+                    <li key={`${group.title}-${index}`}>
+                      {group.title} · {group.count}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -36,9 +36,19 @@ engine-side validation remains authoritative.
 
 Finite engines use their adapter's language declarations. Native OmniVoice adapters
 use the bundled language vocabulary plus the picker names it spells differently
-(Arabic, Kurdish, both Chinese scripts, Haitian Creole, Kyrgyz, Pashto and Punjabi),
-which OmniVoice reads without a language hint, as it reads Auto. Each curated
-MLX-Audio model declares the languages its model card documents
+(Arabic, Kurdish, both Chinese scripts, Haitian Creole, Kyrgyz, Pashto and Punjabi).
+Every spelling reaches OmniVoice as the language id it was trained with, including
+the codes Batch and Dub send: Arabic as Standard Arabic, both Chinese scripts as
+Chinese, Kurdish as Northern Kurdish, or Central Kurdish when the text is in Arabic
+script. A finite engine accepts each spelling of a language it declares, such as
+Clone's Standard Arabic on an Arabic engine, Filipino on a Tagalog one or either
+Chinese script on a Chinese one, and receives it as its own code; it still refuses
+other varieties, such as Cantonese on a Mandarin-only engine. PocketTTS declares the
+six languages it ships a model for, so its pickers offer only those and a region tag
+such as pt-BR reaches it as Portuguese. Open-ended sidecar engines get their own
+spelling too: MOSS-TTS-v1.5 the name it knows ("cmn-Hans" as Chinese). That
+vocabulary lives in `backend/services/language_codes.py`; synthesis and the picker
+list share one match. Each curated MLX-Audio model declares the languages its model card documents
 (`MLXAudioBackend.CURATED_MODEL_LANGUAGES`, with
 sources in the code): CSM, Dia, Chatterbox and MeloTTS-English are English-only,
 Qwen3-TTS covers 10 languages and OuteTTS 1.0 covers 23. The same list drives the

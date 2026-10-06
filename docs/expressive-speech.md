@@ -53,9 +53,28 @@ sentence with the speech recognizer you already installed, re-renders the ones
 whose words differ from the script (up to twice, keeping the closest take) and,
 in Audiobook and Stories, lists the sentences that still differ after the
 render. It never downloads a recognizer; without one, rendering continues
-unchecked. Expect it to take noticeably longer. What it found is kept with the
-cached audio, so re-rendering an unchanged or partly edited chapter still lists
-those sentences. Sentences it could not listen to are kept as unchecked, not
+unchecked. Audiobook and Stories say how many sentences were not checked and
+why: no recognizer is installed (install one and the next render checks them),
+or the one installed heard no words in them or could not run, which a
+near-silent take causes too — listen to those yourself; the report names their
+chapters. Expect it to take longer. The recognizer loads once per render, not
+once per sentence, and is told the render's language, when one is set, instead
+of detecting it, so after the first sentence a check takes well under a second
+(about 0.6 s instead of 4 s with faster-whisper large-v3 on an RTX 3060). It
+stays loaded only while the render runs: it is released when the render ends,
+between two checks when the memory it holds runs low (GPU memory for a
+recognizer on the GPU; system memory for one on the CPU, on a Mac, or on a
+computer without a GPU), and by its **Unload** button in **Model Catalogue**
+("In memory" while a render holds it); the next check loads it again.
+mlx-whisper on a Mac keeps its model loaded, as before. Renders share the
+recognizer, one check at a time; a check never waits more than
+`OMNIVOICE_SPEECH_CHECK_WAIT_S` (default 120 s) for another render's, so a
+transcription that hangs leaves the sentences after it unchecked instead of
+stalling every render. The render trace
+(**Settings → About → Save diagnostic bundle**) shows the checks as the
+`speech_check` stage. What it found is kept with the cached audio, so
+re-rendering an unchanged or partly edited chapter still lists those
+sentences. Sentences it could not listen to are kept as unchecked, not
 as checked: they are reused as they are while no recognizer is installed, and
 the first render after one is installed checks them. Chapters rendered on a
 remote worker are not checked.

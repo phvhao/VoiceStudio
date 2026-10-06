@@ -60,6 +60,7 @@ from services.audiobook import (
     voice_gain_pairs,
 )
 from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
+from services.speech_verify import recognizer_lease  # pure (no torch)
 from services.longform_render import (
     ENCODER_PEAK_HEADROOM_DB,
     LONGFORM_CACHE_SUBDIR,
@@ -949,6 +950,15 @@ def _chapter_speech_check(timing) -> dict | None:
     return valid_speech_check(timing.get("speech_check")) if isinstance(timing, dict) else None
 
 
+def _language_input_marker(engine_id, language) -> str:
+    """``language_codes.LANGUAGE_INPUT_RENDER`` (as text) when ``engine_id``
+    receives ``language`` otherwise than older audio was rendered with, else
+    ``""``: only those keys move, every other stays byte-identical."""
+    from services.language_codes import LANGUAGE_INPUT_RENDER, language_input_changed
+
+    return str(LANGUAGE_INPUT_RENDER) if language_input_changed(engine_id, language) else ""
+
+
 def _span_key_tuple(span) -> tuple:
     """``(voice_id, text, pause_ms_after, speed[, join[, gain_db]])`` — what
     :func:`services.longform_render.chapter_cache_key` hashes of one span. A
@@ -1045,6 +1055,13 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
     lang_sig = f"\x00language={language}" if language else ""
     if language:
         sig["\x00language"] = language
+    language_input = _language_input_marker(engine_id, language)
+    if language_input:
+        # The engine now receives this language otherwise than when older
+        # audio was rendered for it (OmniVoice read "Arabic" as Auto): that
+        # audio is not replayed, under the current or any legacy key.
+        sig["\x00language input"] = language_input
+        lang_sig += f"\x00language input={language_input}"
     marking = will_mark()
     if marking:
         # Provenance-marked chapters cache under their own key (#1169): a
@@ -1114,6 +1131,8 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
     }
     if language:
         inputs["language"] = language
+    if language_input:
+        inputs["language input"] = language_input
     if leveled_sig:
         inputs["leveled voices"] = leveled_sig
     for k, v in resolved.items():
@@ -1192,7 +1211,9 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     if opts.verify_speech:
         from services.speech_verify import SpeechVerifier
 
-        verifier = SpeechVerifier(sr)
+        # Told the chapter's language; the render's lease keeps its
+        # recognizer loaded from one chapter to the next.
+        verifier = SpeechVerifier(sr, language=language)
     recognizer = None
     found = _chapter_cache_lookup(keys, sr)
     if found is not None:
@@ -1373,12 +1394,17 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
         "expressive": opts.to_manifest(), "watermark": bool(watermark_enabled()),
     }
     # The worker cuts the phrases, so the splitter's revision keys the result
-    # too (it is not part of the manifest the worker receives).
-    phrase_split = ({"phrase_split": PHRASE_SPLIT_REVISION}
-                    if opts.punctuation_pauses is not None or opts.split_commas else {})
+    # too (it is not part of the manifest the worker receives); so does a
+    # language the engine now receives otherwise than older audio was
+    # rendered with (see _chapter_cache_keys).
+    revisions = ({"phrase_split": PHRASE_SPLIT_REVISION}
+                 if opts.punctuation_pauses is not None or opts.split_commas else {})
+    language_input = _language_input_marker(engine_id, language)
+    if language_input:
+        revisions["language_input"] = language_input
 
     def _signature(ref_audio: list, expressive: dict | None = None) -> str:
-        payload = {**params, **phrase_split, "ref_audio": ref_audio}
+        payload = {**params, **revisions, "ref_audio": ref_audio}
         if expressive is not None:
             payload["expressive"] = expressive
         return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
@@ -1592,7 +1618,7 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
     resolved_lang = _resolve_default_language(req.language, req.default_voice)
     opts = _expressive_opts(req)
     decision = gpu_gateway.decide("audiobook")
-    with voice_leases.VoiceFileLease() as lease:
+    with voice_leases.VoiceFileLease() as lease, recognizer_lease(checking=opts.verify_speech):
         wav_path, dur, was_cached, seg_stats = await _run_chapter(
             chapter, decision=decision, job=None, default_voice=req.default_voice,
             language=resolved_lang, opts=opts, voice_map=req.voice_map,
@@ -1875,6 +1901,8 @@ async def _render_longform_sse(
     # Every reference take this render resolves stays held until it ends, so a
     # re-lock mid-book never lets the retired-voice sweep delete it (#2535).
     voice_lease = voice_leases.VoiceFileLease()
+    # With the speech check on, its recognizer loads once for the whole book.
+    check_lease = recognizer_lease(checking=opts.verify_speech)
     try:
         resolved_lang = _resolve_default_language(language, default_voice)
         operation = "audiobook" if job_type == "audiobook" else "longform"
@@ -2153,6 +2181,7 @@ async def _render_longform_sse(
         yield _emit({"type": "error", "error": "render failed (see backend log)"})
     finally:
         voice_lease.release()
+        check_lease.release()
 
 
 def _write_book_timeline(out_path: str, out_name: str, chapters: list, **kwargs) -> bool:
