@@ -52,7 +52,7 @@ it('shows the chosen voice on the trigger', () => {
 it('filters by name ignoring case and accents', async () => {
   const { trigger } = renderPicker();
   const search = await open(trigger);
-  expectOptions('Mara', GIONG, 'Đào Lan');
+  expectOptions(GIONG, 'Mara', 'Đào Lan');
   type(search, 'giong');
   expectOptions(GIONG);
   type(search, 'DAO');
@@ -72,10 +72,10 @@ it('opens from the keyboard, moves with the arrows and picks with Enter', async 
   fireEvent.keyDown(search, { key: 'ArrowDown' });
   expect(search).toHaveAttribute(
     'aria-activedescendant',
-    screen.getByRole('option', { name: GIONG }).id,
+    screen.getByRole('option', { name: 'Mara' }).id,
   );
   fireEvent.keyDown(search, { key: 'Enter' });
-  expect(onChange).toHaveBeenCalledExactlyOnceWith('p-giong');
+  expect(onChange).toHaveBeenCalledExactlyOnceWith('p-mara');
   await waitFor(() => expect(screen.queryByRole('listbox')).not.toBeInTheDocument());
   expect(trigger).toHaveFocus();
 });
@@ -144,7 +144,7 @@ it('keeps the chosen voice highlighted after it changes while closed', async () 
     />,
   );
   await open(trigger);
-  expectOptions('Mara', GIONG, 'Đào Lan');
+  expectOptions(GIONG, 'Mara', 'Đào Lan');
   expect(screen.getByRole('option', { name: 'Đào Lan' })).toHaveAttribute('data-highlighted');
 });
 
@@ -177,8 +177,29 @@ it('groups cloned and designed voices under headings only when both exist', asyn
 
   const clonesOnly = renderPicker({ profiles: profiles.slice(0, 2) });
   await open(clonesOnly.trigger);
-  expectOptions('Mara', GIONG);
+  expectOptions(GIONG, 'Mara');
   expect(screen.queryByText('Cloned voices')).not.toBeInTheDocument();
+});
+
+it('lists voices A–Z in the interface language, numbers by value', async () => {
+  const previous = i18n.language;
+  await i18n.changeLanguage('vi');
+  try {
+    const { trigger } = renderPicker({
+      profiles: [
+        { id: 'a', name: 'mc-nam-vov', kind: 'clone' },
+        { id: 'b', name: 'đức', kind: 'clone' },
+        { id: 'c', name: 'Dung', kind: 'clone' },
+        { id: 'd', name: 'voice 10', kind: 'clone' },
+        { id: 'e', name: 'voice 2', kind: 'clone' },
+        { id: 'f', name: 'An', kind: 'clone' },
+      ],
+    });
+    await open(trigger);
+    expectOptions('An', 'Dung', 'đức', 'mc-nam-vov', 'voice 2', 'voice 10');
+  } finally {
+    await i18n.changeLanguage(previous);
+  }
 });
 
 it('explains when there are no voices yet', async () => {

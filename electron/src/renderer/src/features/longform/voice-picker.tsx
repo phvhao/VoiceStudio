@@ -79,10 +79,15 @@ function searchKey(text: string) {
 
 function voiceGroups(
   profiles: VoiceProfile[],
+  locale: string,
   defaultLabel?: string,
   defaultDetail?: string,
 ): VoiceGroup[] {
   const option = (profile: VoiceProfile) => ({ value: profile.id, label: profile.name, profile });
+  // A–Z in the interface language ("đ" after "d" in Vietnamese), numbers by
+  // value so "voice 2" comes before "voice 10".
+  const collator = new Intl.Collator(locale, { sensitivity: 'base', numeric: true });
+  profiles = [...profiles].sort((a, b) => collator.compare(a.name, b.name));
   // `kind` is authoritative; the backend reads a legacy row without one as a clone.
   const designed = (profile: VoiceProfile) => profile.kind === 'design';
   const groups: VoiceGroup[] = [
@@ -154,13 +159,13 @@ export function VoicePicker({
   'aria-label'?: string;
   className?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // Callers pass `defaultOption` inline; key the list on its strings, not its identity.
   const defaultLabel = defaultOption?.label;
   const defaultDetail = defaultOption?.detail;
   const groups = useMemo(
-    () => voiceGroups(profiles, defaultLabel, defaultDetail),
-    [profiles, defaultLabel, defaultDetail],
+    () => voiceGroups(profiles, i18n.language, defaultLabel, defaultDetail),
+    [profiles, i18n.language, defaultLabel, defaultDetail],
   );
   const items = useMemo(
     () =>
