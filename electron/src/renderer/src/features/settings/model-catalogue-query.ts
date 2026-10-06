@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiJson } from '@/lib/api/client';
 import { useBackendStatus } from '@/hooks/use-backend-status';
 import { isBackendReachable } from '@shared/utils/backendStage';
+import { statusStaleTime } from '@/lib/status-polling';
 
 export interface CatalogueModel {
   repo_id: string;
@@ -39,7 +40,7 @@ export function useModelCatalogue() {
   return useQuery({
     queryKey: ['model-catalogue'],
     queryFn: () => apiJson<ModelCatalogueResponse>('/models'),
-    staleTime: 30_000,
+    staleTime: (query) => statusStaleTime(query, 30_000),
     enabled: isBackendReachable(status.stage),
     refetchInterval: (query) =>
       query.state.data?.target && query.state.data.target !== 'local' ? 5_000 : false,

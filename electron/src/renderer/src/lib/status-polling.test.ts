@@ -10,6 +10,7 @@ import {
   modelStatusPollMs,
   noteBackendStage,
   relaxWhenBackendBusy,
+  statusStaleTime,
 } from './status-polling';
 
 describe('runtime status polling', () => {
@@ -47,5 +48,20 @@ describe('runtime status polling', () => {
       noteBackendStage('ready');
     }
     expect(modelStatusPollMs(1, 'ready')).toBe(ACTIVE_STATUS_POLL_MS);
+  });
+
+  it('keeps a status answer for one poll, never across a backend restart', () => {
+    const answered = { state: { dataUpdatedAt: Date.now() - 1_000 } };
+    expect(statusStaleTime(answered, IDLE_STATUS_POLL_MS)).toBe(IDLE_STATUS_POLL_MS);
+    // A busy backend is still the process that answered.
+    noteBackendStage('unresponsive');
+    noteBackendStage('ready');
+    expect(statusStaleTime(answered, IDLE_STATUS_POLL_MS)).toBe(IDLE_STATUS_POLL_MS);
+    // One that crashed and came back (a Retry, a restart) is another.
+    noteBackendStage('crashed');
+    noteBackendStage('ready');
+    expect(statusStaleTime(answered, IDLE_STATUS_POLL_MS)).toBe(0);
+    const since = { state: { dataUpdatedAt: Date.now() } };
+    expect(statusStaleTime(since, IDLE_STATUS_POLL_MS)).toBe(IDLE_STATUS_POLL_MS);
   });
 });

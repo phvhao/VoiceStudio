@@ -42,13 +42,13 @@ import { PerformanceProfile } from '@/components/performance-profile';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/popover';
 import { ComputeTargetChoices } from '@/components/compute-target-choices';
 import { useComputeRuntime, useComputeTarget } from '@/hooks/use-compute-target';
-import type { BatchJob } from '@shared/api/batch-types';
+import { useActiveBatchJobs } from '@/hooks/use-active-batch-jobs';
 import {
   IDLE_STATUS_POLL_MS,
-  batchStatusPollMs,
   loadedModelsPollMs,
   modelStatusPollMs,
   relaxWhenBackendBusy,
+  statusStaleTime,
 } from '@/lib/status-polling';
 
 type BackendStage = ReturnType<typeof useBackendStatus>['stage'];
@@ -191,11 +191,17 @@ export function StatusBar({
     isBackendReachable(status.stage) && Boolean(activeRemoteTarget),
     activityCount > 0,
   );
+  // Each status poll is fresh until its next tick: the sidebar remounts on every
+  // Settings visit, and a remount must not repeat a request the poll just made.
+  // A backend restart ends that early (statusStaleTime).
+  const modelPollMs = (query: { state: { data?: SidebarModelStatus } }) =>
+    modelStatusPollMs(activityCount, query.state.data?.status);
   const model = useQuery({
     queryKey: ['sidebar-model-status'],
     queryFn: () => apiJson<SidebarModelStatus>('/model/status'),
     enabled: isBackendReachable(status.stage),
-    refetchInterval: (query) => modelStatusPollMs(activityCount, query.state.data?.status),
+    staleTime: (query) => statusStaleTime(query, modelPollMs(query)),
+    refetchInterval: modelPollMs,
   });
   const translation = useTranslationEngines();
   const selectedTranslation = translation.data?.engines.find(
@@ -216,13 +222,7 @@ export function StatusBar({
         }[];
       }>('/models'),
   });
-  const batchJobs = useQuery({
-    queryKey: ['batch-jobs', 'active'],
-    enabled: isBackendReachable(status.stage),
-    queryFn: ({ signal }) => apiJson<BatchJob[]>('/batch/jobs?status=active&limit=100', { signal }),
-    staleTime: 1_000,
-    refetchInterval: (query) => batchStatusPollMs(query.state.data?.length ?? 0),
-  });
+  const batchJobs = useActiveBatchJobs(isBackendReachable(status.stage));
   const runningBatchStages = new Set(
     batchJobs.data
       ?.filter((job) => job.status === 'running')
@@ -233,11 +233,12 @@ export function StatusBar({
   const batchAsrActive = runningBatchStages.has('transcribe');
   const batchTranslationActive = runningBatchStages.has('translate');
   const batchTtsActive = runningBatchStages.has('generate');
+  const loadedPollMs = loadedModelsPollMs(activityCount > 0 || hasBatchWork);
   const loadedModels = useQuery({
     queryKey: ['loaded-models'],
     enabled: isBackendReachable(status.stage),
-    staleTime: 5_000,
-    refetchInterval: loadedModelsPollMs(activityCount > 0 || hasBatchWork),
+    staleTime: (query) => statusStaleTime(query, loadedPollMs),
+    refetchInterval: loadedPollMs,
     queryFn: () =>
       apiJson<{
         models: LoadedModelStatus[];
@@ -252,10 +253,12 @@ export function StatusBar({
     (entry) => entry.installed && ['diarisation', 'diarization'].includes(entry.role.toLowerCase()),
   );
   const loadedDiarisation = loadedModels.data?.models.find((entry) => entry.id === 'diarization');
+  const diarisationPollMs = () => relaxWhenBackendBusy(IDLE_STATUS_POLL_MS);
   const diarisation = useQuery({
     queryKey: ['diarisation-status'],
     enabled: isBackendReachable(status.stage),
-    refetchInterval: () => relaxWhenBackendBusy(IDLE_STATUS_POLL_MS),
+    staleTime: (query) => statusStaleTime(query, diarisationPollMs()),
+    refetchInterval: diarisationPollMs,
     queryFn: () =>
       apiJson<{
         active: string;

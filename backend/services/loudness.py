@@ -1,13 +1,15 @@
 """Two-pass loudnorm measure orchestrator (#28).
 
 The impure half of the two-pass ACX/podcast master: run ffmpeg's measure pass
-over the concatenated chapters and parse the printed loudnorm JSON. The pure
-builders/parser live in :mod:`services.longform_render`; this only drives ffmpeg.
+over the concatenated chapters and parse the printed loudnorm JSON, and meter
+the finished file's true peak. The pure builders/parsers live in
+:mod:`services.longform_render`; this only drives ffmpeg.
 
 Contract: **never raises.** Every failure (skip / non-zero rc / timeout / spawn
 error / empty or unparseable stderr / silent program) is caught, logged at
-WARNING, and converted to ``None`` so the caller falls back to single-pass. A
-slow or broken measure must degrade the master, never abort the render.
+WARNING, and converted to ``None`` so the caller falls back to single-pass (or
+keeps the file it has). A slow or broken measure must degrade the master,
+never abort the render.
 """
 from __future__ import annotations
 
@@ -18,7 +20,9 @@ from services.longform_render import (
     MeasuredLoudness,
     build_loudnorm_measure_cmd,
     build_loudnorm_measure_filter,
+    build_true_peak_cmd,
     parse_loudnorm_measure,
+    parse_true_peak,
 )
 
 logger = logging.getLogger("omnivoice.loudness")
@@ -65,4 +69,27 @@ async def measure_loudness(
     return measured
 
 
-__all__ = ["measure_loudness"]
+async def measure_true_peak(ffmpeg: str, path: str, *, job_id: str) -> Optional[float]:
+    """The encoded file's true peak in dBTP, or ``None`` on ANY failure (the
+    caller keeps the file as it is). Logs like :func:`measure_loudness`: the rc
+    and a static message, never the raw stderr."""
+    from services.ffmpeg_utils import run_ffmpeg  # lazy → patchable at source
+    try:
+        rc, _out, err = await run_ffmpeg(build_true_peak_cmd(ffmpeg, path), capture=True, job_id=job_id)
+    except Exception as exc:
+        logger.warning("true-peak check did not run (%s) — file kept as encoded", type(exc).__name__)
+        return None
+    if rc != 0:
+        logger.warning("true-peak check exited rc=%s — file kept as encoded", rc)
+        return None
+    try:
+        stderr_text = err.decode("utf-8", "replace") if isinstance(err, (bytes, bytearray)) else (err or "")
+    except Exception:
+        return None
+    peak = parse_true_peak(stderr_text)
+    if peak is None:
+        logger.warning("true-peak check output unparseable — file kept as encoded")
+    return peak
+
+
+__all__ = ["measure_loudness", "measure_true_peak"]

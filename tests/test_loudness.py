@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from services.loudness import measure_loudness
+from services.loudness import measure_loudness, measure_true_peak
 
 _JSON = """[Parsed_loudnorm_0 @ 0x55]
 {
@@ -94,3 +94,27 @@ def test_forwards_job_id_and_uses_measure_argv(monkeypatch):
     assert spy["job_id"] == "job-xyz"
     assert spy["cmd"][:5] == ["ffmpeg", "-y", "-hide_banner", "-loglevel", "info"]
     assert spy["cmd"][-3:] == ["-f", "null", "-"]
+
+
+# ── true-peak check of the encoded file ─────────────────────────────────────
+
+_PEAK_LOG = b"[Parsed_ebur128_0 @ 01] Summary:\n\n  True peak:\n    Peak:       -2.9 dBFS\n"
+
+
+def test_true_peak_parses_the_meter_summary(monkeypatch):
+    spy = {}
+    _stub(monkeypatch, rc=0, err=b"\xff broken byte\n" + _PEAK_LOG, spy=spy)
+    assert _run(measure_true_peak("ffmpeg", "book.m4b", job_id="job-xyz")) == -2.9
+    assert spy["job_id"] == "job-xyz"
+    assert "book.m4b" in spy["cmd"] and "ebur128=peak=true:framelog=verbose" in spy["cmd"]
+
+
+@pytest.mark.parametrize("stub", [
+    {"rc": 1, "err": _PEAK_LOG}, {"rc": None, "err": _PEAK_LOG}, {"rc": 0, "err": b""},
+    {"rc": 0, "err": b"no summary"}, {"raises": asyncio.TimeoutError()},
+    {"raises": OSError("spawn failed")},
+])
+def test_true_peak_never_raises(monkeypatch, stub):
+    # Unknown → the caller keeps the file as encoded.
+    _stub(monkeypatch, **stub)
+    assert _run(measure_true_peak("ffmpeg", "book.m4b", job_id="j")) is None

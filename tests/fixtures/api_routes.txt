@@ -3,6 +3,7 @@
 DELETE /api/auth/session
 DELETE /api/mcp/bindings/{client_id}
 DELETE /api/settings/hf-token
+DELETE /audiobook/export/html/{export_id}
 DELETE /batch/jobs/{job_id}
 DELETE /calls/{call_id}
 DELETE /dub/history
@@ -60,6 +61,7 @@ GET /audio/{audio_id}.opus
 GET /audio/{audio_id}/quality
 GET /audiobook/export/html/{export_id}
 GET /audiobook/jobs
+GET /audiobook/sampling
 GET /audiobook/timeline/{output}
 GET /batch/download/{job_id}/{lang}
 GET /batch/jobs

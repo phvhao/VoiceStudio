@@ -18,7 +18,7 @@ import { Input } from '@/components/ui/input';
 import { apiJson } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 import { ChapterPreview, useChapterPreview } from './chapter-previews';
-import { chapterPreviewBody, type Draft } from './longform-session';
+import { outlineQueryKey, outlineRequest, type Draft } from './longform-session';
 import { applyMarkupEdit, type MarkupTarget } from './markup-toolbar';
 import { revealOffset } from './markup-textarea';
 import {
@@ -47,12 +47,6 @@ interface OutlineStatus {
 
 // Typing settles before the chapters are looked up again.
 const STATUS_DELAY_MS = 700;
-
-/** `/audiobook/outline`'s request: the chapter preview's inputs, and the last book. */
-export function outlineRequest(draft: Draft) {
-  const { chapter_index: _index, ...body } = chapterPreviewBody(draft, 0);
-  return { ...body, output: draft.output || null };
-}
 
 const STATUS_CLASSES: Record<ChapterStatus, string> = {
   rendered: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300',
@@ -123,7 +117,8 @@ export function BookOutline({
     return () => clearTimeout(timer);
   }, [request]);
   const status = useQuery({
-    queryKey: ['audiobook-outline', settled],
+    // The render reads it too, for the chapters it will find cached (renderTiming).
+    queryKey: outlineQueryKey(settled),
     queryFn: ({ signal }) =>
       apiJson<OutlineStatus>('/audiobook/outline', { method: 'POST', body: settled, signal }),
     enabled: Boolean(draft.script.trim()),

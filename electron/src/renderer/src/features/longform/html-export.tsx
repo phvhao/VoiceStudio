@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { FileCodeIcon } from 'lucide-react';
 import { getBridge } from '@/components/bridge';
 import { Button } from '@/components/ui/button';
-import { apiJson, apiPath, describeError } from '@/lib/api/client';
+import { apiFetch, apiJson, apiPath, describeError } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
 import { bookLanguageTag, type Draft } from './longform-session';
 
@@ -92,6 +92,7 @@ export function htmlExportName(draft: Draft): string {
  * Build the book's web-page export and save it like every other export: the
  * native save dialog under Electron, a download in the browser. The backend
  * hands the ZIP out once and then removes it: it is a full copy of the book.
+ * A save that is cancelled or fails never fetches it, so it is discarded.
  */
 export async function exportBookHtml(
   draft: Draft,
@@ -104,10 +105,17 @@ export async function exportBookHtml(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(htmlExportBody(draft, t, lang, direction)),
   });
-  const url = apiPath('/audiobook/export/html/' + encodeURIComponent(id));
+  const path = '/audiobook/export/html/' + encodeURIComponent(id);
+  const url = apiPath(path);
   const name = htmlExportName(draft);
   if (getBridge()) {
-    await saveExport(url, name);
+    // Best-effort: whatever is left is removed when the backend next starts.
+    const discard = () => apiFetch(path, { method: 'DELETE' }).catch(() => undefined);
+    const saved = await saveExport(url, name).catch(async (error: unknown) => {
+      await discard();
+      throw error;
+    });
+    if (!saved || saved.canceled) await discard();
     return;
   }
   const link = document.createElement('a');

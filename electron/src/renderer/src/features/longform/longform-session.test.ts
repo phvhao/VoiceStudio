@@ -93,6 +93,27 @@ it('keeps what voice leveling measured in each chapter, for the Cast panel', asy
     { title: 'Two', status: 'cached' },
   ]);
 });
+it('keeps the phrases to listen to when a chapter comes from the cache', async () => {
+  // The speech check's result is kept with the chapter's audio: a cached
+  // chapter reports the same phrases as the render that checked it.
+  const check = {
+    checked: 3,
+    retaken: 2,
+    unchecked: 0,
+    suspect: [{ text: 'The lamp held.', score: 0.4 }],
+  };
+  fetchMock.mockResolvedValue(
+    eventResponse([
+      { type: 'started', chapters: 1 },
+      { type: 'chapter', index: 0, title: 'One', cached: true, speech_check: check },
+      { type: 'done', output: 'new.m4b', failed_chapters: [] },
+    ]),
+  );
+  await renderLongform('audiobook');
+  expect(longformSession.state.drafts.audiobook.outputChapters).toEqual([
+    { title: 'One', status: 'cached', suspects: ['The lamp held.'] },
+  ]);
+});
 it('stop aborts the network request and blocks duplicate renders', async () => {
   fetchMock.mockImplementation(
     (_url, options) =>

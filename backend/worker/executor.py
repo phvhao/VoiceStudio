@@ -467,7 +467,15 @@ class TaskExecutor:
     def _synthesize_audiobook(backend, rows: list[dict], voices: list[dict], params: dict,
                               timing: list | None = None):
         """Render one chapter; ``timing`` (when given) receives its timing
-        document, as :func:`services.audiobook.synthesize_chapter` measures it."""
+        document, as :func:`services.audiobook.synthesize_chapter` measures it.
+
+        Returns the chapter unmarked, like every other synthesis step here:
+        :meth:`_encode` provenance-marks each result once. Marking here too
+        embedded the watermark twice in every remote chapter.
+
+        The worker never runs the speech check: the control plane asks it for
+        an unchecked render and keys the result that way
+        (``api.routers.audiobook._remote_chapter_call``)."""
         from services.audiobook import ExpressiveOptions, Span, segment_seed, synthesize_chapter
         from services.tts_backend import OmniVoiceBackend
 
@@ -531,7 +539,7 @@ class TaskExecutor:
             timing=timing,
             **opts.join_kwargs(),
         )
-        return _mark(audio, sample_rate, params)
+        return audio
 
     # ── Inputs ────────────────────────────────────────────────────────────
 

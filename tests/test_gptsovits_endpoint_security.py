@@ -1,8 +1,10 @@
 """GPT-SoVITS outbound requests stay on loopback or explicit trusted CIDRs."""
+import contextlib
 import importlib
 import json
 import socket
 import struct
+import time
 
 import pytest
 
@@ -216,8 +218,10 @@ def test_gptsovits_availability_uses_valid_configured_endpoint(
     assert GPTSoVITSBackend.is_available() == (True, "ready (api_v2 server reachable)")
     # Probe targets the api_v2 /tts route — a healthy server returns 200/400/405,
     # the routing-mismatch branch is exercised separately below.
+    # Only the connect to a loopback server is capped (0.3 s): Windows retries
+    # a refused loopback connect for ~2 s, which /engines used to wait out.
     assert calls == [
-        ("http://127.0.0.1:9880", {"method": "GET", "timeout": 2, "path": "tts", "allowed_statuses": {400, 405}, "query": "text=&text_lang=en&prompt_lang=en"})
+        ("http://127.0.0.1:9880", {"method": "GET", "timeout": 2, "path": "tts", "allowed_statuses": {400, 405}, "loopback_connect_timeout": 0.3, "query": "text=&text_lang=en&prompt_lang=en"})
     ]
 
 
@@ -587,3 +591,190 @@ def test_default_reference_without_language_uses_auto(outbound_http, monkeypatch
     GPTSoVITSBackend().generate("target text", language="ja")
     assert captured["json"]["text_lang"] == "ja"
     assert captured["json"]["prompt_lang"] == "auto"
+
+
+# ── Probe latency: /engines must not wait out a closed loopback port ─────────
+# Windows retries a refused loopback connect for about two seconds, and every
+# engine-catalogue read probes GPT-SoVITS, so /engines took ~2.2 s on Windows
+# while no server ran. The probe now caps only the loopback connect, and
+# catalogue reads reuse a recent "not reachable" verdict. A started server must
+# still be detected by every explicit check.
+
+
+@pytest.mark.parametrize(
+    ("ip", "trusted", "expected"),
+    [("127.0.0.1", "", 0.3), ("::1", "", 0.3), ("192.168.4.20", "192.168.4.0/24", None)],
+)
+def test_connect_budget_applies_to_loopback_only(outbound_http, monkeypatch, ip, trusted, expected):
+    """A LAN server may take longer to accept; it keeps the full timeout."""
+    monkeypatch.setenv("OMNIVOICE_TRUSTED_NETWORKS", trusted)
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *_a, **_k: _answer(ip))
+    monkeypatch.setattr(outbound_http, "_PinnedHTTPConnection", _Connection)
+    with outbound_http.open_trusted_endpoint(
+        "http://gptsovits.local:9880", method="GET", path="tts", timeout=2,
+        loopback_connect_timeout=0.3,
+    ):
+        pass
+    assert getattr(_Connection.instances[-1], "connect_timeout", None) == expected
+
+
+def test_pinned_connection_caps_the_connect_but_not_the_reads(outbound_http, monkeypatch):
+    seen = []
+
+    class _Socket:
+        def settimeout(self, value):
+            seen.append(("read", value))
+
+    def create_connection(address, timeout=None, source_address=None):
+        seen.append(("connect", timeout))
+        return _Socket()
+
+    monkeypatch.setattr(socket, "create_connection", create_connection)
+    endpoint = outbound_http.ResolvedEndpoint("http", "127.0.0.1", 9880, "127.0.0.1")
+    connection = outbound_http._PinnedHTTPConnection(endpoint, timeout=2)
+    connection.connect_timeout = 0.3
+    connection.connect()
+    assert seen == [("connect", 0.3), ("read", 2)]
+
+
+def test_closed_loopback_port_fails_fast(monkeypatch):
+    from services.tts_backend import GPTSoVITSBackend
+
+    with socket.socket() as reserved:
+        # Bound but not listening, so connections to it are refused.
+        reserved.bind(("127.0.0.1", 0))
+        monkeypatch.setenv("OMNIVOICE_GPTSOVITS_URL", f"http://127.0.0.1:{reserved.getsockname()[1]}")
+        started = time.monotonic()
+        ok, message = GPTSoVITSBackend.is_available()
+        elapsed = time.monotonic() - started
+    assert not ok and "not reachable" in message
+    assert elapsed < 1.0, f"probing a closed port took {elapsed:.2f} s"
+
+
+def test_busy_loopback_server_is_still_detected(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from services.tts_backend import GPTSoVITSBackend
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            # api_v2 answers from an event loop that a synthesis blocks: slower
+            # than the connect budget, well inside the read timeout.
+            time.sleep(0.6)
+            self.send_response(400)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("OMNIVOICE_GPTSOVITS_URL", f"http://127.0.0.1:{server.server_port}")
+        assert GPTSoVITSBackend.is_available() == (True, "ready (api_v2 server reachable)")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+class _Server:
+    """``open_trusted_endpoint`` double for a GPT-SoVITS server started later."""
+
+    def __init__(self):
+        self.running = False
+        self.probes = 0
+
+    def __call__(self, url, **kwargs):
+        self.probes += 1
+        if not self.running:
+            raise ConnectionRefusedError("connection refused")
+        return contextlib.nullcontext()
+
+
+@pytest.fixture
+def server(outbound_http, monkeypatch):
+    from services import tts_backend
+
+    monkeypatch.setenv("OMNIVOICE_GPTSOVITS_URL", "http://127.0.0.1:9880")
+    monkeypatch.setattr(tts_backend, "active_backend_id", lambda: "omnivoice")
+    double = _Server()
+    monkeypatch.setattr(outbound_http, "open_trusted_endpoint", double)
+    return double
+
+
+def test_catalogue_reads_reuse_a_recent_unreachable_verdict(server):
+    from services import tts_backend
+
+    with tts_backend.catalogue_read():
+        assert tts_backend.GPTSoVITSBackend.is_available()[0] is False
+        assert tts_backend.GPTSoVITSBackend.is_available()[0] is False
+    assert server.probes == 1
+
+
+def test_started_server_is_detected_by_explicit_checks(server):
+    """Selecting the engine, Test engine and generation never reuse a verdict."""
+    from services import tts_backend
+
+    backend = tts_backend.GPTSoVITSBackend
+    with tts_backend.catalogue_read():
+        assert backend.is_available()[0] is False
+    server.running = True
+    assert backend.is_available() == (True, "ready (api_v2 server reachable)")
+    # The fresh answer replaces the remembered verdict for catalogue reads too.
+    with tts_backend.catalogue_read():
+        assert backend.is_available()[0] is True
+    assert server.probes == 3
+
+
+def test_selected_engine_is_probed_on_every_catalogue_read(server, monkeypatch):
+    """The composer polls /engines while its engine is down and must unlock promptly."""
+    from services import tts_backend
+
+    monkeypatch.setattr(tts_backend, "active_backend_id", lambda: "gpt-sovits")
+    with tts_backend.catalogue_read():
+        assert tts_backend.GPTSoVITSBackend.is_available()[0] is False
+        server.running = True
+        assert tts_backend.GPTSoVITSBackend.is_available()[0] is True
+    assert server.probes == 2
+
+
+def test_remembered_verdict_expires(server):
+    from services import tts_backend
+
+    url = "http://127.0.0.1:9880"
+    with tts_backend.catalogue_read():
+        tts_backend.GPTSoVITSBackend.is_available()
+        _expiry, message = tts_backend._UNREACHABLE_SERVERS[url]
+        tts_backend._UNREACHABLE_SERVERS[url] = (time.monotonic() - 1, message)
+        server.running = True
+        assert tts_backend.GPTSoVITSBackend.is_available()[0] is True
+    assert server.probes == 2
+
+
+def test_engine_routes_detect_a_server_started_after_a_catalogue_read(outbound_http, monkeypatch):
+    """End to end through the routes the renderer calls."""
+    from types import SimpleNamespace
+
+    from api.routers import engines
+
+    monkeypatch.setenv("OMNIVOICE_GPTSOVITS_URL", "http://127.0.0.1:9880")
+    monkeypatch.setattr(engines.tts_backend, "active_backend_id", lambda: "omnivoice")
+    server = _Server()
+    monkeypatch.setattr(outbound_http, "open_trusted_endpoint", server)
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"))
+
+    def listed() -> bool:
+        rows = engines.list_tts_backends(request)["backends"]
+        return next(row for row in rows if row["id"] == "gpt-sovits")["available"]
+
+    assert listed() is False
+    server.running = True
+    assert listed() is False  # the catalogue reuses its verdict for a while
+    selected = engines.select_engine(engines.SelectEngineRequest(family="tts", backend_id="gpt-sovits"))
+    assert selected["family"] == "tts"
+    assert listed() is True
+    assert engines.engine_health("gpt-sovits")["ok"] is True

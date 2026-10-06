@@ -109,6 +109,48 @@ it('invalidates only the cache surfaces named by real-time backend events', asyn
   expect(client.getQueryState(['sidebar-model-status'])?.isInvalidated).toBe(true);
 });
 
+it('refreshes engine state once per model load, at its end', async () => {
+  vi.stubGlobal('WebSocket', Socket);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const keys = [
+    ['engines'],
+    ['sidebar-model-status'],
+    ['loaded-models'],
+    ['model-catalogue'],
+    ['performance-profile'],
+  ];
+  const fresh = () => keys.forEach((key) => client.setQueryData(key, { fresh: true }));
+  const invalidated = () =>
+    keys.filter((key) => client.getQueryState(key)?.isInvalidated).map((key) => key[0]);
+  fresh();
+  render(
+    <QueryClientProvider client={client}>
+      <RealtimeEventSync />
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(Socket.instances).toHaveLength(1));
+  const send = (data: object) =>
+    act(() =>
+      Socket.instances[0].onmessage?.(new MessageEvent('message', { data: JSON.stringify(data) })),
+    );
+
+  for (const sub_stage of ['importing', 'loading_weights', 'compiling']) {
+    send({ kind: 'model_status', sub_stage });
+    expect(invalidated()).toEqual(['sidebar-model-status']);
+    fresh();
+  }
+  for (const sub_stage of ['ready', 'error', undefined, 'a-future-stage']) {
+    send({ kind: 'model_status', sub_stage });
+    expect(invalidated()).toEqual([
+      'engines',
+      'sidebar-model-status',
+      'loaded-models',
+      'model-catalogue',
+    ]);
+    fresh();
+  }
+});
+
 it('ignores malformed and unknown frames and closes on unmount', async () => {
   vi.stubGlobal('WebSocket', Socket);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

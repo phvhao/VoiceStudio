@@ -11,6 +11,7 @@ an absent map must keep today's byte-identical keys).
 Engine + DB boundary stubbed throughout — no model loads, no GPU, no ffmpeg.
 """
 import os
+import types
 
 os.environ.setdefault("OMNIVOICE_MODEL", "test")
 os.environ.setdefault("OMNIVOICE_DISABLE_FILE_LOG", "1")
@@ -130,74 +131,191 @@ def test_none_voice_uses_default_without_a_db_probe(monkeypatch):
     assert seen == ["default-pid"]
 
 
-# ── chapter / segment / preview cache keys absorb the voice map ─────────────
+# ── chapter / segment / preview cache keys follow each span's own voice ─────
 
-_RESOLVE = lambda _vid: {  # noqa: E731
-    "ref_audio": None, "ref_text": None, "instruct": None, "seed": None,
-}
+def _profiles(monkeypatch):
+    """Profiles resolve to their own reference take (as real ones do); a bare
+    name is never a profile id; the engine is ``eng`` at 24 kHz, unmarked.
+    Returns the router module."""
+    import api.routers.audiobook as ab
+    import services.tts_backend as tb
+    import services.watermark as wm
+
+    monkeypatch.setattr(tb, "active_backend_id", lambda: "eng")
+    monkeypatch.setattr(ab, "_local_sample_rate", lambda engine: 24000 if engine == "eng" else None)
+    monkeypatch.setattr(wm, "will_mark", lambda: False)
+    monkeypatch.setattr(wm, "mark_synthetic", lambda audio, *_a, **_k: audio)
+
+    def resolve_voice(pid):
+        if not pid:
+            return {"ref_audio": None, "ref_text": None, "instruct": None, "seed": None}
+        return {"ref_audio": f"/voices/{pid}.wav", "ref_text": f"said by {pid}",
+                "instruct": None, "seed": None}
+
+    monkeypatch.setattr(ab, "_resolve_voice", resolve_voice)
+    monkeypatch.setattr(ab, "_voice_profile_exists", lambda _pid: False)
+    return ab
 
 
-def _render_key(tmp_path, voice_map):
-    """Render a one-span [voice:Mara] chapter with a stub synth (no models);
-    return the content-addressed chapter cache key (the WAV basename)."""
-    from api.routers.audiobook import _render_chapter_cached
+def _counting_synth(calls):
+    def synth(text, voice_id, speed=None):
+        calls.append(text)
+        return torch.full((2400,), 0.1)
+    return synth
 
-    ch = Chapter(title="C", spans=[Span(voice_id="Mara", text="hello", pause_ms_after=0)])
-    synth = lambda text, vid, speed=None: torch.zeros(2400)  # noqa: E731
-    wav_path, *_ = _render_chapter_cached(
-        ch, synth, 24000, "eng", _RESOLVE, str(tmp_path), None, None,
-        ExpressiveOptions(), voice_map,
+
+def _render(ab, tmp_path, chapter, voice_map, calls=None):
+    """Render ``chapter`` as a book render does, the cast resolved through
+    ``voice_map``: ``(chapter key, cached)``."""
+    wav_path, _dur, cached, _stats = ab._render_chapter_cached(
+        chapter, _counting_synth([] if calls is None else calls), 24000, "eng",
+        ab._voice_resolver("default-pid", voice_map), str(tmp_path), None, None,
+        ExpressiveOptions(), voice_map, default_voice="default-pid",
     )
-    return os.path.basename(wav_path)
+    return os.path.basename(wav_path), cached
 
 
-def test_chapter_cache_key_changes_when_the_map_changes(tmp_path):
-    base = _render_key(tmp_path, None)                       # no map
-    empty = _render_key(tmp_path, {})                        # empty map == no map
-    a = _render_key(tmp_path, {"Mara": _PID})                # mapped one way
-    b = _render_key(tmp_path, {"Mara": "other-pid"})         # remapped
+def _render_key(ab, tmp_path, voice_map):
+    ch = Chapter(title="C", spans=[Span(voice_id="Mara", text="hello", pause_ms_after=0)])
+    return _render(ab, tmp_path, ch, voice_map)[0]
+
+
+def test_chapter_cache_key_changes_when_the_map_changes(tmp_path, monkeypatch):
+    ab = _profiles(monkeypatch)
+    base = _render_key(ab, tmp_path, None)                   # no map
+    empty = _render_key(ab, tmp_path, {})                    # empty map == no map
+    a = _render_key(ab, tmp_path, {"Mara": _PID})            # mapped one way
+    b = _render_key(ab, tmp_path, {"Mara": "other-pid"})     # remapped
     assert empty == base, "an absent/empty map must keep today's cache key"
     assert a != base, "adding a mapping must re-render"
     assert b != a, "remapping a voice must re-render"
 
 
-def test_segment_extra_sig_absorbs_the_voice_map():
-    # The inner segment cache keys on ``extra_sig`` — the same string the chapter
-    # render folds the voice-map signature into. Two otherwise-identical segments
-    # that differ only by mapping must land on distinct segment keys, and an
-    # empty map must leave the key byte-identical to the no-map derivation.
-    from services.longform_render import segment_cache_key
+def _two_voice_chapter(title="C", minor="Cole"):
+    return Chapter(title=title, spans=[
+        Span(voice_id=None, text="The narrator opens.", pause_ms_after=0),
+        Span(voice_id="Mara", text="Mara answers him.", pause_ms_after=0),
+        Span(voice_id=minor, text="A short reply.", pause_ms_after=0),
+        Span(voice_id="Mara", text="Mara goes on talking.", pause_ms_after=0),
+    ])
 
-    def seg_extra(voice_map):
-        vmap = voice_map_signature(voice_map)
-        return f"\x00{vmap}" if vmap else ""
 
-    def key(voice_map):
-        return segment_cache_key("hello", sample_rate=24000, engine_id="eng",
-                                 voice_id="Mara", extra_sig=seg_extra(voice_map))
+def test_recasting_one_voice_renders_only_that_voices_lines(tmp_path, monkeypatch):
+    """The whole cast map used to key every segment, so recasting the voice
+    of one line re-rendered every line of the book. A span is keyed by the
+    voice it resolves to, so only the recast voice's lines render again."""
+    ab = _profiles(monkeypatch)
+    calls: list = []
+    _render(ab, tmp_path, _two_voice_chapter(), {"Mara": _PID, "Cole": "pid-a"}, calls)
+    assert len(calls) == 4
+    calls.clear()
+    _key, cached = _render(ab, tmp_path, _two_voice_chapter(),
+                           {"Mara": _PID, "Cole": "pid-b"}, calls)
+    assert cached is False
+    assert calls == ["A short reply."]
 
-    base = key(None)
-    assert key({}) == base                       # empty map == today's key
-    assert key({"Mara": _PID}) != base           # a mapping re-renders
-    assert key({"Mara": _PID}) != key({"Mara": "other"})  # remap re-renders
+
+def test_chapters_without_the_recast_voice_keep_their_audio(tmp_path, monkeypatch):
+    ab = _profiles(monkeypatch)
+    other = Chapter(title="D", spans=[
+        Span(voice_id="Mara", text="Only Mara speaks here.", pause_ms_after=0)])
+    _render(ab, tmp_path, other, {"Mara": _PID, "Cole": "pid-a"})
+    calls: list = []
+    key, cached = _render(ab, tmp_path, other, {"Mara": _PID, "Cole": "pid-b"}, calls)
+    assert cached is True and calls == []
+    # …and the outline reads it as rendered under the same key.
+    states = ab._chapter_cache_state(
+        other, decision=types.SimpleNamespace(remote=False), default_voice="default-pid",
+        language=None, opts=ExpressiveOptions(), voice_map={"Mara": _PID, "Cole": "pid-b"},
+        lexicon=None, cache_dir=str(tmp_path))
+    assert states[:2] == (os.path.splitext(key)[0], True)
+
+
+def _legacy_keys(ab, tmp_path, chapter, voice_map):
+    """Where builds before per-voice keys cached ``chapter``: the whole cast
+    map folded into the chapter key and into every segment's extra
+    signature (the derivation as it shipped, written out here on purpose)."""
+    from services.longform_render import SEGMENT_SUBDIR, chapter_cache_key, segment_cache_key
+
+    keys = ab._chapter_cache_keys(chapter, 24000, "eng",
+                                  ab._voice_resolver("default-pid", voice_map), str(tmp_path),
+                                  opts=ExpressiveOptions(), voice_map=voice_map,
+                                  default_voice="default-pid")
+    vmap = voice_map_signature(voice_map)
+    chapter_key = chapter_cache_key([ab._span_key_tuple(s) for s in keys.spans],
+                                    sample_rate=24000, engine_id="eng",
+                                    voice_sig={**keys.voice_sigs, "\x00voicemap": vmap})
+    segments = {
+        s.text: os.path.join(str(tmp_path), SEGMENT_SUBDIR, segment_cache_key(
+            s.text, sample_rate=24000, engine_id="eng", voice_id=s.voice_id,
+            voice_sig=keys.voice_sigs[s.voice_id or ""], extra_sig=f"\x00{vmap}") + ".wav")
+        for s in keys.spans}
+    return os.path.join(str(tmp_path), f"{chapter_key}.wav"), segments
+
+
+def _write_wav(path, frames=2400):
+    import wave
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\x10\x00" * frames)
+
+
+def test_a_book_cached_with_the_whole_map_in_its_keys_is_still_found(tmp_path, monkeypatch):
+    ab = _profiles(monkeypatch)
+    cast = {"Mara": _PID, "Cole": "pid-a"}
+    chapter = _two_voice_chapter()
+    legacy_chapter, legacy_segments = _legacy_keys(ab, tmp_path, chapter, cast)
+    _write_wav(legacy_chapter)
+    calls: list = []
+    key, cached = _render(ab, tmp_path, chapter, cast, calls)
+    assert cached is True and calls == []
+    assert key != os.path.basename(legacy_chapter)  # moved to the per-voice key
+    assert os.path.exists(os.path.join(str(tmp_path), key))
+    # The segment layer finds its older segments the same way.
+    for path in legacy_segments.values():
+        _write_wav(path)
+    os.remove(os.path.join(str(tmp_path), key))
+    _key, cached = _render(ab, tmp_path, chapter, cast, calls)
+    assert cached is False and calls == []
+
+
+def test_the_outline_reads_a_book_keyed_before_per_voice_keys_as_unchanged(
+        tmp_path, monkeypatch):
+    ab = _profiles(monkeypatch)
+    cast = {"Mara": _PID, "Cole": "pid-a"}
+    chapter = _two_voice_chapter()
+    legacy_chapter, _segments = _legacy_keys(ab, tmp_path, chapter, cast)
+    key, cached, names = ab._chapter_cache_state(
+        chapter, decision=types.SimpleNamespace(remote=False), default_voice="default-pid",
+        language=None, opts=ExpressiveOptions(), voice_map=cast, lexicon=None,
+        cache_dir=str(tmp_path))
+    assert key != os.path.splitext(os.path.basename(legacy_chapter))[0]
+    # The book's timeline recorded the old name: the same audio, not a change.
+    assert os.path.splitext(os.path.basename(legacy_chapter))[0] in names
 
 
 # ── render / preview parity ─────────────────────────────────────────────────
 
-def test_preview_and_render_requests_carry_and_key_on_the_same_map(tmp_path):
+def test_preview_and_render_requests_carry_and_key_on_the_same_map(tmp_path, monkeypatch):
     from api.routers.audiobook import AudiobookPreviewRequest, AudiobookRequest
 
+    ab = _profiles(monkeypatch)
     vm = {"Mara": _PID, "Cole": "pid2"}
     r = AudiobookRequest(text="# A\n[voice:Mara] hi", voice_map=vm)
     p = AudiobookPreviewRequest(text="# A\n[voice:Mara] hi", voice_map=vm)
     assert r.voice_map == p.voice_map == vm
     # …and therefore the same chapter cache slot (preview warms what render reuses).
-    assert _render_key(tmp_path, r.voice_map) == _render_key(tmp_path, p.voice_map)
+    assert _render_key(ab, tmp_path, r.voice_map) == _render_key(ab, tmp_path, p.voice_map)
 
 
-def test_default_request_omits_the_map(tmp_path):
+def test_default_request_omits_the_map(tmp_path, monkeypatch):
     from api.routers.audiobook import AudiobookRequest
 
+    ab = _profiles(monkeypatch)
     # An untouched request has no map → today's exact key (no re-render).
     assert AudiobookRequest(text="# A\nhi").voice_map is None
-    assert _render_key(tmp_path, None) == _render_key(tmp_path, {})
+    assert _render_key(ab, tmp_path, None) == _render_key(ab, tmp_path, {})

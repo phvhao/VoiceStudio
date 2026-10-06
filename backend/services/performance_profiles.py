@@ -1,6 +1,7 @@
 """Shared local performance preferences and runtime defaults. No model downloads."""
 from __future__ import annotations
 
+import functools
 import math
 import os
 
@@ -56,6 +57,22 @@ _PERFORMANCE_TARGETS = {
 
 
 _TIER_POSITION = {"fast": 0.0, "balanced": 0.5, "quality": 0.8, "max": 1.0}
+
+
+def _one_cache_scan(fn):
+    """Run *fn* with all of its installed-model probes sharing one HF cache scan.
+
+    A profile read calls ``is_cached`` 16–17 times on a typical install, and
+    each call used to walk the whole Hugging Face cache.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from api.routers.setup.models import hf_cache_scan_scope
+
+        with hf_cache_scan_scope():
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _tier_choice(items: list, tier: str, *, size) -> object | None:
@@ -252,6 +269,7 @@ def _activate_installed_models(tier: str, family: str | None) -> dict[str, dict]
 
 
 
+@_one_cache_scan
 def profile_state(choice: str | None = None) -> dict:
     from core import prefs
     from services import asr_backend, diarization_runtime
@@ -386,6 +404,7 @@ def requested_tier(family: str) -> str | None:
     return tier if tier in _PERFORMANCE_TIERS else None
 
 
+@_one_cache_scan
 def activate_maximum_capacity_models(family: str | None = None) -> dict:
     """Select the strongest already-installed compatible local models.
 
@@ -396,6 +415,7 @@ def activate_maximum_capacity_models(family: str | None = None) -> dict:
     return _activate_installed_models("max", family)
 
 
+@_one_cache_scan
 def activate_performance_tier(tier: str, family: str | None = None) -> dict:
     """Apply installed-only model/runtime selections implied by a preset."""
     if family is None:

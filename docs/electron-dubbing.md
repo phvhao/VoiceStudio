@@ -17,7 +17,9 @@ preparation completes before transcription starts. The editor shows source text,
 editable translated text, and per-segment voice/timing controls. Translation uses
 the selected Settings > Models > Translation provider. Choose a target language,
 translate, review the text, then generate. Completed tracks can be previewed and
-exported through the native save dialog.
+exported through the native save dialog, which writes the export to disk as it
+downloads (a long dubbed video never has to fit in memory) and replaces an
+existing file only once the new one is complete.
 
 The import card can clear a pasted URL and its cookie attachment before ingest.
 After loading a source, Remove video (Remove audio for audio sources) returns to

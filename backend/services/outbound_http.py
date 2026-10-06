@@ -8,7 +8,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from api.dependencies import is_local_host
+from api.dependencies import is_local_host, is_loopback
 
 
 class UnsafeEndpoint(ValueError):
@@ -91,25 +91,32 @@ def _endpoint_path(requested_path: str) -> str:
 
 
 class _PinnedHTTPConnection(http.client.HTTPConnection):
+    #: Budget for the TCP connect alone; ``None`` uses the request ``timeout``.
+    connect_timeout: float | None = None
+
     def __init__(self, endpoint: ResolvedEndpoint, timeout: float):
         super().__init__(endpoint.host, endpoint.port, timeout=timeout)
         self._pinned_ip = endpoint.ip
 
     def connect(self) -> None:
         self.sock = self._create_connection(
-            (self._pinned_ip, self.port), self.timeout, self.source_address
+            (self._pinned_ip, self.port), self.connect_timeout or self.timeout, self.source_address
         )
+        self.sock.settimeout(self.timeout)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    connect_timeout: float | None = None
+
     def __init__(self, endpoint: ResolvedEndpoint, timeout: float):
         super().__init__(endpoint.host, endpoint.port, timeout=timeout)
         self._pinned_ip = endpoint.ip
 
     def connect(self) -> None:
         sock = self._create_connection(
-            (self._pinned_ip, self.port), self.timeout, self.source_address
+            (self._pinned_ip, self.port), self.connect_timeout or self.timeout, self.source_address
         )
+        sock.settimeout(self.timeout)
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
@@ -123,6 +130,7 @@ def open_trusted_endpoint(
     body: bytes | None = None,
     content_type: str | None = None,
     allowed_statuses: Collection[int] = frozenset(),
+    loopback_connect_timeout: float | None = None,
 ) -> http.client.HTTPResponse:
     """Open one request without redirects, pinned to the validated DNS answer.
 
@@ -139,10 +147,17 @@ def open_trusted_endpoint(
 
     ``allowed_statuses`` permits explicit HTTP error statuses for route probes.
     It never permits redirects; generation callers keep the strict default.
+
+    ``loopback_connect_timeout`` caps only the TCP connect, and only when the
+    pinned address is loopback. A listening local server accepts at once, but
+    Windows retries a refused loopback connect for about two seconds; probes
+    use this to fail fast while a busy server keeps ``timeout`` to answer.
     """
     endpoint = resolve_trusted_endpoint(base_url)
     conn_cls = _PinnedHTTPSConnection if endpoint.scheme == "https" else _PinnedHTTPConnection
     conn = conn_cls(endpoint, timeout)
+    if loopback_connect_timeout is not None and is_loopback(endpoint.ip):
+        conn.connect_timeout = loopback_connect_timeout
     target = _endpoint_path(path)
     if query:
         target += f"?{query}"

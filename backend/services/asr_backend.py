@@ -3195,16 +3195,10 @@ def _ref_audio_fingerprint(audio_path: str) -> str | None:
         return None
 
 
-def _installed_reference_fallbacks(
-    selected: list[ASRBackend],
-) -> list[ASRBackend]:
-    """Return the strongest compatible local fallbacks without changing prefs."""
-    fallbacks: list[ASRBackend] = []
-    selected_repos = {
-        _fw_repo(str(getattr(item, "_model_name", "")))
-        for item in selected
-        if isinstance(item, FasterWhisperBackend)
-    }
+def _fallback_whisper_snapshot(exclude_repos: set) -> str | None:
+    """The newest complete snapshot of the largest installed faster-whisper
+    model a reference transcription can fall back to (none of
+    ``exclude_repos``), or ``None``. Reads the disk only."""
     try:
         from api.routers.setup.models import (
             KNOWN_MODELS,
@@ -3214,64 +3208,108 @@ def _installed_reference_fallbacks(
         )
 
         available, _reason = FasterWhisperBackend.is_available()
-        if available:
-            compatible = sorted(
-                (
-                    model
-                    for model in KNOWN_MODELS
-                    if str(model.get("role", "")).lower() == "asr"
-                    and not model.get("dictation_id")
-                    and (
-                        str(model.get("repo_id", "")).startswith("Systran/faster-")
-                        or model.get("repo_id")
-                        == "deepdml/faster-whisper-large-v3-turbo-ct2"
-                    )
-                    and _model_supported(model)
-                    and model.get("repo_id") not in selected_repos
-                ),
-                key=lambda model: float(model.get("size_gb") or 0),
-                reverse=True,
-            )
-            for model in compatible:
-                snapshots = [
-                    path
-                    for path in _snapshot_dirs(str(model["repo_id"]))
-                    if snapshot_is_complete(model, path)
-                ]
-                if not snapshots:
-                    continue
+        if not available:
+            return None
+        compatible = sorted(
+            (
+                model
+                for model in KNOWN_MODELS
+                if str(model.get("role", "")).lower() == "asr"
+                and not model.get("dictation_id")
+                and (
+                    str(model.get("repo_id", "")).startswith("Systran/faster-")
+                    or model.get("repo_id")
+                    == "deepdml/faster-whisper-large-v3-turbo-ct2"
+                )
+                and _model_supported(model)
+                and model.get("repo_id") not in exclude_repos
+            ),
+            key=lambda model: float(model.get("size_gb") or 0),
+            reverse=True,
+        )
+        for model in compatible:
+            snapshots = [
+                path
+                for path in _snapshot_dirs(str(model["repo_id"]))
+                if snapshot_is_complete(model, path)
+            ]
+            if snapshots:
                 # A concrete complete snapshot cannot trigger a Hub download.
-                snapshot = max(snapshots, key=lambda path: os.path.getmtime(path))
-                backend = FasterWhisperBackend(model_name=snapshot)
-                setattr(backend, "_reference_ephemeral", True)
-                fallbacks.append(backend)
-                break
+                return max(snapshots, key=lambda path: os.path.getmtime(path))
     except Exception as exc:  # noqa: BLE001 - optional local fallback
         logger.warning("reference ASR cache fallback unavailable (%s)", exc)
+    return None
 
+
+def _fallback_dictation_spec(exclude_ids: set):
+    """The largest installed dictation model a reference transcription can
+    fall back to (none of ``exclude_ids``), or ``None``. Reads the disk only."""
     try:
         from services import sherpa_dictation
 
-        selected_sherpa = {
-            item.spec.id
-            for item in selected
-            if isinstance(item, SherpaDictationBackend)
-        }
         installed = sorted(
             (
                 spec
                 for spec in sherpa_dictation.list_specs()
-                if spec.id not in selected_sherpa
+                if spec.id not in exclude_ids
                 and sherpa_dictation.is_installed(spec)
             ),
             key=lambda spec: float(spec.size_gb or 0),
             reverse=True,
         )
-        if installed:
-            fallbacks.append(get_sherpa_dictation_backend(installed[0].id))
+        return installed[0] if installed else None
     except Exception as exc:  # noqa: BLE001 - optional local fallback
         logger.warning("reference dictation cache fallback unavailable (%s)", exc)
+        return None
+
+
+def _installed_reference_fallbacks(
+    selected: list[ASRBackend],
+) -> list[ASRBackend]:
+    """Return the strongest compatible local fallbacks without changing prefs."""
+    fallbacks: list[ASRBackend] = []
+    snapshot = _fallback_whisper_snapshot({
+        _fw_repo(str(getattr(item, "_model_name", "")))
+        for item in selected
+        if isinstance(item, FasterWhisperBackend)
+    })
+    if snapshot is not None:
+        backend = FasterWhisperBackend(model_name=snapshot)
+        setattr(backend, "_reference_ephemeral", True)
+        fallbacks.append(backend)
+    spec = _fallback_dictation_spec({
+        item.spec.id
+        for item in selected
+        if isinstance(item, SherpaDictationBackend)
+    })
+    if spec is not None:
+        try:
+            fallbacks.append(get_sherpa_dictation_backend(spec.id))
+        except Exception as exc:  # noqa: BLE001 - optional local fallback
+            logger.warning("reference dictation cache fallback unavailable (%s)", exc)
     return fallbacks
+
+
+def reference_recognizer_installed() -> bool:
+    """Whether :func:`transcribe_reference` has a recognizer to ask: the
+    selected offline or dictation engine with its model installed, or an
+    installed fallback. Told from what is installed alone — no model loads
+    and no selection changes — so ``False`` means it would return ``None``
+    without trying. When that cannot be told, ``True``: ask the recognizer."""
+    try:
+        from api.routers.setup.models import hf_cache_scan_scope
+
+        with hf_cache_scan_scope():
+            selected_remote = active_backend_id() == "openai-compat-asr"
+            return (
+                asr_model_missing_error(require_installed=not selected_remote) is None
+                or asr_model_missing_error(purpose="dictation", require_installed=True) is None
+                or _fallback_whisper_snapshot(set()) is not None
+                or _fallback_dictation_spec(set()) is not None
+            )
+    except Exception:  # noqa: BLE001 — unknown: the recognizer is asked
+        logger.warning("Could not tell whether a speech recognizer is installed", exc_info=True)
+        return True
 
 
 def _transcribe_reference_candidates(

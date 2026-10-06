@@ -20,7 +20,31 @@ def test_finite_language_options_without_loading_models(engine, allowed, rejecte
 
 def test_open_ended_engine_keeps_all_language_options(tts):
     from omnivoice.utils.lang_map import LANG_NAME_TO_ID
-    assert tts.language_options('omnivoice') == sorted(LANG_NAME_TO_ID)
+    options = tts.language_options('omnivoice')
+    assert options == sorted(options)
+    assert set(LANG_NAME_TO_ID) <= set(options)
+    assert set(tts._OMNIVOICE_PICKER_NAMES.values()) <= set(LANG_NAME_TO_ID)
+
+
+def _picker_languages():
+    import re
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / 'electron/src/shared/utils/languages.js'
+    return re.findall(r"\{ code: '([^']+)', label: '([^']+)' \}", path.read_text(encoding='utf-8'))
+
+
+def test_omnivoice_offers_every_picker_language_it_speaks(tts):
+    """Audiobook, Batch and Dub send languages.js names, not OmniVoice's own:
+    Arabic, Kurdish and both Chinese scripts read as unsupported by the default
+    model when the inventory listed only its vocabulary."""
+    from omnivoice.utils.lang_map import LANG_IDS
+    pickers = _picker_languages()
+    assert len(pickers) > 90
+    options = set(tts.language_options('omnivoice'))
+    missing = {label: code for code, label in pickers if label.lower() not in options}
+    assert sorted(missing) == ['Latin', 'Samoan', 'Scots Gaelic', 'Sundanese']
+    # Genuinely absent from the model, not spelled another way.
+    assert not set(missing.values()) & LANG_IDS
 
 
 def test_installed_kokoro_tables_are_read_without_importing_model(tmp_path, monkeypatch, tts):

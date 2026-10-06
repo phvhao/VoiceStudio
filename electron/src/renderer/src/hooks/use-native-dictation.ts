@@ -6,13 +6,17 @@ import { apiJson } from '@/lib/api/client';
 export const dictationPreferencesKey = ['dictation-shortcut-prefs'];
 export const nativeShortcutKey = ['native-shortcut'];
 
+/**
+ * Only POST /dictation/prefs changes these, and every writer in this app
+ * invalidates this key (lib/shared-status-queries.test.ts), so they are read on
+ * change rather than polled.
+ */
 export function useDictationPreferences(enabled = true) {
   return useQuery({
     queryKey: dictationPreferencesKey,
     enabled,
     queryFn: () =>
       apiJson<{ enabled: boolean; mode: 'hold' | 'toggle'; prompt?: string }>('/dictation/prefs'),
-    refetchInterval: 10000,
   });
 }
 

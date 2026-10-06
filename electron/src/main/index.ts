@@ -9,13 +9,18 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, session, shell, Tray } 
 import { electronApp, is, optimizer } from '@electron-toolkit/utils';
 import { BackendSupervisor, backendRoot } from './backend';
 import { registerIpc, wireWindowMaximizeEvents } from './ipc';
-import { APP_ORIGIN, installAppProtocol, registerAppScheme } from './protocol';
+import {
+  APP_ORIGIN,
+  APP_V8_CACHE_OPTIONS,
+  installAppProtocol,
+  registerAppScheme,
+} from './protocol';
 import { startDevBackendProxy } from './dev-backend-proxy';
 import { DesktopUpdater, registerUpdateIpc } from './updater';
 import { registerRepairAgents } from './repair-agents';
 import { installRendererPermissions } from './media-permissions';
 import { preventDictionaryDownloads, registerSpellcheck } from './spellcheck';
-import { installBlankWindowGuard } from './blank-window-guard';
+import { clearRendererCaches, installBlankWindowGuard } from './blank-window-guard';
 import { shouldOpenDevTools } from './devtools-policy';
 import {
   installMainProcessErrorHandlers,
@@ -59,6 +64,7 @@ let closeCapture: (() => void) | null = null;
 let closeDevProxy: (() => Promise<void>) | null = null;
 let closeUpdates: (() => void) | null = null;
 let closeRepairAgents: (() => void) | null = null;
+let closeSaves: (() => Promise<void>) | null = null;
 let quitPreparation: Promise<void> | null = null;
 
 const PERSISTENCE_FLUSH_REQUEST = 'app:flush-persistence';
@@ -91,6 +97,10 @@ async function flushRendererPersistence(): Promise<void> {
 }
 
 async function tearDownNativeResources(): Promise<void> {
+  // First, so an export still downloading is abandoned and its partial file
+  // removed before the backend it reads from goes away.
+  const savesTeardown = closeSaves?.() ?? Promise.resolve();
+  closeSaves = null;
   closeWatch?.();
   closeWatch = null;
   closeCapture?.();
@@ -103,7 +113,11 @@ async function tearDownNativeResources(): Promise<void> {
   tray = null;
   const proxyTeardown = closeDevProxy?.() ?? Promise.resolve();
   closeDevProxy = null;
-  await Promise.allSettled([supervisor?.shutdown() ?? Promise.resolve(), proxyTeardown]);
+  await Promise.allSettled([
+    savesTeardown,
+    supervisor?.shutdown() ?? Promise.resolve(),
+    proxyTeardown,
+  ]);
 }
 
 function beginOrderlyQuit(flushPersistence = true): Promise<void> {
@@ -148,6 +162,7 @@ function createWindow(): BrowserWindow {
       // ESM preload scripts (electron-vite emits .mjs) require an unsandboxed renderer.
       sandbox: false,
       nodeIntegration: false,
+      v8CacheOptions: APP_V8_CACHE_OPTIONS,
     },
   });
 
@@ -178,7 +193,7 @@ function createWindow(): BrowserWindow {
     app.getLocale(),
     process.env.ELECTRON_RENDERER_URL,
     async () => {
-      await win.webContents.session.clearCache();
+      await clearRendererCaches(win.webContents.session);
       app.relaunch();
       // The independent fallback has no mounted persistence handler to flush.
       await beginOrderlyQuit(false);
@@ -257,7 +272,7 @@ if (process.env.VOICESTUDIO_ALLOW_MULTIPLE_INSTANCES !== '1' && !app.requestSing
         RENDERER_DIR,
         () => backend.requestHeaders(),
       );
-      registerIpc(
+      closeSaves = registerIpc(
         backend,
         () => mainWindow,
         async () => {

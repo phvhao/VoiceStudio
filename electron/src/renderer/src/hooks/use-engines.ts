@@ -4,6 +4,7 @@ import type { EngineBackend, EngineFamilyState, EnginesResponse } from '@/lib/ap
 import { queryKeys } from '@/lib/query';
 import { useBackendStatus } from './use-backend-status';
 import { isBackendReachable } from '@shared/utils/backendStage';
+import { statusStaleTime } from '@/lib/status-polling';
 
 const ENGINES_STALE_MS = 30_000;
 // While the selected TTS engine is unusable, poll: the user may be installing
@@ -44,7 +45,7 @@ export function useEngines(): UseEnginesResult {
   const query = useQuery({
     queryKey: queryKeys.engines,
     queryFn: getEngines,
-    staleTime: ENGINES_STALE_MS,
+    staleTime: (query) => statusStaleTime(query, ENGINES_STALE_MS),
     enabled: isBackendReachable(status.stage),
     refetchInterval: (query) =>
       activeTtsReady(query.state.data) ? false : ENGINES_POLL_WHILE_UNREADY_MS,

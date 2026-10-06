@@ -83,9 +83,16 @@ def test_local_chapter_uses_canonical_text_scaled_timeout(tmp_path, monkeypatch)
     assert calls == [(expected_text, Backend)]
 
 
-def test_audiobook_worker_marks_and_encodes_chapter(monkeypatch):
+def test_audiobook_worker_marks_a_chapter_exactly_once(monkeypatch):
+    """The chapter was marked in synthesis and again in the encode every worker
+    result goes through: two watermarks in every remote chapter. Synthesis
+    returns it unmarked; the encode marks it once."""
+    import io
+    import types
+
     import numpy as np
-    from worker.executor import TaskExecutor
+    import soundfile as sf
+    from worker.executor import TaskExecutor, _Reporters
 
     marked = []
     monkeypatch.setattr("services.watermark.mark_synthetic",
@@ -96,12 +103,18 @@ def test_audiobook_worker_marks_and_encodes_chapter(monkeypatch):
         def generate(self, text, **kwargs):
             return np.ones(20, dtype=np.float32)
 
-    audio = TaskExecutor._synthesize_audiobook(
-        Backend(), [{"text": "hello", "pause_ms_after": 0}],
-        [{"ref_text": None, "instruct": None}],
-        {"ref_audio": [None], "expressive": {}, "watermark": True},
-    )
-    assert len(audio) == 20
+    monkeypatch.setattr(TaskExecutor, "_load_backend", staticmethod(lambda _engine: Backend()))
+    params = {"spans": [{"text": "hello", "pause_ms_after": 0}],
+              "voices": [{"ref_text": None, "instruct": None}],
+              "ref_audio": [None], "expressive": {}, "watermark": True}
+    result = asyncio.run(TaskExecutor()._run_audiobook(
+        types.SimpleNamespace(engine="test", deadlines=None), params, _Reporters(None, None)))
+    assert marked == [(100, "worker.executor.tts")]
+    audio, rate = sf.read(io.BytesIO(result["payload"]), dtype="float32")
+    assert rate == 100 and len(audio) == 20
+    # Synthesis alone leaves the chapter unmarked.
+    assert TaskExecutor._synthesize_audiobook(
+        Backend(), params["spans"], params["voices"], params).shape[-1] == 20
     assert marked == [(100, "worker.executor.tts")]
 
 

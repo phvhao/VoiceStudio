@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 import { verifyLinuxLibraries } from '../native-linux-libraries.mjs';
+import { fromPackage, rendererModules } from './renderer-modules.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 if (process.platform === 'linux') {
   const librariesTest = spawnSync(
@@ -167,7 +168,17 @@ assert(
   existsSync(resolve(root, 'out/renderer/early-error-capture.js')),
   'Early error capture is a standalone classic script',
 );
+// What loads before the first render stays lean: WaveSurfer arrives with the
+// views that draw a waveform, and Remotion (a non-OSI licence) ships nowhere.
+const rendererBundle = rendererModules(resolve(root, 'out/renderer'));
+assert(rendererBundle.startup.length > 0, 'Renderer chunks keep their //#region module comments');
+assert.deepEqual(
+  fromPackage(rendererBundle.startup, 'wavesurfer.js'),
+  [],
+  'WaveSurfer must not load before the first render',
+);
+assert.deepEqual(fromPackage(rendererBundle.all, 'remotion'), [], 'Remotion must not be bundled');
 
 console.log(
-  `PASS: built entry syntax, Python and web UI resource contract, app version source${artifactRequested ? ` and ${process.platform} artifact` : ''}`,
+  `PASS: built entry syntax, renderer startup modules, Python and web UI resource contract, app version source${artifactRequested ? ` and ${process.platform} artifact` : ''}`,
 );

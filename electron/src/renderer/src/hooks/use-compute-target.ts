@@ -1,10 +1,13 @@
+import { useCallback } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { apiJson } from '@/lib/api/client';
+import { refreshRenderSettingsDependents } from '@/lib/render-settings';
 import {
   ACTIVE_STATUS_POLL_MS,
   IDLE_STATUS_POLL_MS,
   computeTargetPollMs,
   relaxWhenBackendBusy,
+  statusStaleTime,
 } from '@/lib/status-polling';
 
 export interface ComputeTarget {
@@ -61,19 +64,54 @@ export interface ComputeRuntimeStatus {
   models: ComputeRuntimeCapability[];
 }
 
+/** The target-wide answer every surface shares; see computeTargetForOperation. */
+export const COMPUTE_TARGET_QUERY_KEY = ['workers', 'target', ''] as const;
+
+/**
+ * What `GET /workers/target?op=` answers, derived from the target-wide answer the
+ * way the backend derives it (worker/routing.status_for_operation): an operation
+ * no worker can run stays local, and every other one follows the target. One
+ * request then serves the status bar and every page's readiness and language
+ * checks instead of one poll per operation.
+ */
+export function computeTargetForOperation(
+  state: ComputeTargetState | undefined,
+  op: string,
+): ComputeTargetState | undefined {
+  if (!state || !op) return state;
+  // Absent on a control plane that predates per-operation routing.
+  if (state.target === 'local' || !state.remote_operations || state.remote_operations.includes(op))
+    return { ...state, op };
+  return {
+    ...state,
+    op,
+    active: {
+      remote: false,
+      label: 'Local',
+      reason: `${op} does not run remotely yet — running locally`,
+    },
+  };
+}
+
+function targetPollMs(query: { state: { data?: ComputeTargetState } }) {
+  const state = query.state.data;
+  return computeTargetPollMs(state?.targets.find((item) => item.id === state.target)?.active_tasks);
+}
+
 export function useComputeTarget(enabled = true, op = '') {
+  const select = useCallback(
+    (state: ComputeTargetState) => computeTargetForOperation(state, op)!,
+    [op],
+  );
   return useQuery({
-    queryKey: ['workers', 'target', op],
-    queryFn: ({ signal }) =>
-      apiJson<ComputeTargetState>(`/workers/target${op ? `?op=${encodeURIComponent(op)}` : ''}`, {
-        signal,
-      }),
+    queryKey: COMPUTE_TARGET_QUERY_KEY,
+    queryFn: ({ signal }) => apiJson<ComputeTargetState>('/workers/target', { signal }),
+    select,
     enabled,
-    refetchInterval: (query) =>
-      computeTargetPollMs(
-        query.state.data?.targets.find((item) => item.id === query.state.data?.target)
-          ?.active_tasks,
-      ),
+    // A remount within one poll (the sidebar remounts on every Settings visit)
+    // reuses the answer instead of asking again, until the backend restarts.
+    staleTime: (query) => statusStaleTime(query, targetPollMs(query)),
+    refetchInterval: targetPollMs,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -105,7 +143,7 @@ export async function selectComputeTarget(client: QueryClient, target: string) {
     method: 'POST',
     body: JSON.stringify({ target }),
   });
-  client.setQueryData(['workers', 'target', ''], next);
+  client.setQueryData(COMPUTE_TARGET_QUERY_KEY, next);
   await Promise.all([
     client.invalidateQueries({ queryKey: ['workers'] }),
     client.invalidateQueries({ queryKey: ['model-catalogue'] }),
@@ -114,6 +152,8 @@ export async function selectComputeTarget(client: QueryClient, target: string) {
     client.invalidateQueries({ queryKey: ['engines'] }),
     client.invalidateQueries({ queryKey: ['loaded-models'] }),
     client.invalidateQueries({ queryKey: ['performance-profile'] }),
+    // A chapter rendered on a worker is cached under its own key.
+    refreshRenderSettingsDependents(client),
   ]);
   return next;
 }

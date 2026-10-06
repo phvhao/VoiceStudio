@@ -20,6 +20,7 @@ import { appVersion, getBridge } from '@/components/bridge';
 import { dubSession, flushDubDraft, useDubSession } from '@/features/dub/dub-session';
 import { hasActiveAppWork, useAppActivityCount } from '@/lib/app-activity';
 import { apiJson, describeError } from '@/lib/api/client';
+import { useActiveBatchJobs } from '@/hooks/use-active-batch-jobs';
 import { SettingsSection } from './settings-layout';
 import type { UpdateReleaseInfo, UpdateState } from '../../../../preload/index.d';
 
@@ -86,12 +87,8 @@ export function UpdateSettings() {
     enabled: watchServerWork,
     refetchInterval: 2_000,
   });
-  const batchJobs = useQuery({
-    queryKey: ['batch-jobs', 'active'],
-    queryFn: () => apiJson<unknown[]>('/batch/jobs?status=active&limit=1'),
-    enabled: watchServerWork,
-    refetchInterval: 3_000,
-  });
+  // The status bar's list: a one-row copy under the same key hid running jobs from it.
+  const batchJobs = useActiveBatchJobs(watchServerWork);
   const changelog = useQuery({
     queryKey: ['changelog', 5],
     queryFn: ({ signal }) =>

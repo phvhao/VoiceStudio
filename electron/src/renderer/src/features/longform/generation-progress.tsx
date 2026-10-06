@@ -1,12 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckIcon, CircleIcon, LoaderCircleIcon, XIcon, ZapIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { AudiobookRenderChapter } from './longform-session';
+import { formatClock } from '@/lib/format-clock';
+import type { AudiobookRenderChapter, RenderTiming } from './longform-session';
 import { chapterName } from './chapter-name';
 
-function formatElapsed(seconds: number): string {
-  const safe = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`;
+/**
+ * Seconds a render has left, or `null` while nothing tells it yet: the time
+ * the chapters rendered so far took, scaled to the chapters still to render
+ * and counted down from the last chapter's event, so it never rises while a
+ * chapter renders. A chapter weighs a fixed part (setting up its voices, its
+ * first take) plus a part that grows with its words, half and half for a
+ * chapter of average length. Chapters the cache holds take no time: those
+ * that finished as cached, and those the outline found cached before the
+ * render started.
+ */
+export function renderTimeLeft(
+  chapters: readonly AudiobookRenderChapter[],
+  timing: RenderTiming,
+  now: number,
+): number | null {
+  const { words } = timing;
+  const mean = words?.length ? words.reduce((sum, count) => sum + count, 0) / words.length : 0;
+  const weight = (index: number) => (words && mean > 0 ? 0.5 + (0.5 * words[index]) / mean : 1);
+  let spent = 0;
+  let rendered = 0;
+  let left = 0;
+  let last = timing.startedAt;
+  chapters.forEach((chapter, index) => {
+    const finishedAt = timing.finishedAt[index];
+    if (finishedAt == null) {
+      if (timing.cached?.[index] !== true) left += weight(index);
+      return;
+    }
+    // Chapters render one after another: this one took the time since the last.
+    if (chapter.status === 'done') {
+      spent += finishedAt - last;
+      rendered += weight(index);
+    }
+    last = finishedAt;
+  });
+  if (!rendered || !left) return null;
+  return Math.max(0, (spent / rendered) * left - (now - last)) / 1000;
 }
 
 function ChapterStatusIcon({ status }: { status: string }) {
@@ -21,13 +56,15 @@ function ChapterStatusIcon({ status }: { status: string }) {
 export function GenerationProgress({
   chapters,
   assembling,
+  timing = null,
 }: {
   chapters: AudiobookRenderChapter[];
   assembling: boolean;
+  timing?: RenderTiming | null;
 }) {
   const { t } = useTranslation();
-  const start = useRef(performance.now());
-  const [now, setNow] = useState(start.current);
+  const mounted = useRef(performance.now());
+  const [now, setNow] = useState(mounted.current);
   const completed = useMemo(
     () =>
       chapters.filter((chapter) => ['done', 'cached', 'failed'].includes(chapter.status)).length,
@@ -35,9 +72,9 @@ export function GenerationProgress({
   );
   const total = chapters.length;
   const percent = total ? Math.round((completed / total) * 100) : 0;
-  const elapsed = (now - start.current) / 1000;
-  const eta =
-    completed > 0 && completed < total ? (elapsed / completed) * (total - completed) : null;
+  // From the render's own start, so leaving the page and coming back keeps the count.
+  const elapsed = (now - (timing?.startedAt ?? mounted.current)) / 1000;
+  const eta = timing && !assembling ? renderTimeLeft(chapters, timing, now) : null;
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(performance.now()), 1000);
@@ -57,8 +94,8 @@ export function GenerationProgress({
             : t('audiobook.progress_summary', { current: completed, total })}
         </span>
         <span className="shrink-0 font-mono tabular-nums text-muted-foreground">
-          {formatElapsed(elapsed)}
-          {eta == null ? '' : ` · ${t('audiobook.eta', { time: formatElapsed(eta) })}`}
+          {formatClock(elapsed)}
+          {eta == null ? '' : ` · ${t('audiobook.eta', { time: formatClock(eta) })}`}
         </span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">

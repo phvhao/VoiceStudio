@@ -8,6 +8,8 @@ Extracted from the monolithic ``setup.py`` to keep concerns separate:
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
 import os
 import platform as _platform
@@ -212,7 +214,10 @@ def hf_cache_dir() -> str:
         os.environ.get("HF_HUB_CACHE")
         or os.environ.get("HUGGINGFACE_HUB_CACHE")
         or os.environ.get("HF_HOME")
-        or os.path.expanduser("~/.cache/huggingface")
+        # huggingface_hub's own default, which honours XDG_CACHE_HOME (Linux).
+        # Without it the direct-filesystem checks below looked in ~/.cache while
+        # scan_cache_dir() read the relocated cache.
+        or os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "huggingface")
     )
 
 
@@ -453,13 +458,14 @@ def installed_snapshot_path(repo_id: str) -> "str | None":
 
 
 def _is_cached_on_disk(repo_id: str) -> bool:
-    """Direct-filesystem fallback for is_cached when scan_cache_dir is unavailable.
+    """Direct-filesystem check of one repo: the is_cached fallback, and the
+    cheap probe for polled single-repo status reads.
 
     On Windows scan_cache_dir() can raise WinError 448 ('untrusted mount point');
     we then walk the canonical HF layout <root>/models--<org>--<name>/snapshots/
     <rev>/ and treat the repo as cached if any revision directory has files. This
     stops a present model from being mistaken for missing and re-downloaded
-    (#117/#118).
+    (#117/#118). It reads only this repo's directory, unlike a whole-cache scan.
     """
     name = _repo_dir_name(repo_id)
     for root in _hub_cache_roots():
@@ -525,27 +531,63 @@ def _cache_dir_missing(exc: Exception) -> bool:
     return type(exc).__name__ == "CacheNotFound"
 
 
-def is_cached(repo_id: str) -> bool:
-    """Best-effort check: does HF have this repo in its cache on disk?"""
+# One scan_cache_dir() walks every repo in the cache (~20–30 ms on a populated
+# one). A caller that asks about many repos opens hf_cache_scan_scope() so its
+# is_cached() calls share one scan: the performance profile used to walk the
+# whole cache 17 times per settings poll. The memo ends with the scope, so every
+# request still reads the disk as it is now. Installs, deletes and downloads
+# started elsewhere need no invalidation.
+_SCAN_MEMO: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "hf_cache_scan_memo", default=None,
+)
+
+
+@contextlib.contextmanager
+def hf_cache_scan_scope():
+    """Share one Hugging Face cache scan across the ``is_cached`` calls inside.
+
+    Nested scopes reuse the outermost one.
+    """
+    if _SCAN_MEMO.get() is not None:
+        yield
+        return
+    token = _SCAN_MEMO.set({})
     try:
-        from huggingface_hub import scan_cache_dir
-        info = scan_cache_dir()
-        for entry in info.repos:
-            if entry.repo_id == repo_id and entry.size_on_disk > 0:
-                return True
-        return False
-    except Exception as e:
-        if _cache_dir_missing(e):
-            return False
-        # scan_cache_dir can raise on Windows (WinError 448 'untrusted mount
-        # point'); fall back to a direct disk check so a cached model isn't
-        # mistaken for missing and re-downloaded in a loop (#117/#118). Logged
-        # at WARNING with the exception type (MM2-09) so this fallback isn't
-        # invisible when triaging a Windows cache report — it previously logged
-        # at DEBUG and never showed at the default level.
-        logger.warning("is_cached: scan_cache_dir failed (%s: %s); using on-disk fallback for %s",
-                       type(e).__name__, e, repo_id)
-        return _is_cached_on_disk(repo_id)
+        yield
+    finally:
+        _SCAN_MEMO.reset(token)
+
+
+def is_cached(repo_id: str) -> bool:
+    """Best-effort check: does HF have this repo in its cache on disk?
+
+    Scans the whole cache once per call, or once per
+    :func:`hf_cache_scan_scope`."""
+    memo = _SCAN_MEMO.get()
+    if memo is None:
+        memo = {}
+    if "repos" not in memo:
+        try:
+            from huggingface_hub import scan_cache_dir
+            memo["repos"] = {
+                entry.repo_id for entry in scan_cache_dir().repos if entry.size_on_disk > 0
+            }
+        except Exception as e:
+            if _cache_dir_missing(e):
+                memo["repos"] = frozenset()
+            else:
+                # scan_cache_dir can raise on Windows (WinError 448 'untrusted
+                # mount point'); fall back to a direct disk check so a cached
+                # model isn't mistaken for missing and re-downloaded in a loop
+                # (#117/#118). Logged at WARNING with the exception type (MM2-09)
+                # so this fallback isn't invisible when triaging a Windows cache
+                # report — it previously logged at DEBUG and never showed at the
+                # default level. Once per scope: later repos go straight to disk.
+                logger.warning("is_cached: scan_cache_dir failed (%s: %s); using on-disk fallback for %s",
+                               type(e).__name__, e, repo_id)
+                memo["repos"] = None
+    repos = memo["repos"]
+    return _is_cached_on_disk(repo_id) if repos is None else repo_id in repos
 
 
 # ── Response Cache ─────────────────────────────────────────────────────────

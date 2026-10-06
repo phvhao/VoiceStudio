@@ -13,7 +13,7 @@ import {
 } from 'electron';
 import { join } from 'node:path';
 import { backendRoot } from './backend';
-import { APP_ORIGIN } from './protocol';
+import { APP_ORIGIN, APP_V8_CACHE_OPTIONS } from './protocol';
 import { isTrustedRenderer } from './trusted-renderer';
 import { DictationOutputClient } from './dictation-output';
 import { CaptureSession, type CapturePhase } from './capture-session';
@@ -138,6 +138,7 @@ export function installNativeCapture(
         sandbox: false,
         nodeIntegration: false,
         backgroundThrottling: false,
+        v8CacheOptions: APP_V8_CACHE_OPTIONS,
       },
     });
     recorder = win;

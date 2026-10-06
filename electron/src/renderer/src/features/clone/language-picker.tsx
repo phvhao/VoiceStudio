@@ -37,13 +37,20 @@ export function LanguagePicker({
   const { t, i18n } = useTranslation();
   const saved = useCloneSetting('language');
   const language = value ?? saved;
+  // Keyed by content: pages pass fresh arrays on every render (a filtered list,
+  // 'Auto' plus the catalogue), and rebuilding these rows per keystroke is wasted.
+  const optionsKey = options.join('\n');
   const entries = useMemo(
     () =>
-      languageOptions(options, i18n.language, t('languagePicker.auto')).map((option) => ({
+      languageOptions(
+        optionsKey ? optionsKey.split('\n') : [],
+        i18n.language,
+        t('languagePicker.auto'),
+      ).map((option) => ({
         ...option,
         disabled: !languageSupported(option.value, supportedOptions),
       })),
-    [options, i18n.language, t, supportedOptions],
+    [optionsKey, i18n.language, t, supportedOptions],
   );
   const invalid = entries.some((option) => option.value === language && option.disabled);
   const unavailable = modelLabel

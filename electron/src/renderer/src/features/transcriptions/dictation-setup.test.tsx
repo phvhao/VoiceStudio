@@ -13,14 +13,48 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function mount(onReady = vi.fn()) {
+function mount(onReady = vi.fn(), client = new QueryClient()) {
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <DictationSetup onReady={onReady} />
     </QueryClientProvider>,
   );
   return onReady;
 }
+
+it('refreshes the native shortcut and status after turning dictation on', async () => {
+  mock.api.mockImplementation((path: string) =>
+    Promise.resolve(
+      path === '/dictation/models'
+        ? {
+            engine_available: true,
+            models: [
+              {
+                id: 'installed',
+                repo_id: 'owner/installed',
+                label: 'Installed ASR',
+                tag: 'offline',
+                recommended: true,
+                size_gb: 0.1,
+                installed: true,
+              },
+            ],
+          }
+        : {},
+    ),
+  );
+  const client = new QueryClient();
+  // The shortcut's preferences are no longer polled, so a missed refresh would
+  // leave the native shortcut off until the app restarts.
+  for (const key of [['dictation-shortcut-prefs'], ['sidebar-dictation']])
+    client.setQueryData(key, { enabled: false });
+  const onReady = mount(vi.fn(), client);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'asr_missing.use' }));
+  await waitFor(() => expect(onReady).toHaveBeenCalled());
+  expect(client.getQueryState(['dictation-shortcut-prefs'])?.isInvalidated).toBe(true);
+  expect(client.getQueryState(['sidebar-dictation'])?.isInvalidated).toBe(true);
+});
 
 it('selects an installed model inline without starting a download', async () => {
   mock.api.mockImplementation((path: string) => {

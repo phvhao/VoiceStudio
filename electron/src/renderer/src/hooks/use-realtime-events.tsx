@@ -17,9 +17,23 @@ const EVENT_QUERY_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
     ['sidebar-model-status'],
     ['loaded-models'],
     ['model-catalogue'],
-    ['performance-profile'],
   ],
 };
+
+/**
+ * A load announces each step (importing, loading_weights, compiling), but only
+ * its end (ready, error) changes what engines, resident models and the catalogue
+ * report; the steps in between move the model status line alone. A stage this
+ * build does not know refreshes everything, as every stage used to. Performance
+ * presets do not depend on a load and keep their own poll.
+ */
+const MODEL_LOAD_STEPS = new Set(['importing', 'loading_weights', 'compiling']);
+
+function eventQueryKeys(kind: string, event: Record<string, unknown>): readonly QueryKey[] {
+  if (kind === 'model_status' && MODEL_LOAD_STEPS.has(String(event.sub_stage)))
+    return [['sidebar-model-status']];
+  return EVENT_QUERY_KEYS[kind] || [];
+}
 
 async function devBackendReady(signal: AbortSignal, remote: boolean): Promise<boolean> {
   if (window.location.protocol === 'app:' || remote) return true;
@@ -77,18 +91,17 @@ export function RealtimeEventSync() {
           retry = 0;
         };
         socket.onmessage = (message) => {
-          let kind: string | undefined;
+          let event: Record<string, unknown> | undefined;
           try {
-            const event: unknown = JSON.parse(String(message.data));
-            if (event && typeof event === 'object' && !Array.isArray(event)) {
-              const value = (event as { kind?: unknown }).kind;
-              if (typeof value === 'string') kind = value;
-            }
+            const parsed: unknown = JSON.parse(String(message.data));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+              event = parsed as Record<string, unknown>;
           } catch {
             return;
           }
-          if (!kind || kind === 'ping') return;
-          for (const queryKey of EVENT_QUERY_KEYS[kind] || []) {
+          const kind = event?.kind;
+          if (!event || typeof kind !== 'string' || !kind || kind === 'ping') return;
+          for (const queryKey of eventQueryKeys(kind, event)) {
             void client.invalidateQueries({ queryKey });
           }
         };

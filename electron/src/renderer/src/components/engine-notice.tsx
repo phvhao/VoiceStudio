@@ -13,6 +13,7 @@ import {
 } from '@/hooks/use-model-install-sync';
 import { apiJson, describeError } from '@/lib/api/client';
 import { openRepairAgent } from '@/lib/repair-agent-events';
+import { refreshRenderSettingsDependents } from '@/lib/render-settings';
 import type { EnginesResponse } from '@/lib/api/types';
 
 interface RecommendedModel {
@@ -94,9 +95,11 @@ export function EngineNotice({
       method: 'POST',
       body: JSON.stringify({ family: 'tts', backend_id: candidate.id }),
     });
+    // The engine keys long-form chapters, and the page asking may be one.
+    void refreshRenderSettingsDependents(client);
     await refreshReadiness();
     return true;
-  }, [refreshReadiness]);
+  }, [client, refreshReadiness]);
 
   useEffect(() => {
     if (!install || !jobs.data) return;

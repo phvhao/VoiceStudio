@@ -1,5 +1,15 @@
 # TASK #28 — Two-pass ACX loudness mastering
 
+> **Update (2026-10):** the filter goldens below predate two later changes. The
+> limiter now aims `ENCODER_PEAK_HEADROOM_DB` (0.5 dB) under each preset's
+> ceiling (`TP=-3.5` for ACX, `TP=-2.0` for podcast) because AAC/MP3 encoding
+> pushes peaks back up, and the render meters the encoded file (`ebur128`) and
+> re-encodes with more headroom while it is over the ceiling (at most three
+> encodes). The mux also pins `-ar` to the chapters' rate (loudnorm's dynamic
+> mode outputs 192 kHz, which the encoder kept as 96 kHz AAC / 48 kHz MP3), and
+> ACX MP3 is written at 44.1 kHz and a constant ≥192 kbps. The living
+> description is `docs/electron-longform.md`.
+
 ## TL;DR
 
 Today the longform renderer (Audiobook + Stories) applies a **single-pass** `loudnorm` filter built by `build_loudnorm_filter()` (`backend/services/longform_render.py:159`). Single-pass `loudnorm` is a *dynamic* normalizer that does **not** reliably hit a target integrated LUFS or a hard true-peak ceiling — it's documented by FFmpeg as "the result will not be as accurate" as two-pass. ACX submission requires integrated loudness inside −23…−18 LUFS and a peak ≤ −3 dBTP; single-pass routinely lands outside that window.

@@ -35,8 +35,11 @@ requests are checked before clone/design, long-form, batch and dub synthesis;
 engine-side validation remains authoritative.
 
 Finite engines use their adapter's language declarations. Native OmniVoice adapters
-use the bundled language vocabulary. Each curated MLX-Audio model declares the
-languages its model card documents (`MLXAudioBackend.CURATED_MODEL_LANGUAGES`, with
+use the bundled language vocabulary plus the picker names it spells differently
+(Arabic, Kurdish, both Chinese scripts, Haitian Creole, Kyrgyz, Pashto and Punjabi),
+which OmniVoice reads without a language hint, as it reads Auto. Each curated
+MLX-Audio model declares the languages its model card documents
+(`MLXAudioBackend.CURATED_MODEL_LANGUAGES`, with
 sources in the code): CSM, Dia, Chatterbox and MeloTTS-English are English-only,
 Qwen3-TTS covers 10 languages and OuteTTS 1.0 covers 23. The same list drives the
 picker and the synthesis guard. Kokoro reads its tables from the installed package

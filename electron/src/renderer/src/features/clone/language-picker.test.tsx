@@ -12,6 +12,33 @@ vi.mock('@/lib/store/clone-settings', () => ({
   useCloneSetting: () => 'Auto',
   setCloneSetting: select,
 }));
+const builds = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/lib/language-options', async (load) => {
+  const actual = await load<typeof import('@/lib/language-options')>();
+  return {
+    ...actual,
+    languageOptions: (...args: Parameters<typeof actual.languageOptions>) => {
+      builds.count += 1;
+      return actual.languageOptions(...args);
+    },
+  };
+});
+
+it('builds its rows once while the page re-renders with an equal list', () => {
+  // The audiobook page re-renders per keystroke and Dub passes filtered copies.
+  const supported = ['english'];
+  const { rerender } = render(
+    <LanguagePicker options={['Auto', 'English', 'Japanese']} supportedOptions={supported} />,
+  );
+  const initial = builds.count;
+  for (let keystroke = 0; keystroke < 5; keystroke += 1)
+    rerender(
+      <LanguagePicker options={['Auto', 'English', 'Japanese']} supportedOptions={supported} />,
+    );
+  expect(builds.count).toBe(initial);
+  rerender(<LanguagePicker options={['Auto', 'English']} supportedOptions={supported} />);
+  expect(builds.count).toBe(initial + 1);
+});
 
 it('shows language options after the popover mounts and supports filtered selection', async () => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(320);

@@ -45,15 +45,20 @@ comma when **Pause at every comma** is on). Turning **Read sentence by
 sentence** off restores one take per paragraph. A book or story can keep its
 own values instead (**This project only**). Dubbing never uses them: its lines
 must fit their subtitle timing. In long-form renders the pause is exact when
-**Trim engine silence** is on; otherwise the engine's own lead-in is kept at
-the outer edges of each line.
+**Trim engine silence** is on (it is off by default); otherwise the engine's
+own lead-in is kept at the outer edges of each line.
 
 **Check the reading and redo mistakes** (off by default) listens to each
 sentence with the speech recognizer you already installed, re-renders the ones
 whose words differ from the script (up to twice, keeping the closest take) and,
 in Audiobook and Stories, lists the sentences that still differ after the
 render. It never downloads a recognizer; without one, rendering continues
-unchecked. Expect it to take noticeably longer.
+unchecked. Expect it to take noticeably longer. What it found is kept with the
+cached audio, so re-rendering an unchanged or partly edited chapter still lists
+those sentences. Sentences it could not listen to are kept as unchecked, not
+as checked: they are reused as they are while no recognizer is installed, and
+the first render after one is installed checks them. Chapters rendered on a
+remote worker are not checked.
 
 API callers keep the take they had unless they ask: long-form requests
 (`/audiobook`, `/longform/render`, `/audiobook/preview`) send
@@ -329,9 +334,13 @@ parentheses; details in [generation-parameters.md](generation-parameters.md)):
 - `position_temperature` (5.0) and `class_temperature` (0.0) — 0 is greedy;
   higher is more random, which means more expressive variation *and* more
   artifacts.
-- `num_step` — the Voice page defaults to 16 (fast); Audiobook renders default
-  to 32 (cleaner), overridable in the Audiobook panel. Fewer steps = rougher,
-  occasionally more "human-sounding" edges.
+- `num_step` — the Voice page defaults to 16 (fast); Audiobook and Stories
+  render at the steps of the Settings → Performance preset: Fast 8 (also
+  without postprocessing), Balanced 16 — the preset a new install starts on —
+  Quality 32 and Max 64. The Audiobook panel's slider shows the steps a render
+  will take and overrides them for the book. The steps a chapter was rendered
+  at key its cached audio, so changing the preset renders the book again.
+  Fewer steps = rougher, occasionally more "human-sounding" edges.
 - **Seed** — unpinned by default, so every render differs. The history rail
   shows the seed each take used; "Keep this seed" (Design tab) or locking a
   profile from history pins reference + seed, making the voice
@@ -346,19 +355,21 @@ that gives every identical line its own take instead of replaying one recording
 
 It also owns the **joins**. Every engine pads each rendered line with its own
 lead-in and tail silence (GPT-SoVITS ≈ 70 ms / 300 ms, others similar); joined
-raw, a book reads as a string of separate takes. By default the renderer trims
-that padding (**Trim engine silence**, −40 dBFS with 40 ms kept at each edge)
-and inserts deliberate silence instead: **Gap between lines** (250 ms) between
-consecutive lines that carry no `[pause]` of their own — an explicit `[pause]`
-replaces the gap rather than adding to it — and **Gap between paragraphs**
-(350 ms) at a blank line inside one line of script. A line that inline markup
-(`[slow]`, `[emphasis]`, `[spell]`) splits into several renders is still one
-line: no gap lands in the middle of it (and a blank line sitting on that split
-still gets the paragraph gap). A `[voice:NAME]` change is a line boundary and
-gets the line gap, blank line or not — the paragraph gap is for breaks inside
-one voice's text. With the paragraph gap at 0 a line is
-rendered in one engine call exactly as before, so setting both gaps to 0 and
-turning trimming off gives the pre-existing hard joins (and their cache keys)
+raw, a book reads as a string of separate takes. By default the renderer keeps
+those hard joins; for seamless ones, turn on **Trim engine silence** (−40 dBFS
+with 40 ms kept at each edge) and set deliberate silence instead: **Gap between
+lines** between consecutive lines that carry no `[pause]` of their own — an
+explicit `[pause]` replaces the gap rather than adding to it — and **Gap
+between paragraphs** at a blank line inside one line of script; 250 ms and
+350 ms work well. Both gaps start at 0. The gap between lines goes between
+finished takes, so changing it joins the cached takes again instead of
+rendering them. A line that inline markup (`[slow]`, `[emphasis]`, `[spell]`)
+splits into several renders is still one line: no gap lands in the middle of
+it (and a blank line sitting on that split still gets the paragraph gap). A
+`[voice:NAME]` change is a line boundary and gets the line gap, blank line or
+not — the paragraph gap is for breaks inside one voice's text. With the
+paragraph gap at 0 a line is not split at its blank lines, so setting both
+gaps to 0 and turning trimming off gives the hard joins (and their cache keys)
 back, including cached renders with seed or emotion overrides. A chapter may
 request at most 15 minutes of added join silence; larger requests fail before
 synthesis or cache reads. Reduce the gaps or split the chapter to proceed.

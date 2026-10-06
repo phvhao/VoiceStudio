@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   blankFallbackUrl,
   BLANK_CACHE_REPAIR_URL,
+  clearRendererCaches,
   fallbackLocale,
   installBlankWindowGuard,
   localizedFallbackCopy,
@@ -86,6 +87,21 @@ describe('blank window fallback', () => {
     contents.emit('will-navigate', navigation, BLANK_CACHE_REPAIR_URL);
     expect(repair).toHaveBeenCalledOnce();
     stop();
+  });
+
+  it('repairs with the compiled-script cache cleared along with the HTTP cache', async () => {
+    const session = {
+      clearCache: vi.fn().mockResolvedValue(undefined),
+      clearCodeCaches: vi.fn().mockResolvedValue(undefined),
+    };
+    await clearRendererCaches(session);
+    expect(session.clearCache).toHaveBeenCalledOnce();
+    // No URL list: every cached script goes.
+    expect(session.clearCodeCaches).toHaveBeenCalledExactlyOnceWith({});
+    const entrypoint = readFileSync(join(process.cwd(), 'src/main/index.ts'), 'utf8');
+    expect(entrypoint).toMatch(
+      /await clearRendererCaches\(win\.webContents\.session\);\s+app\.relaunch\(\);/,
+    );
   });
 
   it('tears down safely after Electron destroys the window', () => {

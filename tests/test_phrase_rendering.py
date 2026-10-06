@@ -169,12 +169,24 @@ _SPLIT_FINGERPRINTS = {4: "58d20b27fa0bc6aa"}
 _SHIPPED_MIN_CHARS = __import__("services.chunked_tts", fromlist=["x"]).PHRASE_MIN_CHARS
 
 
+def _set_min_chars(monkeypatch, value: int) -> None:
+    """Set PHRASE_MIN_CHARS where the code under test reads it: the module the
+    ``split_into_phrases`` above was imported from, and the one sys.modules
+    holds now. In a full run an earlier suite purges ``services.*``
+    (test_mcp_bindings' ``client`` fixture), so ``from services import
+    chunked_tts`` is then a fresh twin the collection-time function never
+    reads, and a patch of the twin alone was lost."""
+    from services import chunked_tts
+
+    namespaces = {id(ns): ns for ns in (vars(chunked_tts), split_into_phrases.__globals__)}
+    for namespace in namespaces.values():
+        monkeypatch.setitem(namespace, "PHRASE_MIN_CHARS", value)
+
+
 def test_short_phrases_join_the_next_one_and_marked_lines_only(monkeypatch):
     """Measured: takes under ~45 characters drift twice as far in pitch from
     one another and sound warped, so a short phrase is read with its neighbour."""
-    from services import chunked_tts
-
-    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    _set_min_chars(monkeypatch, _SHIPPED_MIN_CHARS)
     d = DEFAULT_PUNCTUATION_PAUSES
     text = "\n".join([
         "Main ideas",  # a heading: no mark, so it keeps its own take and pause
@@ -194,9 +206,7 @@ def test_short_phrases_join_the_next_one_and_marked_lines_only(monkeypatch):
 def test_short_phrases_never_join_across_a_line_break(monkeypatch):
     """A line or paragraph break keeps its pause: "It stopped." stays apart
     from the next paragraph, and a short line keeps its own take."""
-    from services import chunked_tts
-
-    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    _set_min_chars(monkeypatch, _SHIPPED_MIN_CHARS)
     d = DEFAULT_PUNCTUATION_PAUSES
     assert split_into_phrases(
         "It stopped.\n\nIn the morning the town was quiet and nobody spoke of the night."
@@ -217,7 +227,7 @@ def test_short_phrases_never_join_across_a_line_break(monkeypatch):
 def test_joining_never_rebuilds_a_long_take(monkeypatch):
     from services import chunked_tts
 
-    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    _set_min_chars(monkeypatch, _SHIPPED_MIN_CHARS)
     phrases = [p for p, _ in split_into_phrases(SEASONS)]
     assert all(len(p) <= chunked_tts.PHRASE_JOIN_MAX_CHARS for p in phrases)
     # The parallel clauses that once swapped still get a take each.
@@ -238,11 +248,10 @@ def test_a_change_to_the_phrases_bumps_the_split_revision(monkeypatch):
     """Cached chapters are keyed by the split revision, not the splitter's
     code: phrases that change under the same revision replay old audio (a new
     line-break rule rendered nothing until the revision moved)."""
-    from services import chunked_tts
     from services.chunked_tts import PHRASE_SPLIT_REVISION
 
     # The fingerprint is of the splitter as it ships, short-phrase joining included.
-    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    _set_min_chars(monkeypatch, _SHIPPED_MIN_CHARS)
     assert _SPLIT_FINGERPRINTS.get(PHRASE_SPLIT_REVISION) == _split_fingerprint(), (
         "split_into_phrases now returns different phrases: bump "
         "PHRASE_SPLIT_REVISION and record the new fingerprint here")
@@ -363,6 +372,4 @@ def test_the_app_and_the_server_share_one_set_of_default_pauses():
 def _cut_at_marks_only(monkeypatch):
     """These tests pin where marks cut phrases and what the cuts carry; joining
     short phrases is tested on its own in test_phrase_rendering.py."""
-    from services import chunked_tts
-
-    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)
+    _set_min_chars(monkeypatch, 0)

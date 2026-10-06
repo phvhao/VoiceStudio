@@ -78,40 +78,74 @@ def _escape_meta(value: str) -> str:
     return re.sub(r"([=;#\\\n])", r"\\\1", value)
 
 
+def _cache_files(top: str):
+    """``(path, name, size, mtime)`` of every file under ``top``.
+
+    One ``os.scandir`` per directory: on Windows the size and time come with
+    the listing itself, so a cache of thousands of segments is walked without
+    a stat call per file. Like ``os.walk``, a link to a directory is not
+    walked into (no loops); a link to a file counts as that file. Anything
+    that cannot be listed or read is skipped — never raises.
+    """
+    stack = [top]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif entry.is_file():
+                            info = entry.stat()
+                            yield entry.path, entry.name, info.st_size, info.st_mtime
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+
+def touch_cached_file(path: str) -> None:
+    """Mark a cache entry as just used, so eviction keeps it longest.
+
+    :func:`prune_cache_dir` evicts by modification time, so every reuse —
+    a chapter or a segment served from the cache — moves it to now. Without
+    this a book re-rendered again and again lost its oldest chapters first
+    while they were still in use. Best-effort.
+    """
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
 def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[int, int]:
-    """Evict the oldest audio/cache files in ``cache_dir`` until the total size is within
-    ``max_bytes`` (LRU by mtime). The content-addressed render cache otherwise
+    """Evict the least recently used audio in ``cache_dir`` until the total size
+    is within ``max_bytes``. The content-addressed render cache otherwise
     grows without bound — uncompressed WAVs accumulate across every render.
 
-    Walks the whole tree, so chapter WAVs at the root and segment WAVs under
-    ``segments/`` share ONE byte budget — the cap holds no matter which layer
-    grew. Bookkeeping (including the voices-root index needed to find legacy
-    WAVs after a data-dir move) is counted but never evicted. Metadata alone may
-    exceed the budget. A WAV's timing sidecar (:func:`timeline_sidecar_path`)
-    goes with it, and a sidecar whose WAV is gone is removed — it describes
-    audio that no longer exists. Best-effort: returns ``(remaining_bytes,
-    removed_count)`` (WAVs only) and never raises (a missing dir / unstattable
-    file is just skipped). Call it *before* writing a job's files so the fresh
-    ones are never the eviction target.
+    Recency is the file's mtime: a write sets it and every cache hit renews it
+    (:func:`touch_cached_file`), so what a render keeps reusing stays and what
+    an edit superseded goes first. Walks the whole tree, so chapter WAVs at the
+    root and segment WAVs under ``segments/`` share ONE byte budget — the cap
+    holds no matter which layer grew. Bookkeeping (including the voices-root
+    index needed to find legacy WAVs after a data-dir move) is counted but
+    never evicted. Metadata alone may exceed the budget. A WAV's timing sidecar
+    (:func:`timeline_sidecar_path`) goes with it, and a sidecar whose WAV is
+    gone is removed — it describes audio that no longer exists. Best-effort:
+    returns ``(remaining_bytes, removed_count)`` (WAVs only) and never raises
+    (a missing dir / unstattable file is just skipped). Call it *before*
+    writing a job's files so the fresh ones are never the eviction target;
+    it walks the disk, so an async caller runs it off the event loop.
     """
     entries: list[tuple[float, int, str]] = []
     sidecars: dict[str, int] = {}
     total = 0
-    for root, _dirs, names in os.walk(cache_dir):
-        for name in names:
-            p = os.path.join(root, name)
-            try:
-                if not os.path.isfile(p):
-                    continue
-                size = os.path.getsize(p)
-                mtime = os.path.getmtime(p)
-            except OSError:
-                continue
-            if name.lower().endswith(TIMELINE_SUFFIX):
-                sidecars[p] = size
-            elif not name.lower().endswith(".json"):
-                entries.append((mtime, size, p))
-            total += size
+    for p, name, size, mtime in _cache_files(cache_dir):
+        if name.lower().endswith(TIMELINE_SUFFIX):
+            sidecars[p] = size
+        elif not name.lower().endswith(".json"):
+            entries.append((mtime, size, p))
+        total += size
 
     def drop_sidecar(path: str) -> None:
         nonlocal total
@@ -674,6 +708,7 @@ class SegmentCache:
         extra_sig: str = "",
         vary_repeats: bool = False,
         legacy_voice_sigs: Iterable[dict] = (),
+        legacy_extra_sig: Optional[str] = None,
     ) -> None:
         self.dir = os.path.join(cache_dir, SEGMENT_SUBDIR)
         self.sample_rate = int(sample_rate)
@@ -686,6 +721,11 @@ class SegmentCache:
         # keep counting.
         self.legacy_voice_sigs = [dict(s) for s in legacy_voice_sigs if s]
         self.extra_sig = extra_sig or ""
+        # The extra signature an older build derived for the same request
+        # (before the take signature dropped the gap between lines and the
+        # whole cast map, and before the performance preset's sampling keyed
+        # it). Every legacy lookup uses it; ``None`` = it never changed.
+        self.legacy_extra_sig = self.extra_sig if legacy_extra_sig is None else legacy_extra_sig
         # Cache opt-out (#1208): when on, a per-occurrence nonce enters the key
         # so identical repeated lines no longer share one WAV. Off → the nonce
         # is dropped and keys are byte-identical to pre-#1208 (default render).
@@ -693,7 +733,8 @@ class SegmentCache:
         self.hits = 0
         self.misses = 0
 
-    def _path(self, span, nonce: int = 0, *, sigs: Optional[dict] = None) -> str:
+    def _path(self, span, nonce: int = 0, *, sigs: Optional[dict] = None,
+              extra_sig: Optional[str] = None) -> str:
         sigs = self.voice_sig if sigs is None else sigs
         key = segment_cache_key(
             span.text,
@@ -702,7 +743,7 @@ class SegmentCache:
             voice_id=span.voice_id,
             voice_sig=sigs.get(span.voice_id or "", ""),
             speed=getattr(span, "speed", None),
-            extra_sig=self.extra_sig,
+            extra_sig=self.extra_sig if extra_sig is None else extra_sig,
             nonce=nonce if self.vary_repeats else 0,
         )
         return os.path.join(self.dir, f"{key}.wav")
@@ -713,8 +754,8 @@ class SegmentCache:
         path = self._path(span, nonce)
         if os.path.isfile(path):
             return path
-        for sigs in self.legacy_voice_sigs:
-            legacy = self._path(span, nonce, sigs=sigs)
+        for sigs in (self.voice_sig, *self.legacy_voice_sigs):
+            legacy = self._path(span, nonce, sigs=sigs, extra_sig=self.legacy_extra_sig)
             if legacy != path and os.path.isfile(legacy):
                 return adopt_cached_file(legacy, path)
         return None
@@ -741,12 +782,15 @@ class SegmentCache:
         if int(sr) != self.sample_rate or audio.numel() == 0:
             self.misses += 1
             return None  # foreign-rate/empty entry — clean miss, re-render
-        try:
-            os.utime(path, None)
-        except OSError:
-            pass
+        touch_cached_file(path)
         self.hits += 1
         return audio
+
+    def discount(self) -> None:
+        """Count the last :meth:`load` as a miss after all: its audio was not
+        reused (the speech check renders it again)."""
+        self.hits -= 1
+        self.misses += 1
 
     def store(self, span, audio, nonce: int = 0) -> None:
         """Persist a freshly rendered segment. Best-effort — a full disk or
@@ -771,12 +815,67 @@ class SegmentCache:
         return valid_segment_timing(
             read_json_file(timeline_sidecar_path(self._path(span, nonce))), samples)
 
-    def store_timing(self, span, units: list, nonce: int = 0, *, samples: int) -> None:
-        """Keep the phrase ranges of a segment just stored. Best-effort."""
+    def load_check(self, span, nonce: int = 0, *, samples: int) -> Optional[dict]:
+        """What the speech check found in the cached segment of ``span``
+        (:func:`valid_speech_check`), or ``None``: rendered without the check,
+        cached before results were kept, or the sidecar is from another take."""
+        doc = read_json_file(timeline_sidecar_path(self._path(span, nonce)))
+        if (not isinstance(doc, dict) or doc.get("version") != TIMELINE_VERSION
+                or doc.get("samples") != samples):
+            return None
+        return valid_speech_check(doc.get("speech_check"))
+
+    def store_timing(self, span, units: list, nonce: int = 0, *, samples: int,
+                     check: Optional[dict] = None) -> None:
+        """Keep the phrase ranges of a segment just stored, and what the
+        speech check found in it (``check``, when it ran). Best-effort."""
         doc = {"version": TIMELINE_VERSION, "samples": int(samples),
                "units": [[int(k), int(a), int(b)] for k, a, b in units]}
+        check = valid_speech_check(check)
+        if check is not None:
+            doc["speech_check"] = check
         if valid_segment_timing(doc, samples) is not None:
             write_json_atomic(timeline_sidecar_path(self._path(span, nonce)), doc)
+
+
+# ── Speech-check results ────────────────────────────────────────────────────
+
+#: Phrases a stored speech-check result names at most (the app lists 50).
+_MAX_CHECK_SUSPECTS = 200
+
+
+def _count(value) -> Optional[int]:
+    return value if type(value) is int and value >= 0 else None
+
+
+def valid_speech_check(record) -> Optional[dict]:
+    """A speech-check result as it is kept with cached audio, or ``None``.
+
+    ``{"checked", "retaken", "unchecked", "suspect", "unavailable"}``: takes
+    listened to, takes rendered again, takes the check could not listen to (no
+    working recognizer), the phrases that still differ (``{"text",
+    "score"}``), and whether the recognizer was missing. The record travels
+    with the audio — a segment's sidecar, a chapter's timeline — so a render
+    that reuses the audio still reports what was found; it is checked on the
+    way in because a sidecar is only a file on disk. Readers ignore keys they
+    do not know."""
+    if not isinstance(record, dict):
+        return None
+    counts = {key: _count(record.get(key, 0)) for key in ("checked", "retaken", "unchecked")}
+    if any(value is None for value in counts.values()):
+        return None
+    found = record.get("suspect")
+    suspects = []
+    for item in found if isinstance(found, list) else []:
+        if len(suspects) >= _MAX_CHECK_SUSPECTS:
+            break
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            continue
+        score = item.get("score")
+        if not isinstance(score, (int, float)) or isinstance(score, bool) or not math.isfinite(score):
+            continue
+        suspects.append({"text": item["text"][:300], "score": round(float(score), 2)})
+    return {**counts, "suspect": suspects, "unavailable": record.get("unavailable") is True}
 
 
 # ── Loudness normalization ──────────────────────────────────────────────────
@@ -784,7 +883,7 @@ class SegmentCache:
 @dataclass(frozen=True)
 class LoudnessPreset:
     """A loudnorm target. ``i`` = integrated LUFS, ``tp`` = true-peak ceiling
-    (dBTP), ``lra`` = loudness range."""
+    (dBTP) the finished file must stay under, ``lra`` = loudness range."""
     key: str
     i: float
     tp: float
@@ -799,17 +898,44 @@ LOUDNESS_PRESETS: dict[str, LoudnessPreset] = {
     "podcast": LoudnessPreset("podcast", -16.0, -1.5, 11.0),
 }
 
+#: How far below a preset's ceiling the limiter aims. AAC and MP3 encoding
+#: pushes the true peak back up: +0.1 dB at the app's 128k on rendered books,
+#: +0.3 at 96k, up to +1.0 at 64k AAC. A file still over its ceiling is
+#: re-encoded with more room (:func:`peak_headroom_after`).
+ENCODER_PEAK_HEADROOM_DB = 0.5
+#: Added to the measured overshoot for the re-encode: aiming the limiter lower
+#: raises the overshoot by up to another 0.2 dB.
+_PEAK_RETRY_MARGIN_DB = 0.3
 
-def build_loudnorm_filter(preset: Optional[str]) -> Optional[str]:
+
+def _limiter_target(p: LoudnessPreset, headroom: float) -> float:
+    return round(p.tp - headroom, 2)
+
+
+def build_loudnorm_filter(
+    preset: Optional[str], headroom: float = ENCODER_PEAK_HEADROOM_DB,
+) -> Optional[str]:
     """Return an ``-af`` loudnorm filter string for ``preset``, or ``None`` for
     off / unknown (single-pass; two-pass measure→apply is a runner enhancement).
+    The limiter aims ``headroom`` dB below the preset's ceiling.
     """
     if not preset:
         return None
     p = LOUDNESS_PRESETS.get(preset.lower())
     if p is None:  # "off", "none", or anything unrecognized → no filter
         return None
-    return f"loudnorm=I={p.i}:TP={p.tp}:LRA={p.lra}"
+    return f"loudnorm=I={p.i}:TP={_limiter_target(p, headroom)}:LRA={p.lra}"
+
+
+def peak_headroom_after(preset: Optional[str], headroom: float, peak: Optional[float]) -> Optional[float]:
+    """The limiter headroom to re-encode with when an encoded file's true
+    ``peak`` (dBTP) is over ``preset``'s ceiling — the overshoot plus a margin
+    on top of ``headroom`` — else ``None``: the file meets its ceiling, or its
+    peak is unknown."""
+    p = LOUDNESS_PRESETS.get((preset or "").lower())
+    if p is None or peak is None or not math.isfinite(peak) or peak <= p.tp:
+        return None
+    return round(headroom + (peak - p.tp) + _PEAK_RETRY_MARGIN_DB, 2)
 
 
 @dataclass(frozen=True)
@@ -823,7 +949,9 @@ class MeasuredLoudness:
     target_offset: float
 
 
-def build_loudnorm_measure_filter(preset: Optional[str]) -> Optional[str]:
+def build_loudnorm_measure_filter(
+    preset: Optional[str], headroom: float = ENCODER_PEAK_HEADROOM_DB,
+) -> Optional[str]:
     """First-pass loudnorm filter (``print_format=json``) for ``preset``, or
     ``None`` for off/unknown — mirrors :func:`build_loudnorm_filter`'s lookup
     (no whitespace stripping) so the same values count as 'no filter'."""
@@ -832,7 +960,7 @@ def build_loudnorm_measure_filter(preset: Optional[str]) -> Optional[str]:
     p = LOUDNESS_PRESETS.get(preset.lower())
     if p is None:
         return None
-    return f"loudnorm=I={p.i}:TP={p.tp}:LRA={p.lra}:print_format=json"
+    return f"loudnorm=I={p.i}:TP={_limiter_target(p, headroom)}:LRA={p.lra}:print_format=json"
 
 
 def parse_loudnorm_measure(stderr_text: Optional[str]) -> Optional[MeasuredLoudness]:
@@ -883,6 +1011,7 @@ def parse_loudnorm_measure(stderr_text: Optional[str]) -> Optional[MeasuredLoudn
 
 def build_loudnorm_apply_filter(
     preset: Optional[str], measured: Optional["MeasuredLoudness"],
+    headroom: float = ENCODER_PEAK_HEADROOM_DB,
 ) -> Optional[str]:
     """Second-pass (apply) loudnorm filter feeding the measured values back in.
     ``None`` for off/unknown preset OR when ``measured`` is None (so a caller
@@ -893,7 +1022,7 @@ def build_loudnorm_apply_filter(
     if p is None:
         return None
     return (
-        f"loudnorm=I={p.i}:TP={p.tp}:LRA={p.lra}"
+        f"loudnorm=I={p.i}:TP={_limiter_target(p, headroom)}:LRA={p.lra}"
         f":measured_I={measured.input_i}:measured_TP={measured.input_tp}"
         f":measured_LRA={measured.input_lra}:measured_thresh={measured.input_thresh}"
         f":offset={measured.target_offset}:linear=true:print_format=summary"
@@ -909,6 +1038,40 @@ def build_loudnorm_measure_cmd(ffmpeg: str, concat_list_path: str, filt: str) ->
         "-f", "concat", "-safe", "0", "-i", str(concat_list_path),
         "-af", filt, "-f", "null", "-",
     ]
+
+
+def build_true_peak_cmd(ffmpeg: str, path: str) -> list[str]:
+    """Pure argv that meters a finished file's true peak (EBU R128 ``ebur128``,
+    oversampled) and discards the audio. ``framelog=verbose`` keeps the
+    per-frame lines out of the captured log; only the summary is printed."""
+    return [
+        ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(path),
+        "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-",
+    ]
+
+
+def parse_true_peak(stderr_text: Optional[str]) -> Optional[float]:
+    """The true peak (dBTP) in the last ``ebur128`` summary of ffmpeg's log, or
+    ``None`` when there is none or it is not a finite number (a silent file).
+    Plain string search, no regex over the log (CodeQL-safe)."""
+    if not stderr_text:
+        return None
+    at = stderr_text.rfind("Summary:")
+    if at < 0:
+        return None
+    summary = stderr_text[at:]
+    section = summary.find("True peak:")
+    if section < 0:
+        return None
+    label = summary.find("Peak:", section + len("True peak:"))
+    if label < 0:
+        return None
+    value = summary[label + len("Peak:"):].split("dBFS", 1)[0].strip()
+    try:
+        peak = float(value)
+    except ValueError:
+        return None
+    return peak if math.isfinite(peak) else None
 
 
 # ── FFMETADATA ──────────────────────────────────────────────────────────────
@@ -981,6 +1144,34 @@ def validate_cover_image(path: Optional[str]) -> bool:
 
 # ── Render command ──────────────────────────────────────────────────────────
 
+#: Sample rates each encoder takes.
+_AAC_RATES = (7350, 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000)
+_MP3_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000)
+#: Used when the chapters' own rate is unknown; both encoders take it.
+_FALLBACK_RATE = 48000
+#: ACX takes MP3 only at 44.1 kHz and a constant 192 kbps or more (libmp3lame
+#: with ``-b:a`` is constant bitrate; it caps 192k at 160k below 32 kHz).
+_ACX_MP3_RATE = 44100
+_ACX_MP3_MIN_KBPS = 192
+
+
+def wav_sample_rate(path: str) -> Optional[int]:
+    """The sample rate of a chapter WAV, or ``None`` when it cannot be read."""
+    try:
+        import soundfile as sf
+
+        return int(sf.info(path).samplerate)
+    except Exception:  # noqa: BLE001 — the mux then uses a rate every encoder takes
+        return None
+
+
+def _mastered_rate(sample_rate: Optional[int], rates: tuple[int, ...]) -> int:
+    """The chapters' own rate, or the next one up the encoder takes."""
+    if not sample_rate or sample_rate <= 0:
+        return _FALLBACK_RATE
+    return next((r for r in rates if r >= sample_rate), rates[-1])
+
+
 def build_render_cmd(
     ffmpeg: str,
     concat_list_path: str,
@@ -992,6 +1183,8 @@ def build_render_cmd(
     cover_path: Optional[str] = None,
     loudness: Optional[str] = None,
     measured: Optional[MeasuredLoudness] = None,
+    sample_rate: Optional[int] = None,
+    peak_headroom: float = ENCODER_PEAK_HEADROOM_DB,
 ) -> list[str]:
     """Pure argv for muxing chapter WAVs + FFMETADATA into a tagged,
     chapter-marked audio file.
@@ -999,8 +1192,10 @@ def build_render_cmd(
     Inputs: 0 = concat-demuxer list of chapter WAVs, 1 = FFMETADATA (chapters +
     global tags), 2 = cover image (only when present + valid). ``fmt`` is
     ``m4b`` (AAC in mp4, faststart) or ``mp3`` (libmp3lame). A loudness preset
-    adds an ``-af loudnorm`` pass; an invalid/oversized cover is silently
-    dropped (see :func:`validate_cover_image`).
+    adds an ``-af loudnorm`` pass whose limiter aims ``peak_headroom`` dB below
+    the preset's ceiling, and keeps the chapters' ``sample_rate``; ACX MP3 is
+    written as ACX takes it (44.1 kHz, constant 192 kbps or more). An
+    invalid/oversized cover is silently dropped (see :func:`validate_cover_image`).
     """
     if not _BITRATE_RE.match(bitrate or ""):
         bitrate = "128k"
@@ -1027,9 +1222,20 @@ def build_render_cmd(
     # Two-pass apply when measured values are present; else single-pass. Both
     # return None for a non-preset loudness, so the `if filt:` guard below
     # gives an off-render no -af (byte-identical to today).
-    filt = build_loudnorm_apply_filter(loudness, measured) if measured is not None else build_loudnorm_filter(loudness)
+    filt = (build_loudnorm_apply_filter(loudness, measured, peak_headroom) if measured is not None
+            else build_loudnorm_filter(loudness, peak_headroom))
     if filt:
         cmd += ["-af", filt]
+        # loudnorm works at 192 kHz and, in the dynamic mode real books get,
+        # outputs that: without a rate the encoder keeps the highest it takes
+        # (96 kHz AAC, 48 kHz MP3) — a bigger file whose peaks land over the
+        # ceiling. Keep the chapters' own rate instead.
+        if is_mp3 and (loudness or "").lower() == "acx":
+            rate = _ACX_MP3_RATE
+            bitrate = f"{max(int(bitrate[:-1]), _ACX_MP3_MIN_KBPS)}k"
+        else:
+            rate = _mastered_rate(sample_rate, _MP3_RATES if is_mp3 else _AAC_RATES)
+        cmd += ["-ar", str(rate)]
 
     if is_mp3:
         cmd += ["-c:a", "libmp3lame", "-b:a", bitrate, "-f", "mp3", str(out_path)]

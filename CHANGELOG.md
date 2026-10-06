@@ -43,6 +43,8 @@ metadata and the backend fallback mirror it.
 - The exported book reads like an e-book: the script's paragraphs, justified text in a serif font, chapter openers, a contents sidebar or phone drawer, text size, light/sepia/dark themes, a player bar with chapter marks, Back to current, and clean printing
 - The reader in the app justifies its text and keeps the script's paragraphs even after the script is edited
 - Playing an audiobook with the reader open no longer redraws the page on every frame, so long books play smoothly
+- The time left on an Audiobook or Stories render counts down from the last finished chapter, leaves out chapters the cache already holds and weighs the rest by their words; it no longer rises while a chapter renders, and the elapsed time survives leaving the page
+- The app loads less code at startup: the voice list no longer pulls in the waveform player, the unused Remotion player (a non-OSI licence) is gone, and compiled scripts are reused from the second launch
 - Stories and Audiobook keep a library of books: the header names the open book, saves it as you type, and opens search, new, rename, duplicate and delete; the old Projects card is gone
 - Projects groups each book's renders under it and opens the book in the editor with the chosen render's audio; older renders open as a book rebuilt from their text
 - The reader moves to each sentence exactly when the voice reaches it in newly rendered books and follows the words as rendered; older books keep estimated timing and say so
@@ -56,6 +58,23 @@ metadata and the backend fallback mirror it.
 - Spellchecking never downloads a dictionary: Windows and macOS check offline with the system's checker, and Linux uses only dictionaries already on the computer
 - Typing [ in Clone and Voice Design suggests pauses and reactions, and voice, delivery and volume tags there are underlined as not used on the page
 - Clone and Voice Design open a card for a clicked pause, reaction or respelling (or Alt+Enter on it) and add the tag-aware right-click menu; tags those pages do not read can only be removed
+- Settings and the engine list no longer wait about 2 seconds on Windows for a GPT-SoVITS server that is not running; selecting or testing the engine still finds a server you just started
+- Background checks while the app is idle use much less CPU: the performance preset reads the model cache once per check instead of 17 times, and the diarisation status reads only its own model folders
+- On Linux with XDG_CACHE_HOME set, model completeness, free-space and offline-loading checks look in the cache folder Hugging Face actually uses
+- Audiobook, Batch and Dub no longer grey out Arabic, Kurdish and both Chinese scripts for the default model, and their language lists no longer rebuild on every keystroke
+- The app asks the backend less while idle: one worker check serves every page, batch status runs on one schedule, a model load refreshes engines once when it ends, and dictation shortcut settings are re-read when changed instead of every 10 seconds
+- The status bar no longer misses running batch jobs while Settings → Updates shows an available update
+- After the backend restarts, the status bar and Settings show its models, jobs and workers straight away instead of the stopped backend's for up to 30 seconds
+- ACX and podcast loudness keep the book's own sample rate, so a mastered M4B is 20–25 % smaller, and stay under the −3 or −1.5 dBTP peak ceiling: a file still over it is encoded again; ACX MP3 comes out at 44.1 kHz and a constant 192 kbps, as ACX requires
+- Saving a book, dubbed video or batch export writes it to disk as it downloads instead of holding it in memory (a 1 GB file took about 3 GB of RAM and froze the app for half a second); quitting mid-save leaves no unfinished file
+- Cancelling the save of an HTML export removes the copy of the book it made straight away, and copies left behind by an unfinished download are cleared when the app starts
+- The Audiobook and Stories steps slider shows the steps the Performance preset renders at, and cached audio is kept per step count, so a chapter rendered at 64 steps no longer replays at 16; books cached before keep their audio
+- The Audiobook Contents rail and the time left on a render check again which chapters are rendered when the Performance preset, the compute target or the TTS engine changes while the editor is open
+- Recasting one Audiobook or Stories voice re-renders only that voice's lines, and changing the gap between lines re-renders nothing
+- The long-form cache removes the audio used least recently, so a book larger than the cache keeps the chapters each re-render reuses instead of rendering them again
+- Re-exporting a book whose chapters are all cached no longer waits for the model to load
+- The speech check's sentences to listen to survive cached and partly edited re-renders, and sentences it could not listen to are rendered again and checked once a recognizer is installed
+- Audiobook chapters rendered on a remote worker are watermarked once instead of twice, and turning the speech check on or off no longer renders them again
 
 ## [0.5.7] — 2026-10-05
 

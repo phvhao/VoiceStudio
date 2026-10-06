@@ -2,7 +2,8 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import { apiJson } from '@/lib/api/client';
 import { useBackendStatus } from './use-backend-status';
 import { isBackendReachable } from '@shared/utils/backendStage';
-import { IDLE_STATUS_POLL_MS, relaxWhenBackendBusy } from '@/lib/status-polling';
+import { IDLE_STATUS_POLL_MS, relaxWhenBackendBusy, statusStaleTime } from '@/lib/status-polling';
+import { refreshRenderSettingsDependents } from '@/lib/render-settings';
 
 export const performanceTiers = ['fast', 'balanced', 'quality', 'max'] as const;
 export type PerformanceTier = (typeof performanceTiers)[number];
@@ -73,7 +74,7 @@ export function usePerformanceProfile() {
   const query = useQuery({
     queryKey: ['performance-profile'],
     enabled: isBackendReachable(backend.stage),
-    staleTime: 30_000,
+    staleTime: (query) => statusStaleTime(query, 30_000),
     refetchInterval: () => relaxWhenBackendBusy(IDLE_STATUS_POLL_MS),
     queryFn: () => apiJson<PerformanceProfileState>('/api/settings/performance-profile'),
   });
@@ -128,6 +129,8 @@ export function usePerformanceProfile() {
         client.invalidateQueries({ queryKey: ['settings-dictation'] }),
         client.invalidateQueries({ queryKey: ['sidebar-dictation'] }),
         client.invalidateQueries({ queryKey: ['diarisation-status'] }),
+        // The steps a book renders at key its cached chapters.
+        refreshRenderSettingsDependents(client),
       ]);
     },
   });

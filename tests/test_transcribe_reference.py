@@ -199,3 +199,40 @@ def test_cache_is_bounded(monkeypatch, tmp_path):
         clip.write_bytes(f"clip-{i}".encode())
         ab.transcribe_reference(str(clip))
     assert len(ab._ref_transcript_cache) == ab._REF_TRANSCRIPT_CACHE_MAX
+
+
+# ── Whether a recognizer is installed, told without loading one ─────────────
+
+
+def test_a_recognizer_is_installed_when_reference_transcription_has_one(monkeypatch):
+    """What the long-form speech check asks before loading the TTS model for
+    it: the recognizers ``transcribe_reference`` would try, told from what is
+    installed — never building one, which would replace the dictation one."""
+    missing = {"transcribe": True, "dictation": True}
+    monkeypatch.setattr(
+        ab, "asr_model_missing_error",
+        lambda purpose="transcribe", **_kw: {"error": "missing"} if missing[purpose] else None,
+    )
+    fallbacks = {"whisper": None, "dictation": None}
+    monkeypatch.setattr(ab, "_fallback_whisper_snapshot", lambda _exclude: fallbacks["whisper"])
+    monkeypatch.setattr(ab, "_fallback_dictation_spec", lambda _exclude: fallbacks["dictation"])
+    monkeypatch.setattr(ab, "get_sherpa_dictation_backend",
+                        lambda _id: pytest.fail("a recognizer was built"))
+    assert ab.reference_recognizer_installed() is False
+    assert ab.transcribe_reference("ref.wav") is None  # none to ask there either
+    for purpose in missing:
+        missing[purpose] = False
+        assert ab.reference_recognizer_installed() is True
+        missing[purpose] = True
+    for kind, found in (("whisper", "/hf/snapshots/large-v3"), ("dictation", object())):
+        fallbacks[kind] = found
+        assert ab.reference_recognizer_installed() is True
+        fallbacks[kind] = None
+
+
+def test_a_recognizer_that_cannot_be_told_apart_is_asked(monkeypatch):
+    def broken(**_kw):
+        raise OSError("cache unreadable")
+
+    monkeypatch.setattr(ab, "active_backend_id", broken)
+    assert ab.reference_recognizer_installed() is True

@@ -93,6 +93,15 @@ def transcribe_take(audio, sample_rate: int) -> Optional[str]:
             pass
 
 
+def recognizer_installed() -> bool:
+    """Whether :func:`transcribe_take` has an installed recognizer to ask,
+    told without loading one (``False`` only when it would answer ``None``
+    without trying)."""
+    from services.asr_backend import reference_recognizer_installed
+
+    return reference_recognizer_installed()
+
+
 class SpeechVerifier:
     """Retake phrases whose transcript does not match their text.
 
@@ -113,6 +122,12 @@ class SpeechVerifier:
         self.suspect: list[dict] = []
         self.unavailable = False
         self._failures = 0
+
+    def may_answer(self) -> bool:
+        """Whether a recognizer may answer, told without loading one: ``False``
+        only when the installed one this verifier asks by default has none to
+        ask. A verifier given its own ``transcribe`` is always asked."""
+        return self.transcribe is not transcribe_take or recognizer_installed()
 
     def _score(self, text: str, audio) -> Optional[float]:
         if audio is None or getattr(audio, "shape", (0,))[-1] == 0:

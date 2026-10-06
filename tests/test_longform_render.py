@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from services.longform_render import (
+    ENCODER_PEAK_HEADROOM_DB,
     LOUDNESS_PRESETS,
     MeasuredLoudness,
     build_concat_list,
@@ -18,8 +19,11 @@ from services.longform_render import (
     build_loudnorm_measure_cmd,
     build_loudnorm_measure_filter,
     build_render_cmd,
+    build_true_peak_cmd,
     chapter_cache_key,
     parse_loudnorm_measure,
+    parse_true_peak,
+    peak_headroom_after,
     prune_cache_dir,
     validate_cover_image,
 )
@@ -46,12 +50,24 @@ _MEASURED = MeasuredLoudness(input_i=-21.75, input_tp=-18.06, input_lra=0.0,
 # ── loudness ────────────────────────────────────────────────────────────────
 
 def test_loudnorm_acx_filter():
+    # The limiter aims half a dB under ACX's -3 dBTP ceiling: AAC/MP3 encoding
+    # pushes the peak back up.
     f = build_loudnorm_filter("acx")
-    assert f == "loudnorm=I=-19.0:TP=-3.0:LRA=11.0"
+    assert f == "loudnorm=I=-19.0:TP=-3.5:LRA=11.0"
 
 
 def test_loudnorm_podcast_filter():
-    assert build_loudnorm_filter("podcast") == "loudnorm=I=-16.0:TP=-1.5:LRA=11.0"
+    assert build_loudnorm_filter("podcast") == "loudnorm=I=-16.0:TP=-2.0:LRA=11.0"
+
+
+def test_loudnorm_limiter_aims_the_headroom_under_the_ceiling():
+    assert ENCODER_PEAK_HEADROOM_DB > 0
+    for key, p in LOUDNESS_PRESETS.items():
+        for headroom in (ENCODER_PEAK_HEADROOM_DB, 1.3, 0.0):
+            tp = round(p.tp - headroom, 2)
+            assert f":TP={tp}:" in build_loudnorm_filter(key, headroom)
+            assert f":TP={tp}:" in build_loudnorm_measure_filter(key, headroom)
+            assert f":TP={tp}:" in build_loudnorm_apply_filter(key, _MEASURED, headroom)
 
 
 def test_loudnorm_case_insensitive():
@@ -185,6 +201,65 @@ def test_render_cmd_loudnorm_adds_af():
     assert any(a.startswith("loudnorm=") for a in cmd)
 
 
+def _arg(cmd, flag):
+    return cmd[cmd.index(flag) + 1] if flag in cmd else None
+
+
+@pytest.mark.parametrize("preset,fmt", [("acx", "m4b"), ("podcast", "m4b"), ("podcast", "mp3")])
+@pytest.mark.parametrize("measured", [None, _MEASURED])
+def test_mastered_render_keeps_the_chapter_rate(preset, fmt, measured):
+    # loudnorm outputs 192 kHz in the dynamic mode real books get; without a
+    # rate the encoder kept 96 kHz AAC / 48 kHz MP3, bigger and over the ceiling.
+    cmd = build_render_cmd("ffmpeg", "c", "m", f"o.{fmt}", fmt=fmt, loudness=preset,
+                           measured=measured, sample_rate=24000)
+    assert _arg(cmd, "-ar") == "24000"
+    assert _arg(cmd, "-b:a") == "128k"
+    # An output option: after the filter, before the encoder and the file.
+    assert cmd.index("-af") < cmd.index("-ar") < cmd.index("-c:a")
+
+
+def test_unmastered_render_is_unchanged_by_the_chapter_rate():
+    for fmt in ("m4b", "mp3"):
+        plain = build_render_cmd("ffmpeg", "c", "m", f"o.{fmt}", fmt=fmt)
+        assert build_render_cmd("ffmpeg", "c", "m", f"o.{fmt}", fmt=fmt, sample_rate=24000) == plain
+        assert build_render_cmd("ffmpeg", "c", "m", f"o.{fmt}", fmt=fmt, loudness="off",
+                                sample_rate=24000) == plain
+        assert "-ar" not in plain
+
+
+@pytest.mark.parametrize("fmt,rate,expected", [
+    ("m4b", 22050, "22050"), ("m4b", 44100, "44100"), ("m4b", 25000, "32000"),
+    ("mp3", 96000, "48000"), ("mp3", 16000, "16000"),
+    # Unknown (unreadable chapter): a rate both encoders take.
+    ("m4b", None, "48000"), ("mp3", None, "48000"),
+])
+def test_mastered_rate_is_one_the_encoder_takes(fmt, rate, expected):
+    cmd = build_render_cmd("ffmpeg", "c", "m", f"o.{fmt}", fmt=fmt, loudness="podcast",
+                           sample_rate=rate)
+    assert _arg(cmd, "-ar") == expected
+
+
+@pytest.mark.parametrize("bitrate,expected", [("128k", "192k"), ("64k", "192k"), ("320k", "320k")])
+def test_acx_mp3_is_written_to_the_acx_spec(bitrate, expected):
+    # ACX takes MP3 at 44.1 kHz and a constant 192 kbps or more (LAME would cap
+    # 192k at 160k at the 24 kHz the chapters have).
+    cmd = build_render_cmd("ffmpeg", "c", "m", "o.mp3", fmt="mp3", bitrate=bitrate,
+                           loudness="ACX", measured=_MEASURED, sample_rate=24000)
+    assert _arg(cmd, "-ar") == "44100"
+    assert _arg(cmd, "-b:a") == expected
+    assert "libmp3lame" in cmd and "-q:a" not in cmd and "-abr" not in cmd  # constant bitrate
+    # An ACX M4B keeps the chapters' rate and the bitrate asked for.
+    m4b = build_render_cmd("ffmpeg", "c", "m", "o.m4b", bitrate=bitrate, loudness="acx",
+                           sample_rate=24000)
+    assert (_arg(m4b, "-ar"), _arg(m4b, "-b:a")) == ("24000", bitrate)
+
+
+def test_render_cmd_uses_the_given_limiter_headroom():
+    cmd = build_render_cmd("ffmpeg", "c", "m", "o.m4b", loudness="acx", measured=_MEASURED,
+                           sample_rate=24000, peak_headroom=1.3)
+    assert ":TP=-4.3:" in _arg(cmd, "-af")
+
+
 def test_render_cmd_with_cover(tmp_path):
     cover = tmp_path / "cover.jpg"
     cover.write_bytes(b"\xff\xd8\xff" + b"x" * 50)
@@ -286,8 +361,8 @@ def test_prune_cache_missing_dir_is_safe(tmp_path):
 # ── #28 two-pass loudnorm: measure filter ───────────────────────────────────
 
 def test_measure_filter_goldens():
-    assert build_loudnorm_measure_filter("acx") == "loudnorm=I=-19.0:TP=-3.0:LRA=11.0:print_format=json"
-    assert build_loudnorm_measure_filter("podcast") == "loudnorm=I=-16.0:TP=-1.5:LRA=11.0:print_format=json"
+    assert build_loudnorm_measure_filter("acx") == "loudnorm=I=-19.0:TP=-3.5:LRA=11.0:print_format=json"
+    assert build_loudnorm_measure_filter("podcast") == "loudnorm=I=-16.0:TP=-2.0:LRA=11.0:print_format=json"
     assert build_loudnorm_measure_filter("ACX") == build_loudnorm_measure_filter("acx")
 
 
@@ -331,7 +406,7 @@ def test_parse_measure_rejects_nonnumeric_and_nonfinite(badval):
 def test_apply_filter_golden():
     f = build_loudnorm_apply_filter("acx", _MEASURED)
     assert f == (
-        "loudnorm=I=-19.0:TP=-3.0:LRA=11.0:measured_I=-21.75:measured_TP=-18.06"
+        "loudnorm=I=-19.0:TP=-3.5:LRA=11.0:measured_I=-21.75:measured_TP=-18.06"
         ":measured_LRA=0.0:measured_thresh=-31.75:offset=0.05:linear=true:print_format=summary"
     )
 
@@ -353,6 +428,66 @@ def test_measure_cmd_exact_argv():
     ]
 
 
+# ── true-peak check of the encoded file ─────────────────────────────────────
+
+# The summary ffmpeg 7.1 prints for `ebur128=peak=true` (older builds match).
+_EBUR128_LOG = """[Parsed_ebur128_0 @ 000001] Summary:
+
+  Integrated loudness:
+    I:         -19.0 LUFS
+    Threshold: -29.1 LUFS
+
+  Loudness range:
+    LRA:         5.6 LU
+    Threshold: -39.3 LUFS
+    LRA low:   -23.9 LUFS
+    LRA high:  -18.3 LUFS
+
+  True peak:
+    Peak:       -2.9 dBFS
+[out#0/null @ 000002] video:0KiB audio:31188KiB
+"""
+
+
+def test_true_peak_cmd_exact_argv():
+    # framelog=verbose keeps the per-frame lines (10 per second of book) out of
+    # the captured log; the summary still prints at info.
+    assert build_true_peak_cmd("ffmpeg", "book.m4b") == [
+        "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "info", "-i", "book.m4b",
+        "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-",
+    ]
+
+
+def test_parse_true_peak():
+    assert parse_true_peak(_EBUR128_LOG) == -2.9
+    # Sample peak printed first, then the true peak: the true one is read.
+    both = _EBUR128_LOG.replace("  True peak:", "  Sample peak:\n    Peak:       -3.4 dBFS\n\n  True peak:")
+    assert parse_true_peak(both) == -2.9
+    # The last summary wins.
+    assert parse_true_peak(_EBUR128_LOG + _EBUR128_LOG.replace("-2.9 dBFS", "-1.2 dBFS")) == -1.2
+
+
+@pytest.mark.parametrize("log", [
+    None, "", "no summary", "Summary:\n  Integrated loudness:\n    I: -19.0 LUFS\n",
+    _EBUR128_LOG.replace("-2.9", "-inf"), _EBUR128_LOG.replace("-2.9", "nan"),
+    _EBUR128_LOG.replace("-2.9 dBFS", "garbled"),
+])
+def test_parse_true_peak_unknown(log):
+    assert parse_true_peak(log) is None
+
+
+def test_peak_headroom_after_an_encode_over_the_ceiling():
+    # Under or at the ceiling, or unknown: the file stays as encoded.
+    for peak in (-3.4, -3.0, None, float("-inf"), float("nan")):
+        assert peak_headroom_after("acx", 0.5, peak) is None
+    assert peak_headroom_after("off", 0.5, 0.0) is None
+    assert peak_headroom_after(None, 0.5, 0.0) is None
+    # Over: the overshoot plus a margin goes under the limiter, on top of the
+    # headroom that encode had (64k AAC overshoots ~1 dB and more when aimed lower).
+    assert peak_headroom_after("acx", 0.5, -2.4) == 1.4
+    assert peak_headroom_after("PODCAST", 0.5, -1.4) == 0.9
+
+
 # ── build_render_cmd measured branch ────────────────────────────────────────
 
 def test_render_cmd_two_pass_apply_when_measured():
@@ -364,7 +499,7 @@ def test_render_cmd_two_pass_apply_when_measured():
 def test_render_cmd_single_pass_when_measured_none():
     cmd = build_render_cmd("ffmpeg", "c.txt", "m.ff", "o.m4b", loudness="acx", measured=None)
     af = cmd[cmd.index("-af") + 1]
-    assert af == "loudnorm=I=-19.0:TP=-3.0:LRA=11.0"   # single-pass, no measured_*
+    assert af == "loudnorm=I=-19.0:TP=-3.5:LRA=11.0"   # single-pass, no measured_*
 
 
 def test_render_cmd_off_emits_no_af_even_with_stray_measured():

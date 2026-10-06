@@ -192,7 +192,12 @@ small cards.
 ## What runs remotely
 
 **Speech synthesis, audiobook chapters, and dub segment synthesis.** Audiobooks
-are dispatched one chapter at a time. A dub sends all fresh segments as one
+are dispatched one chapter at a time, rendered at this machine's Settings →
+Performance preset and watermarked once by the worker. The long-form speech
+check (Settings → Reading) is not run on a worker — it would need the worker's
+own recognizer and a longer budget — so a chapter rendered there is an
+unchecked render, cached as one: turning the check on or off reuses it rather
+than rendering the same audio again. A dub sends all fresh segments as one
 coarse task and receives their WAVs in one result bundle; fitting, assembly and
 RVC still run on this machine. If a remote multi-unit render fails, its local
 fallback is reported once. ASR, diarization and translation also remain local. Dictation always

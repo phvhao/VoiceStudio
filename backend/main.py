@@ -938,6 +938,14 @@ async def _phase_b(app: FastAPI) -> None:
         sweep_retired_voice_files()
     except Exception:
         logger.exception("Startup retired-voice sweep failed (non-fatal).")
+    # HTML exports an earlier run left (a download that never finished, a
+    # crash): each is a full copy of a book nobody will fetch now.
+    try:
+        from api.routers.audiobook import sweep_html_exports
+
+        sweep_html_exports()
+    except Exception:
+        logger.exception("Startup HTML-export sweep failed (non-fatal).")
     # #2279: note the voices root in the longform cache before anything can
     # move the data dir, so legacy-keyed chapters stay findable after a move.
     from services.longform_render import record_startup_voices_root

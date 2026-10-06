@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { Switch } from '@/components/ui/switch';
 import { useProfiles } from '@/hooks/use-profiles';
+import { useActiveBatchJobs } from '@/hooks/use-active-batch-jobs';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
 import { getBridge } from '@/components/bridge';
 import { apiJson, apiPath, describeError } from '@/lib/api/client';
@@ -67,19 +68,22 @@ export function BatchPage() {
         (file) => file.type.startsWith('video/') || /\.(mkv|mov|mp4|webm)$/i.test(file.name),
       ),
     ]);
-  const jobs = useQuery({
-    queryKey: ['batch-jobs', tab],
+  // The active tab shows the status bar's own list. The other tabs keep keys of
+  // their own: a second definition of the active list's key, even disabled,
+  // replaces the request every observer of that list makes.
+  const activeJobs = useActiveBatchJobs(tab === 'active');
+  const finishedStatus = tab === 'done' ? 'done' : 'retryable';
+  const finishedJobs = useQuery({
+    queryKey: ['batch-jobs', finishedStatus],
     queryFn: ({ signal }) =>
       apiJson<BatchJob[]>(
-        '/batch/jobs?' +
-          new URLSearchParams({
-            status: tab === 'failed' ? 'retryable' : tab,
-            limit: '100',
-          }),
+        '/batch/jobs?' + new URLSearchParams({ status: finishedStatus, limit: '100' }),
         { signal },
       ),
+    enabled: tab !== 'active',
     refetchInterval: tab === 'done' ? false : 3000,
   });
+  const jobs = tab === 'active' ? activeJobs : finishedJobs;
   const submit = async () => {
     if (uploading.current || ttsBlocker !== null || !files.length || !langs.length) return;
     if (!cachedTtsLanguagesSupported(client, 'batch', langs)) {

@@ -75,6 +75,16 @@ function isDroppedRequestHeader(name: string): boolean {
   );
 }
 
+/**
+ * The V8 code-cache policy of every window that loads the app:// renderer.
+ * Chromium caches a custom scheme's compiled scripts only when the scheme is
+ * registered with `codeCache` (below), and by default only once a script has
+ * run twice, so the cache would first be used on the third launch.
+ * 'bypassHeatCheck' writes it on first use; an entry is checked against the
+ * script's source, so an updated app compiles its changed files afresh.
+ */
+export const APP_V8_CACHE_OPTIONS = 'bypassHeatCheck';
+
 /** Must run before `app.whenReady()` — Chromium freezes the scheme registry at startup. */
 export function registerAppScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -86,6 +96,8 @@ export function registerAppScheme(): void {
         supportFetchAPI: true,
         corsEnabled: true,
         stream: true,
+        // Needs `standard`; pairs with APP_V8_CACHE_OPTIONS on the windows.
+        codeCache: true,
         bypassCSP: false,
       },
     },

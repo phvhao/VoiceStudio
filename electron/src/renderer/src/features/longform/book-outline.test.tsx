@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
@@ -13,8 +13,9 @@ vi.mock('@/lib/api/client', () => ({
 vi.mock('@/components/waveform-player', () => ({
   WaveformPlayer: ({ src }: { src: string }) => <audio data-testid="preview" src={src} />,
 }));
-import { BookOutline, outlineRequest } from './book-outline';
-import { blankLongformDraft, type Draft } from './longform-session';
+import { usePerformanceProfile } from '@/hooks/use-performance-profile';
+import { BookOutline } from './book-outline';
+import { blankLongformDraft, outlineRequest, type Draft } from './longform-session';
 
 const SCRIPT = '# One\nFirst words.\n## Part two\nMore words.\n# Empty\n# Two\nLast.';
 const t = i18n.t.bind(i18n);
@@ -328,6 +329,46 @@ it('keeps one status answer cached, however often the script settles', async () 
   await waitFor(() =>
     expect(client.getQueryCache().findAll({ queryKey: ['audiobook-outline'] })).toHaveLength(1),
   );
+});
+
+it('asks the statuses again once the performance preset changes', async () => {
+  // A chapter's cache key holds the steps the preset renders at, and the status
+  // bar changes the preset while the editor stays open.
+  let profile: ReturnType<typeof usePerformanceProfile> | undefined;
+  function Preset() {
+    profile = usePerformanceProfile();
+    return null;
+  }
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <Preset />
+      <BookOutline
+        draft={{ ...blankLongformDraft(), script: SCRIPT, voice: 'narrator', output: 'b1.m4b' }}
+        disabled={false}
+        canPreview
+        onBusy={() => {}}
+        getTarget={() => null}
+      />
+    </QueryClientProvider>,
+  );
+  expect(await within(contents()).findByText(t('book.status_rendered'))).toBeVisible();
+  const changed = { status: 'changed', cached: false, in_book: false };
+  mock.api.mockImplementation(async (path: string) =>
+    path === '/audiobook/outline'
+      ? {
+          book: true,
+          chapters: [
+            { title: 'One', ...changed },
+            { title: 'Two', ...changed },
+          ],
+        }
+      : { targets: { tts: {} }, selections: { tts: { engine: 'kokoro' } } },
+  );
+  await act(async () => {
+    await profile!.setTier({ tier: 'max', family: null });
+  });
+  await waitFor(() => expect(within(contents()).queryByText(t('book.status_rendered'))).toBeNull());
+  expect(within(contents()).getAllByText(t('book.status_changed'))).toHaveLength(2);
 });
 
 it('hands the focus back to the menu button when its menu closes with nothing done', async () => {

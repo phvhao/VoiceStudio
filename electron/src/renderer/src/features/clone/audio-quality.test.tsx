@@ -6,9 +6,6 @@ vi.mock('@/lib/api/client', () => ({ apiJson: mocks.api }));
 vi.mock('@/lib/audio/playback-clock', () => ({
   requestPlaybackSeek: mocks.seek,
 }));
-vi.mock('@/components/waveform-player', () => ({
-  formatClock: (value: number) => String(value),
-}));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -32,7 +29,7 @@ it('checks only on request, seeks to warnings, and dismisses without changing au
   mount();
   expect(mocks.api).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText('audioQuality.check'));
-  fireEvent.click(await screen.findByText('2–4: audioQuality.silence'));
+  fireEvent.click(await screen.findByText('0:02–0:04: audioQuality.silence'));
   expect(mocks.api).toHaveBeenCalledWith(
     '/audio/12345678/quality',
     expect.objectContaining({ signal: expect.any(AbortSignal) }),

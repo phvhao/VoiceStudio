@@ -81,7 +81,10 @@ def _family_payload(family: str, module):
             instance = getattr(tts_backend, "_active_instance", None)
             if instance is not None and getattr(tts_backend, "_active_instance_id", None) == active:
                 model = instance.model_identity()
-    backends = public_backends(module.list_backends())
+    # A catalogue read may reuse a recent "server not reachable" verdict
+    # instead of waiting on a closed port again (GPT-SoVITS on Windows).
+    with tts_backend.catalogue_read():
+        backends = public_backends(module.list_backends())
     if family == "tts":
         from services import settings_store
 
@@ -200,10 +203,12 @@ def diarisation_status():
     selected = selected_backend()
     native = selected == SORTFORMER
     options = []
-    from api.routers.setup.models import KNOWN_MODELS, cache_is_complete, is_cached
+    from api.routers.setup.models import KNOWN_MODELS, _is_cached_on_disk, cache_is_complete
     pyannote_repo = "pyannote/speaker-diarization-3.1"
     spec = next(model for model in KNOWN_MODELS if model["repo_id"] == pyannote_repo)
-    pyannote_installed = is_cached(pyannote_repo) and cache_is_complete(spec)
+    # Polled every 30 s: read this one repo's directory, not the whole cache
+    # (is_cached walks every installed model).
+    pyannote_installed = _is_cached_on_disk(pyannote_repo) and cache_is_complete(spec)
     pyannote_reason = None if pyannote_installed else "Install the pyannote model bundle"
     options.append({
         "id": PYANNOTE,

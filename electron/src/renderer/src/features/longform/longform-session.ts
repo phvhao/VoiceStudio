@@ -8,7 +8,7 @@ import {
   type VoiceGains,
 } from '@shared/utils/longformOverrides';
 import { castVoice } from './cast-map';
-import { parseCastNames } from '@shared/utils/audiobookScript';
+import { parseCastNames, scriptStats } from '@shared/utils/audiobookScript';
 import { LANG_CODES } from '@shared/utils/languages';
 import { restoreBookOptions, lexiconMap, type BookOptions } from './book-options';
 import { createCoalescedJsonStorage } from '@shared/utils/coalescedJsonStorage';
@@ -24,6 +24,7 @@ import { beginAppActivity } from '@/lib/app-activity';
 import { publicFailureFromEvent, type PublicFailure } from '@/lib/api/failure';
 import { chapterLevels, type VoiceLevels } from './auto-levels';
 import { scriptSize } from './story-clear';
+import { scriptOutline } from './script-outline';
 import { ProjectMissingError, projectLibrary, type LongformProjectMeta } from './project-library';
 export type Mode = 'stories' | 'audiobook';
 export interface Character {
@@ -89,6 +90,17 @@ export interface Draft extends BookOptions {
    */
   editedAt: number;
 }
+/** What the progress panel tells a render's time left from (`renderTimeLeft`). */
+export interface RenderTiming {
+  /** When the render started, on the `performance.now()` clock. */
+  startedAt: number;
+  /** When each chapter's event arrived (`null` until it has). */
+  finishedAt: (number | null)[];
+  /** The words each chapter reads; `null` when its chapters are not known here (a resume). */
+  words: number[] | null;
+  /** Whether the chapter cache held each chapter as the render started (`null`: not known). */
+  cached: (boolean | null)[] | null;
+}
 interface Session {
   drafts: Record<Mode, Draft>;
   active: Mode | null;
@@ -100,6 +112,8 @@ interface Session {
   failure: PublicFailure | null;
   storageError: boolean;
   chapters: AudiobookRenderChapter[];
+  /** The running render's clock; `null` before its first event. */
+  timing: RenderTiming | null;
   stopped: boolean;
   /** Where the open project of each mode stands in the library. */
   saving: Record<Mode, ProjectSaveState>;
@@ -198,6 +212,7 @@ export const longformSession = new Store<Session>({
   failure: null,
   storageError: false,
   chapters: [],
+  timing: null,
   stopped: false,
   saving: { stories: 'idle', audiobook: 'idle' },
   saveError: { stories: null, audiobook: null },
@@ -686,10 +701,12 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
     error: null,
     failure: null,
     chapters: [],
+    timing: null,
     stopped: false,
   });
   let done = false;
   let outputChapters: AudiobookRenderChapter[] = [];
+  let timing: RenderTiming | null = null;
   try {
     // The book is saved as it starts rendering, and the render names its project.
     if (!resumeId) void saveLongformProject(mode).catch(() => {});
@@ -737,6 +754,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
             title: '',
             status: 'pending',
           }));
+          timing = renderTiming(mode, resumeId ? null : draft, outputChapters.length);
           patch({
             stage: 'rendering',
             total: Number(event.chapters) || 0,
@@ -744,6 +762,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
               ...chapter,
               status: index === 0 ? 'rendering' : 'pending',
             })),
+            timing,
           });
         }
         if (event.type === 'chapter' || event.type === 'chapter_error') {
@@ -774,6 +793,15 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
                   }
                 : {}),
             };
+          if (timing && Number.isInteger(index) && index >= 0 && index < outputChapters.length) {
+            const at = performance.now();
+            timing = {
+              ...timing,
+              finishedAt: timing.finishedAt.map((time, chapterIndex) =>
+                chapterIndex === index ? at : time,
+              ),
+            };
+          }
           patch({
             completed: Number(event.index) + 1,
             chapters: outputChapters.map((chapter, chapterIndex) => ({
@@ -783,6 +811,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
                   ? 'rendering'
                   : chapter.status,
             })),
+            timing,
           });
         }
         if (event.type === 'assembling') patch({ stage: 'assembling' });
@@ -875,4 +904,53 @@ export function chapterPreviewBody(draft: Draft, chapter_index: number) {
     language: body.language,
     lexicon: lexiconMap(draft.lexicon),
   };
+}
+
+/** `/audiobook/outline`'s request: the chapter preview's inputs, and the last book. */
+export function outlineRequest(draft: Draft) {
+  const { chapter_index: _index, ...body } = chapterPreviewBody(draft, 0);
+  return { ...body, output: draft.output || null };
+}
+
+/** Where the Contents outline keeps its answer to `request` (the request's JSON). */
+export function outlineQueryKey(request: string) {
+  return ['audiobook-outline', request] as const;
+}
+
+/**
+ * The clock of a render of `count` chapters that starts now, with what tells
+ * its chapters apart: the words of each, as `draft` plans them, and for a
+ * book which ones the Contents outline last found cached — it asks with the
+ * render's own inputs. A resume (`draft` null) renders a book this editor may
+ * no longer hold, so neither is known; nor is what is cached once a settings
+ * change (the performance preset, say) has the outline asking again.
+ */
+function renderTiming(mode: Mode, draft: Draft | null, count: number): RenderTiming {
+  const words = draft && chapterWords(mode, draft);
+  const asked =
+    draft && mode === 'audiobook'
+      ? queryClient.getQueryState<{ chapters?: { cached?: boolean | null }[] }>(
+          outlineQueryKey(JSON.stringify(outlineRequest(draft))),
+        )
+      : undefined;
+  const outline = asked?.isInvalidated ? undefined : asked?.data;
+  const cached = outline?.chapters?.map((chapter) => chapter.cached ?? null);
+  return {
+    startedAt: performance.now(),
+    finishedAt: Array.from({ length: count }, () => null),
+    // Counted here the way the render splits the chapters; on any mismatch, unknown.
+    words: words?.length === count ? words : null,
+    cached: cached?.length === count ? cached : null,
+  };
+}
+
+/** The words each chapter of `draft`'s render reads, in the render's chapter order. */
+function chapterWords(mode: Mode, draft: Draft): number[] {
+  return mode === 'audiobook'
+    ? scriptOutline(draft.script).flatMap((chapter) =>
+        chapter.plan === null ? [] : [chapter.words],
+      )
+    : storyToSpans(draft.lines, draft.cast, draft.globalSpeed).map(
+        (chapter) => scriptStats(chapter.spans.map((span) => span.text).join('\n')).words,
+      );
 }

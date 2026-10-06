@@ -89,7 +89,8 @@ None of them are required — the defaults are chosen for the common case.
 | `CUDA_VISIBLE_DEVICES` | all NVIDIA GPUs | On a multi-GPU NVIDIA host, expose only the selected physical adapter to VoiceStudio and its engine subprocesses. **Settings → Performance & Device → CUDA** lists adapters by index and name, persists their stable GPU UUID, and applies the choice after restart. An externally supplied environment variable wins over the saved UI choice. |
 | `OMNIVOICE_FLASHINFER` | `0` | CUDA-only accelerated decoding for the default engine via [FlashInfer](https://github.com/flashinfer-ai/flashinfer) kernels (packed CFG attention, fused RMSNorm/RoPE/GEMM) — ~2x on upstream's benchmarks. `1` enables it; `graph` also captures CUDA graphs (best when you render one thing at a time). Requires installing the optional `flashinfer-python` package into the backend environment first (`uv pip install flashinfer-python flashinfer-jit-cache --extra-index-url https://flashinfer.ai/whl/cu128/`, matching your CUDA build). Replaces `torch.compile` for that session, pins inference to a single GPU thread (the FlashInfer attention plan is per-generation state), and keeps fused copies of the attention/MLP weights resident (~roughly half the LLM's weight size extra VRAM) — leave it off on tight-VRAM cards. If the package is missing or a FlashInfer/CUDA-graph kernel fails at runtime, the app logs the reason and falls back to the standard path; failures outside those kernels (e.g. a genuine out-of-memory) surface normally. |
 | `OMNIVOICE_PROMPT_DISK_CACHE` | `1` | Persist encoded voice-clone references (`prompt_cache/` in the app data dir, ~10 KB per voice, 32 newest kept) so the first generation with a known voice after a restart skips the reference re-encode and any auto-transcription. Set `0` to keep the cache in memory only. |
-| `OMNIVOICE_IDLE_TIMEOUT_S` | `900` | Seconds of idle before the TTS model unloads to free memory. Raise it (e.g. `3600`) if you generate in bursts and dislike the ~8 s reload; lower it on tight-memory machines. |
+| `OMNIVOICE_LONGFORM_CACHE_MAX_GB` | `2` | Size of the Audiobook and Stories cache of rendered chapters and lines (`longform_cache` in the outputs folder), which lets a re-render after an edit synthesize only what changed. When it is full, the audio used least recently goes first, so a book you keep editing keeps the chapters it reuses. 2 GB holds about 6 hours of book; raise it if you edit longer books, or two long books in turn. |
+| `OMNIVOICE_IDLE_TIMEOUT_S` | `900` | Seconds of idle before the TTS model unloads to free memory. Raise it (e.g. `3600`) if you generate in bursts and dislike the ~8 s reload; lower it on tight-memory machines. An Audiobook or Stories render that reuses every chapter from the cache does not load the model, so re-exporting a finished book pays no reload. |
 | `OMNIVOICE_SIDECAR_IDLE_TIMEOUT_S` | `300` | Same idea for sidecar engines (IndexTTS 2.5 etc.). |
 | `MIOPEN_FIND_MODE` | `FAST` | MIOpen (ROCm) algorithm search. The default exhaustive search costs ~18 s every time it sees a new convolution shape — shape-varying vocoders like IndexTTS's BigVGAN paid it on nearly every chunk. `FAST` finds a near-optimal kernel in well under a second; the backend sets it at startup, only MIOpen reads it (ROCm on Linux or Windows; inert on CUDA/MPS/CPU), and an exported value always wins over the default. |
 | `OMNIVOICE_LLM_CONCURRENCY` | `6` | Parallel LLM translation calls during a dub. Raise for a fast API endpoint, lower if your provider rate-limits. |
@@ -321,6 +322,17 @@ but with **operation-count budgets** in
 - **NLLB dubbing translation**: rows sharing a target language render in
   bounded batches instead of one model forward per subtitle. Mixed targets
   retain their request order, and a failed batch retries per row.
+
+Budgets of the same kind guard the long-form cache and the Settings polls:
+
+- **Long-form re-renders** (`tests/test_longform_cache_reuse.py`,
+  `tests/test_audiobook_cast.py`): a chapter served from the cache loads no
+  model and synthesizes nothing; changing the gap between lines synthesizes
+  nothing; recasting one voice re-renders only that voice's lines; and a book
+  larger than the cache re-renders only the line an edit changed.
+- **Settings → Performance** (`tests/test_hf_cache_scan_once.py`): one Hugging
+  Face cache scan per profile read or preset change, and none for the
+  diarisation status.
 
 Updating a budget is a deliberate act: if a change legitimately adds an
 operation to a guarded path, change the expected count in the same PR with a

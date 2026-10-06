@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { GenerationProgress } from './generation-progress';
 import type { GenerateBlocker } from './generate-blocker';
-import type { AudiobookRenderChapter } from './longform-session';
+import type { AudiobookRenderChapter, RenderTiming } from './longform-session';
 
 /** The slice of the render session this panel reads. */
 export interface GenerateSession {
@@ -13,6 +13,7 @@ export interface GenerateSession {
   failed: number;
   stopped: boolean;
   chapters: AudiobookRenderChapter[];
+  timing?: RenderTiming | null;
 }
 
 /**
@@ -64,6 +65,7 @@ export function GeneratePanel({
           <GenerationProgress
             chapters={session.chapters}
             assembling={session.stage === 'assembling'}
+            timing={session.timing}
           />
         </div>
       )}

@@ -2,9 +2,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
 
-const mock = vi.hoisted(() => ({ api: vi.fn(), save: vi.fn(), bridge: null as unknown }));
+const mock = vi.hoisted(() => ({
+  api: vi.fn(),
+  fetch: vi.fn(),
+  save: vi.fn(),
+  bridge: null as unknown,
+}));
 vi.mock('@/lib/api/client', () => ({
   apiJson: mock.api,
+  apiFetch: mock.fetch,
   apiPath: (path: string) => '/api' + path,
   describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
 }));
@@ -71,20 +77,52 @@ it('sends the book, how it was rendered and the page words in the app language',
   expect(htmlExportName({ ...book, title: ' ' })).toBe('audiobook_abc.zip');
 });
 
-it('exports and saves the page through the native save dialog', async () => {
+const EXPORT_ID = '0123456789abcdef0123456789abcdef';
+
+/** Click Export HTML in the desktop app, whose native save ends with `saved`. */
+async function exportThroughNativeSave(saved: () => Promise<unknown>) {
   mock.bridge = {};
-  mock.api.mockResolvedValue({ id: '0123456789abcdef0123456789abcdef', bytes: 10 });
-  render(<ExportHtmlButton draft={book} onError={() => {}} />);
+  mock.api.mockResolvedValue({ id: EXPORT_ID, bytes: 10 });
+  mock.fetch.mockResolvedValue(new Response(null));
+  mock.save.mockImplementation(saved);
+  const onError = vi.fn();
+  render(<ExportHtmlButton draft={book} onError={onError} />);
   fireEvent.click(screen.getByRole('button', { name: t('book.export_html') }));
   await waitFor(() =>
-    expect(mock.save).toHaveBeenCalledWith(
-      '/api/audiobook/export/html/0123456789abcdef0123456789abcdef',
-      'Night <Train>.zip',
-    ),
+    expect(screen.getByRole('button', { name: t('book.export_html') })).toBeEnabled(),
+  );
+  return onError;
+}
+
+it('exports and saves the page through the native save dialog', async () => {
+  await exportThroughNativeSave(async () => ({ canceled: false, path: '/books/Night.zip' }));
+  expect(mock.save).toHaveBeenCalledWith(
+    `/api/audiobook/export/html/${EXPORT_ID}`,
+    'Night <Train>.zip',
   );
   const [path, init] = mock.api.mock.calls[0];
   expect(path).toBe('/audiobook/export/html');
   expect(JSON.parse(init.body).output).toBe('audiobook_abc.m4b');
+  // Downloaded: the backend already removed it once it was sent.
+  expect(mock.fetch).not.toHaveBeenCalled();
+});
+
+it('discards the export, a full copy of the book, when the save is cancelled', async () => {
+  const onError = await exportThroughNativeSave(async () => ({ canceled: true }));
+  expect(mock.fetch).toHaveBeenCalledWith(`/audiobook/export/html/${EXPORT_ID}`, {
+    method: 'DELETE',
+  });
+  expect(onError).toHaveBeenLastCalledWith(null);
+});
+
+it('discards the export and reports the failure when the save fails', async () => {
+  const onError = await exportThroughNativeSave(async () => {
+    throw new Error('Could not download the audio (HTTP 500)');
+  });
+  expect(mock.fetch).toHaveBeenCalledWith(`/audiobook/export/html/${EXPORT_ID}`, {
+    method: 'DELETE',
+  });
+  expect(onError).toHaveBeenLastCalledWith('Could not download the audio (HTTP 500)');
 });
 
 it('reports a failed export', async () => {

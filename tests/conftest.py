@@ -319,6 +319,29 @@ def _clear_asr_installed_memo(request):
     _clear_all()
 
 
+@pytest.fixture(autouse=True)
+def _clear_probe_memos():
+    """Probe memos must not carry one test's stubbed answer into the next:
+    GPT-SoVITS's recent "not reachable" verdicts, which /engines catalogue
+    reads reuse (services.tts_backend._UNREACHABLE_SERVERS), and a Hugging
+    Face cache scan shared by an hf_cache_scan_scope() left open
+    (api.routers.setup.models._SCAN_MEMO). Touches each only when its module
+    is already imported — never forces the import."""
+    def _clear():
+        # The engines router may hold a pre-purge tts_backend alias with its
+        # own verdicts; clear both.
+        for tts in (sys.modules.get("services.tts_backend"),
+                    getattr(sys.modules.get("api.routers.engines"), "tts_backend", None)):
+            getattr(tts, "_UNREACHABLE_SERVERS", {}).clear()
+        scan_memo = getattr(sys.modules.get("api.routers.setup.models"), "_SCAN_MEMO", None)
+        if scan_memo is not None:
+            scan_memo.set(None)
+
+    _clear()
+    yield
+    _clear()
+
+
 @pytest.fixture
 def torch_dtype_isolation(request):
     """Opt-in save/restore for tests known to trip the CI-Linux fp16 leak.

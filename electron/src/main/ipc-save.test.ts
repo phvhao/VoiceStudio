@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -16,9 +16,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   /** Simulate a disk that fills up halfway through any write. */
   const halfThenFail = async (
     write: (data: Uint8Array) => Promise<void>,
-    data: string | Uint8Array,
+    data: string | Uint8Array | AsyncIterable<Uint8Array>,
   ) => {
-    const bytes = typeof data === 'string' ? Buffer.from(data) : data;
+    let bytes: Uint8Array;
+    if (typeof data === 'string') bytes = Buffer.from(data);
+    else if (data instanceof Uint8Array) bytes = data;
+    else {
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of data) chunks.push(chunk);
+      bytes = Buffer.concat(chunks);
+    }
     await write(bytes.subarray(0, bytes.length >> 1));
     throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
   };
@@ -31,8 +38,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: (async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
       const write = handle.writeFile.bind(handle);
-      handle.writeFile = (async (data: string | Uint8Array) =>
-        native.failWrites ? halfThenFail((bytes) => write(bytes), data) : write(data)) as never;
+      handle.writeFile = (async (data: string | Uint8Array, options?: unknown) =>
+        native.failWrites
+          ? halfThenFail((bytes) => write(bytes), data)
+          : write(data, options as never)) as never;
       return handle;
     }) as typeof actual.open,
   };
@@ -44,18 +53,19 @@ const owner = vi.hoisted(() => {
   return { webContents, isMaximized: () => false };
 });
 
+const fetchAudio = vi.hoisted(() => vi.fn());
+const showSaveDialog = vi.hoisted(() => vi.fn());
+
 vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), exit: vi.fn() },
   BrowserWindow: { fromWebContents: () => owner, getAllWindows: () => [] },
-  dialog: {
-    showSaveDialog: vi.fn(async () => ({ canceled: false, filePath: native.savePath })),
-  },
+  dialog: { showSaveDialog },
   ipcMain: {
     handle: (channel: string, handler: (event: unknown, raw: unknown) => Promise<unknown>) =>
       native.handlers.set(channel, handler),
     on: vi.fn(),
   },
-  net: { fetch: vi.fn(async () => new Response('replacement audio bytes')) },
+  net: { fetch: fetchAudio },
   shell: {},
   systemPreferences: {},
 }));
@@ -65,6 +75,7 @@ import { CHANNELS, registerIpc } from './ipc';
 import type { BackendSupervisor } from './backend';
 
 let directory: string;
+let closeSaves: () => Promise<void>;
 const event = { sender: owner.webContents, senderFrame: owner.webContents.mainFrame };
 
 beforeEach(async () => {
@@ -72,7 +83,11 @@ beforeEach(async () => {
   native.savePath = join(directory, 'take.wav');
   native.failWrites = false;
   native.handlers.clear();
-  registerIpc(
+  fetchAudio.mockReset();
+  fetchAudio.mockImplementation(async () => new Response('replacement audio bytes'));
+  showSaveDialog.mockReset();
+  showSaveDialog.mockImplementation(async () => ({ canceled: false, filePath: native.savePath }));
+  closeSaves = registerIpc(
     {
       subscribe: () => () => {},
       baseUrl: 'http://127.0.0.1:3900',
@@ -121,3 +136,108 @@ it.each(saves)(
     expect(await readdir(directory)).toEqual(['take.wav']);
   },
 );
+
+const saveDownload = () =>
+  native.handlers.get(CHANNELS.filesSaveAudio)!(event, {
+    url: '/api/audio/book.m4b',
+    suggestedName: 'take.wav',
+  });
+
+/** Bytes of the hidden partial file the save is writing, once it has `size` of them. */
+async function partialWith(size: number): Promise<string | null> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    for (const name of await readdir(directory)) {
+      if (!name.endsWith('.partial')) continue;
+      const path = join(directory, name);
+      if ((await stat(path).catch(() => null))?.size === size) return path;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return null;
+}
+
+/** A download that sends `first`, then whatever `rest` decides once the save has written it. */
+function download(
+  first: Uint8Array,
+  rest: (controller: ReadableStreamDefaultController<Uint8Array>) => Promise<void>,
+) {
+  let sent = false;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(first);
+          return;
+        }
+        await rest(controller);
+      },
+    }),
+  );
+}
+
+it('writes a download to disk as it arrives instead of holding it in memory', async () => {
+  const first = new Uint8Array(64 * 1024).fill(1);
+  const second = new Uint8Array(64 * 1024).fill(2);
+  fetchAudio.mockImplementation(async () =>
+    download(first, async (controller) => {
+      // A save that buffers the whole response never writes before this point.
+      if (!(await partialWith(first.length))) {
+        controller.error(new Error('nothing was written before the download finished'));
+        return;
+      }
+      controller.enqueue(second);
+      controller.close();
+    }),
+  );
+  await expect(saveDownload()).resolves.toEqual({ canceled: false, path: native.savePath });
+  expect(await readFile(native.savePath)).toEqual(Buffer.concat([first, second]));
+  expect(await readdir(directory)).toEqual(['take.wav']);
+});
+
+it('keeps an existing export intact when the download breaks off', async () => {
+  await writeFile(native.savePath, 'complete previous export');
+  fetchAudio.mockImplementation(async () =>
+    download(new Uint8Array(1024).fill(1), async (controller) => {
+      await partialWith(1024);
+      controller.error(Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }));
+    }),
+  );
+  await expect(saveDownload()).rejects.toThrow('connection reset');
+  expect(await readFile(native.savePath, 'utf8')).toBe('complete previous export');
+  expect(await readdir(directory)).toEqual(['take.wav']);
+});
+
+it('abandons a save still downloading when the app quits, leaving no partial file', async () => {
+  await writeFile(native.savePath, 'complete previous export');
+  let reachedDisk!: () => void;
+  const writing = new Promise<void>((resolve) => (reachedDisk = resolve));
+  fetchAudio.mockImplementation(async (_url: string, init: RequestInit) =>
+    download(new Uint8Array(1024).fill(1), async (controller) => {
+      await partialWith(1024);
+      reachedDisk();
+      // Like the network: nothing more arrives until the request is aborted.
+      await new Promise((resolve) => init.signal!.addEventListener('abort', resolve));
+      controller.error(init.signal!.reason);
+    }),
+  );
+  const saving = saveDownload();
+  saving.catch(() => {});
+  await writing;
+  await closeSaves();
+  await expect(saving).rejects.toThrow();
+  expect(await readFile(native.savePath, 'utf8')).toBe('complete previous export');
+  expect(await readdir(directory)).toEqual(['take.wav']);
+});
+
+it('starts no download once the app is quitting', async () => {
+  let pick!: (result: { canceled: boolean; filePath: string }) => void;
+  showSaveDialog.mockImplementation(() => new Promise((resolve) => (pick = resolve)));
+  const saving = saveDownload();
+  await vi.waitFor(() => expect(showSaveDialog).toHaveBeenCalled());
+  await closeSaves();
+  pick({ canceled: false, filePath: native.savePath });
+  await expect(saving).resolves.toEqual({ canceled: true });
+  expect(fetchAudio).not.toHaveBeenCalled();
+  expect(await readdir(directory)).toEqual([]);
+});

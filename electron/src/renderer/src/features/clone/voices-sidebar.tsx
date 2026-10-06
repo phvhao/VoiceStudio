@@ -22,7 +22,6 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { formatClock } from '@/components/waveform-player';
 import {
   useClearHistory,
   useDeleteHistoryItem,
@@ -32,6 +31,7 @@ import {
 import { useDeleteProfile, useProfiles } from '@/hooks/use-profiles';
 import { audioUrl, profileAudioUrl } from '@/lib/api/client';
 import type { HistoryItem, Profile } from '@/lib/api/types';
+import { formatClock } from '@/lib/format-clock';
 import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
 import { selectCloneProfile } from '@/lib/store/reference';
 import { queryKeys } from '@/lib/query';

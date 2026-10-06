@@ -1,4 +1,4 @@
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, Session } from 'electron';
 import { isTrustedRenderer } from './trusted-renderer';
 
 const FIRST_CHECK_MS = 12_000;
@@ -62,6 +62,17 @@ export function blankFallbackUrl(locale: string): string {
   const copy = localizedFallbackCopy(locale);
   const html = `<!doctype html><html lang="${escapeHtml(fallbackLocale(locale))}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>VoiceStudio</title><style>html{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#150f19;color:#f7eef7;font:15px/1.5 Inter,system-ui,sans-serif}.card{width:min(28rem,calc(100vw - 3rem));padding:2.5rem;text-align:center;border:1px solid #ffffff18;border-radius:1.5rem;background:#ffffff08;box-shadow:0 24px 80px #0008}.mark{display:grid;place-items:center;width:3.5rem;height:3.5rem;margin:0 auto 1.25rem;border-radius:1rem;background:#d20a681c;color:#ff5aa5;font-size:1.75rem}h1{margin:0 0 1.5rem;font-size:1.25rem}button{border:1px solid #ffffff1f;border-radius:.75rem;background:#c70a60;color:white;padding:.7rem 1.15rem;font:inherit;font-weight:650;cursor:pointer}button:hover{background:#df1672}</style></head><body><main class="card"><div class="mark" aria-hidden="true">⌁</div><h1>${escapeHtml(copy.title)}</h1><button type="button" onclick="location.replace('${BLANK_CACHE_REPAIR_URL}')">${escapeHtml(copy.retry)}</button></main></body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
+/**
+ * What the recovery page's retry clears before the relaunch: the HTTP cache
+ * and the compiled-script (V8 code) cache, either of which could hold what
+ * left the renderer empty.
+ */
+export async function clearRendererCaches(
+  session: Pick<Session, 'clearCache' | 'clearCodeCaches'>,
+): Promise<void> {
+  await Promise.all([session.clearCache(), session.clearCodeCaches({})]);
 }
 
 async function hasRenderedRoot(win: BrowserWindow): Promise<boolean> {

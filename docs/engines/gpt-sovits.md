@@ -32,8 +32,14 @@ HTTP.
 2. Select the engine via **Model Catalogue** (TTS tab → **Use**) or
    `OMNIVOICE_TTS_BACKEND=gpt-sovits`.
 
-VoiceStudio marks the engine available only when the server responds
-(2-second reachability probe).
+VoiceStudio marks the engine available only when the server responds. The
+reachability probe gives the server 2 seconds to answer. A server on this
+machine must also accept the connection within 0.3 seconds, so a stopped local
+server is reported right away (Windows otherwise retries a refused local
+connection for about 2 seconds). While GPT-SoVITS is not the selected engine,
+the engine list reuses a "not reachable" result for up to 30 seconds.
+Selecting the engine, **Test engine** and generation always check the server
+again.
 
 ## Configuration
 

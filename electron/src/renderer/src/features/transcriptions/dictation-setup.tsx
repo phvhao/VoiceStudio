@@ -7,6 +7,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { AgentFixButton } from '@/components/agent-fix-button';
 import { Progress } from '@/components/ui/progress';
 import { apiJson, describeError } from '@/lib/api/client';
+import { dictationPreferencesKey } from '@/hooks/use-native-dictation';
 import { fmtBytes } from '@shared/components/settings/models/format';
 
 interface DictationModel {
@@ -92,6 +93,16 @@ export function DictationSetup({ onReady }: { onReady: () => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model_id: model.id, enabled: true }),
       });
+      // Turning dictation on changes what every reader of these preferences
+      // shows, including the native shortcut, which is not polled.
+      for (const queryKey of [
+        dictationPreferencesKey,
+        ['sidebar-dictation'],
+        ['settings-dictation'],
+        ['model-library-dictation-prefs'],
+        ['performance-profile'],
+      ])
+        void client.invalidateQueries({ queryKey });
       if (model.installed) {
         await client.invalidateQueries({
           queryKey: ['transcription-readiness'],

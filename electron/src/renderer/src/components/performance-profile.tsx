@@ -12,9 +12,9 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useId, useRef, useState, type KeyboardEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { apiJson, describeError } from '@/lib/api/client';
+import { describeError } from '@/lib/api/client';
+import { useActiveBatchJobs } from '@/hooks/use-active-batch-jobs';
 import { useBackendStatus } from '@/hooks/use-backend-status';
 import { isBackendReachable } from '@shared/utils/backendStage';
 import { useDictationSelection } from '@/hooks/use-dictation-selection';
@@ -47,13 +47,7 @@ export function PerformanceProfile({
   const backend = useBackendStatus();
   const engines = useEngines();
   const dictation = useDictationSelection();
-  const batch = useQuery({
-    queryKey: ['batch-jobs', 'active'],
-    enabled: isBackendReachable(backend.stage),
-    queryFn: ({ signal }) => apiJson<unknown[]>('/batch/jobs?status=active&limit=100', { signal }),
-    staleTime: 1_000,
-    refetchInterval: (query) => (query.state.data?.length ? 1_000 : 15_000),
-  });
+  const batch = useActiveBatchJobs(isBackendReachable(backend.stage));
   const [failed, setFailed] = useState<PerformanceChoice | null>(null);
   const groupId = useId();
   const [draft, setDraft] = useState<number | null>(null);

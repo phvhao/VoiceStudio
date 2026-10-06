@@ -260,8 +260,10 @@ behavior-parity decision.
 - Window close, application quit and update installation now request a bounded renderer persistence flush before native teardown. Working Stories/Audiobook drafts drain synchronously and queued IndexedDB project mutations settle before acknowledgement; older live preload bridges remain safe during development HMR.
 - Electron startup and its managed backend were exercised together on Windows: the ESM main bundle now loads the CommonJS updater safely, the supervisor reaches `ready`, and the core model/profile/history/translation/dictation routes return 200 through the renderer proxy. Dictation warmup no longer overwrites the TTS model status; `/model/status` remains `Model ready` across the delayed ASR preload.
 - Vidstack owns all Electron playback; WaveSurfer renders waveforms only. The shared provider
-  selects native audio/video, HLS, DASH, YouTube, Vimeo and Remotion sources, lazy-loading the
+  selects native audio/video, HLS, DASH, YouTube and Vimeo sources, lazy-loading the
   streaming libraries. Gallery search results use the YouTube provider for in-place preview.
+  The Remotion loader, never connected to a workflow, and its non-OSI-licensed package are
+  no longer bundled.
 - A current source audit confirms every Electron play/pause path still reaches `StudioMediaPlayer`; no feature renders native audio/video controls or asks WaveSurfer to play. The sole `new Audio()` use is the metadata-only duration probe, which never starts playback.
 - Browser regression: manual play, pause, actual seek position, exclusive profile preview,
   and output dismissal (`node electron/tests/playback-smoke.mjs`). No user data is changed.
@@ -293,7 +295,7 @@ behavior-parity decision.
   listing are implemented; per-skill routing is implemented; non-LLM DeepL/Microsoft credentials implemented in Settings > Credentials. Installed Python dependencies are not proof of downloaded weights.
 - Renderer test suite, typecheck, lint, production build and frozen Electron lockfile passed at their recorded checkpoints; rerun affected checks before landing.
 - Four backend regressions cover download status and installed-only translation selection.
-- YouTube is connected to a migrated workflow. Vimeo, HLS, DASH and Remotion have working shared
+- YouTube is connected to a migrated workflow. Vimeo, HLS and DASH have working shared
   provider selection but still need live sources from their eventual migrated workflows for
   end-to-end verification.
 
@@ -1057,6 +1059,7 @@ behavior-parity decision.
 - Diagnostic reports now include connection mode, the last backend response observed before report collection, structured transport metadata and a privacy-safe in-memory ring of fixed route/action labels. Clone/design synthesis, Dubbing upload/URL preparation/transcription/translation/generation and Fast/Accurate transcription record start plus terminal outcomes without retaining user text, paths or URLs. HTTP responses, including error statuses, update contact time while transport failures do not. Twenty-five focused report, client and breadcrumb checks pass; Electron typecheck, lint and production build are clean.
 - Persona bundles now use Electron's native Save As IPC with a constrained POST request instead of Chromium's download manager. A disposable clone completed native save, backend inspection and cleanup; three focused renderer checks, typecheck and formatting pass. The refreshed Windows unpacked package includes this change, passes the artifact contract, reaches branded first-run setup without creating a runtime before explicit consent, and mounts its renderer/preload/Models route against the live backend.
 - Native Save As now accepts only the trusted main frame and confines authenticated GET/POST downloads to the active backend origin. Renderer API paths, packaged app URLs and same-origin absolute URLs remain supported; cross-origin and non-HTTP targets fail before any request. Five focused export/boundary checks and Electron typecheck pass.
+- Native Save As of backend downloads now streams the response into its hidden partial file instead of buffering it, keeping the exclusive create, permission copy, flush and Windows rename retries (400 MB: +1.2 GB → +45 MB peak main-process memory, longest event-loop stall 130–200 → 17 ms; 1 GB: +3.1 GB → +73 MB). Quitting aborts saves still downloading and removes their partial files, and a cancelled or failed HTML-export save discards the backend's copy of the book. Focused stream, broken-download, quit and export regressions plus typecheck pass.
 - Renderer-generated transcription TXT, pronunciation JSON and Stories stem files now use a separate trusted native Save As IPC path; browser builds retain their ordinary download fallback. Native byte-for-byte save, renderer routing, typecheck, production build and formatting pass. The refreshed Windows package includes both native-save paths and passes isolated first-run plus same-origin live-backend smokes.
 - Windows native picker coverage now includes packaged first-run custom destination selection, restoration to the default and cancellation without starting installation; FFmpeg executable selection; and model-cache directory selection/reset. Scoped authorization files are verified and removed without changing backend preferences.
 

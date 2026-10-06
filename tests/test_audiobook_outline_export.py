@@ -209,8 +209,8 @@ def test_outline_reads_the_remote_cache_when_the_job_runs_remotely(local_engine,
                                           opts=router._expressive_opts(req), voice_map=None,
                                           lexicon=None, cache_dir=cache_dir)
               for c in plan.chapters]
-    assert [cached for _key, cached in states] == [True, False]
-    assert states[0][0] == router._cache_name(path)
+    assert [cached for _key, cached, _names in states] == [True, False]
+    assert states[0][0] == router._cache_name(path) == states[0][2][0]
 
 
 def test_outline_and_preview_flag_the_untitled_intro(local_engine, outputs, monkeypatch):
@@ -426,6 +426,47 @@ def test_html_export_removes_exports_nobody_downloaded(outputs, exports):
     os.utime(stale, (old, old))
     got = _export(output=name)
     assert sorted(p.name for p in exports.iterdir()) == sorted([fresh.name, f"{got['id']}.zip"])
+
+
+def test_html_export_is_discarded_when_its_save_is_cancelled(outputs, exports):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    router = _mod("api.routers.audiobook")
+    name = _book(outputs)
+    kept, cancelled = _export(output=name), _export(output=name)
+    app = FastAPI()
+    app.include_router(router.router)
+    client = TestClient(app)
+    # The save dialog was cancelled: the copy of the book goes at once, not
+    # an hour later with the next export.
+    gone = client.delete(f"/audiobook/export/html/{cancelled['id']}")
+    assert gone.status_code == 200 and gone.json() == {"deleted": cancelled["id"]}
+    assert [p.name for p in exports.iterdir()] == [f"{kept['id']}.zip"]
+    assert client.get(f"/audiobook/export/html/{cancelled['id']}").status_code == 404
+    # Already gone (served, or discarded twice): not an error.
+    assert client.delete(f"/audiobook/export/html/{cancelled['id']}").status_code == 200
+    assert client.delete("/audiobook/export/html/" + "A" * 32).status_code == 404
+    assert client.delete("/audiobook/export/html/..%2Fdata").status_code == 404
+    assert [p.name for p in exports.iterdir()] == [f"{kept['id']}.zip"]
+
+
+def test_startup_removes_every_export_an_earlier_run_left(outputs, exports):
+    router = _mod("api.routers.audiobook")
+    router.sweep_html_exports()  # no folder yet: fine
+    exports.mkdir()
+    # A download that never finished, one just made, and a write a crash cut short.
+    for leftover in ("a" * 32 + ".zip", "b" * 32 + ".zip", "c" * 32 + ".zip.part"):
+        (exports / leftover).write_bytes(b"a full copy of the book")
+    router.sweep_html_exports()
+    assert list(exports.iterdir()) == []
+
+
+def test_the_backend_sweeps_html_exports_as_it_starts():
+    import inspect
+
+    # Phase B runs before the export routes are served.
+    assert "sweep_html_exports()" in inspect.getsource(_mod("main")._phase_b)
 
 
 def test_html_export_tags_the_book_text_with_its_own_language(outputs, exports):

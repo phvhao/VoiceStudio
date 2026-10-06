@@ -12,6 +12,20 @@ app-relative `/api/...` paths:
   So `API_BASE = '/api'` in the renderer, and `/api/audio/<file>` is a valid
   `<audio src>`.
 
+## Startup code
+
+- `app://` is registered with `codeCache` (`protocol.ts`) and every window that
+  loads it sets `v8CacheOptions: APP_V8_CACHE_OPTIONS`, so V8 reuses the compiled
+  renderer from the second launch on. Entries are checked against each script's
+  source, so an update recompiles only what changed. The blank-window recovery
+  clears this cache with the HTTP cache (`clearRendererCaches`), and
+  `protocol.test.ts` pins the scheme's privileges.
+- What `index.html` loads before the first render stays lean: small helpers such
+  as `formatClock` (`lib/format-clock.ts`) live outside the player modules, so a
+  list that only shows durations does not load WaveSurfer. The packaging contract
+  (`tests/packaging-contract.mjs`) fails a production build whose startup graph
+  holds WaveSurfer or that bundles Remotion at all.
+
 `apiJson()` arguments are backend paths. Most are unprefixed (`/engines`), while the
 shared settings and MCP routers intentionally retain their backend `/api/...` prefix.
 Those calls therefore appear as `/api/api/settings/...` in renderer network tools: the

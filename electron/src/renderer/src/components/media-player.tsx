@@ -1,7 +1,6 @@
 import {
   AudioProviderLoader,
   VideoProviderLoader,
-  MediaProvider as VidstackMediaProvider,
   MediaPlayer,
   useMediaPlayer,
   isAudioProvider,
@@ -10,25 +9,20 @@ import {
   isVideoProvider,
   type MediaPlayerInstance,
   type MediaPlayerProps,
-  type MediaProviderProps,
   type AudioSrc,
   type VideoSrc,
 } from '@vidstack/react';
-import { RemotionProviderLoader } from '@vidstack/react/player/remotion';
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useSyncExternalStore,
-  type RefObject,
-} from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore, type RefObject } from 'react';
 import { claimPlayback } from '@/lib/audio/playback';
 import { useAecEnabled } from '@/lib/store/dictation-settings';
 import { attachPlaybackTap } from '@shared/utils/aec/playbackTap';
 
 export type { MediaPlayerInstance };
-export { useMediaState } from '@vidstack/react';
+/**
+ * Vidstack's built-in loaders cover native audio/video, HLS, DASH, YouTube and
+ * Vimeo; a workflow passes its own (such as `audioLoaders` below) as `loaders`.
+ */
+export { MediaProvider, useMediaState } from '@vidstack/react';
 
 /**
  * Something derived from the surrounding player's playhead, such as the word
@@ -50,15 +44,6 @@ export function useMediaTime<T>(select: (time: number) => T): T {
     [player],
   );
   return useSyncExternalStore(subscribe, () => select(player?.currentTime ?? 0));
-}
-
-/**
- * Vidstack includes native audio/video, HLS, DASH, YouTube and Vimeo loaders.
- * Remotion is opt-in, so append it to any workflow-specific loaders here.
- */
-export function MediaProvider({ loaders = [], ...props }: MediaProviderProps) {
-  const studioLoaders = useMemo(() => [RemotionProviderLoader, ...loaders], [loaders]);
-  return <VidstackMediaProvider {...props} loaders={studioLoaders} />;
 }
 
 // Audio API paths and blob URLs have no extension. Let the native element

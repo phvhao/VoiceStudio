@@ -311,12 +311,19 @@ async function uninstallRoots(supervisor: BackendSupervisor): Promise<UninstallR
   };
 }
 
+/**
+ * Register the app's IPC handlers. Returns a closer for quitting: it aborts
+ * the downloads still being saved and resolves once their partial files are
+ * gone, so none is left beside the user's files.
+ */
 export function registerIpc(
   supervisor: BackendSupervisor,
   getMainWindow: () => BrowserWindow | null,
   exitForUninstall: () => Promise<void> = async () => app.exit(0),
-): void {
+): () => Promise<void> {
   registerSiteBrowser(getMainWindow);
+  const saves = new Map<AbortController, Promise<unknown>>();
+  let closing = false;
   let maintenanceBusy = false;
   let relocationSelection: {
     authorization: string;
@@ -576,15 +583,29 @@ export function registerIpc(
     const picked = owner
       ? await dialog.showSaveDialog(owner, options)
       : await dialog.showSaveDialog(options);
-    if (picked.canceled || !picked.filePath) return { canceled: true };
-    const res = await net.fetch(source, {
-      method: req.method ?? 'GET',
-      headers: supervisor.requestHeaders(),
-      bypassCustomProtocolHandlers: true,
-    });
-    if (!res.ok) throw new Error(`Could not download the audio (HTTP ${res.status})`);
-    await replaceFile(picked.filePath, Buffer.from(await res.arrayBuffer()));
-    return { canceled: false, path: picked.filePath };
+    if (picked.canceled || !picked.filePath || closing) return { canceled: true };
+    const destination = picked.filePath;
+    const controller = new AbortController();
+    const download = (async () => {
+      const res = await net.fetch(source, {
+        method: req.method ?? 'GET',
+        headers: supervisor.requestHeaders(),
+        bypassCustomProtocolHandlers: true,
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`Could not download the audio (HTTP ${res.status})`);
+      // Written as it arrives: a book or a dubbed video never has to fit in memory.
+      await replaceFile(destination, res.body ?? new Uint8Array(), undefined, {
+        signal: controller.signal,
+      });
+    })();
+    saves.set(controller, download);
+    try {
+      await download;
+    } finally {
+      saves.delete(controller);
+    }
+    return { canceled: false, path: destination };
   });
 
   ipcMain.handle(CHANNELS.filesSaveData, async (event, raw: unknown): Promise<SaveAudioResult> => {
@@ -635,6 +656,12 @@ export function registerIpc(
   ipcMain.handle(CHANNELS.windowIsMaximized, (event) => {
     return (windowFor(event) ?? getMainWindow())?.isMaximized() ?? false;
   });
+
+  return async () => {
+    closing = true;
+    for (const controller of saves.keys()) controller.abort();
+    await Promise.allSettled(saves.values());
+  };
 }
 
 /** Push `window:maximized` to the window renderer after maximize state changes. */

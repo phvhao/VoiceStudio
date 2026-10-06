@@ -18,6 +18,7 @@ dub generator consumes whole segments today.
 """
 from __future__ import annotations
 
+import contextvars
 import functools
 import logging
 import os
@@ -2972,6 +2973,27 @@ class CosyVoiceBackend(TTSBackend):
 # ── GPT-SoVITS adapter (most popular voice cloning, 57k★) ──────────────────
 
 
+#: True while an engine-catalogue read (``GET /engines``) lists the registry.
+#: Only then may an engine that probes an HTTP server answer with a recent
+#: "not reachable" verdict instead of waiting on the closed port again.
+#: Selecting the engine, Test engine and generation always probe afresh.
+_CATALOGUE_READ: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "tts_catalogue_read", default=False,
+)
+#: Server URL → (monotonic expiry, message) of its last "not reachable" probe.
+_UNREACHABLE_SERVERS: dict[str, tuple[float, str]] = {}
+
+
+@contextmanager
+def catalogue_read():
+    """Mark an engine-catalogue read (see ``_CATALOGUE_READ``)."""
+    token = _CATALOGUE_READ.set(True)
+    try:
+        yield
+    finally:
+        _CATALOGUE_READ.reset(token)
+
+
 class GPTSoVITSBackend(TTSBackend):
     """RVC-Boss GPT-SoVITS — the most popular open-source voice cloning system.
 
@@ -2996,6 +3018,14 @@ class GPTSoVITSBackend(TTSBackend):
     supports_voice_design = False  # api_v2 needs a reference clip for every request
     # Server-side; whichever device GPT-SoVITS itself uses (CUDA preferred).
     gpu_compat = ("cuda", "cpu")
+    # A listening local server accepts a connection within milliseconds, but
+    # Windows retries a refused loopback connect for about two seconds, which
+    # every /engines read waited out when no server was running. Only the
+    # connect is capped; a busy server keeps the full timeout to answer.
+    _LOOPBACK_CONNECT_TIMEOUT_S = 0.3
+    # Catalogue reads reuse a "not reachable" verdict this long, unless
+    # GPT-SoVITS is the selected engine (the composer waits on its status).
+    _UNREACHABLE_REUSE_S = 30.0
 
     def __init__(self):
         self._url = os.environ.get("OMNIVOICE_GPTSOVITS_URL", "http://127.0.0.1:9880")
@@ -3011,9 +3041,15 @@ class GPTSoVITSBackend(TTSBackend):
         # both reading as "server not reachable".
         from services.outbound_http import EndpointHTTPError, open_trusted_endpoint
         url = os.environ.get("OMNIVOICE_GPTSOVITS_URL", "http://127.0.0.1:9880")
+        if _CATALOGUE_READ.get() and active_backend_id() != cls.id:
+            expires, message = _UNREACHABLE_SERVERS.get(url, (0.0, ""))
+            if time.monotonic() < expires:
+                return False, message
+        _UNREACHABLE_SERVERS.pop(url, None)
         try:
             with open_trusted_endpoint(
                 url, method="GET", path="tts", timeout=2, allowed_statuses={400, 405},
+                loopback_connect_timeout=cls._LOOPBACK_CONNECT_TIMEOUT_S,
                 # api_v2 lowercases these before validating missing inputs.
                 query="text=&text_lang=en&prompt_lang=en",
             ):
@@ -3033,11 +3069,13 @@ class GPTSoVITSBackend(TTSBackend):
             )
         except Exception:
             # Connection refused / DNS failure / unsafe endpoint / etc.
-            return False, (
+            message = (
                 f"GPT-SoVITS server not reachable at {url}. "
                 "Start it with: python api_v2.py -a 127.0.0.1 -p 9880 "
                 "-c GPT_SoVITS/configs/tts_infer.yaml"
             )
+            _UNREACHABLE_SERVERS[url] = (time.monotonic() + cls._UNREACHABLE_REUSE_S, message)
+            return False, message
 
     @property
     def sample_rate(self) -> int:
@@ -3791,6 +3829,24 @@ def output_sample_rate(backend_id: str) -> Optional[int]:
         return None  # Model-specific or unavailable metadata remains unknown.
 
 
+#: Names the Electron pickers send (electron/src/shared/utils/languages.js) for
+#: languages OmniVoice's vocabulary spells another way: the macrolanguage whose
+#: standard member it lists (Standard Arabic, Northern and Central Kurdish), both
+#: Chinese scripts, or an alternative name. OmniVoice reads them as it reads
+#: Auto, without a language hint. Without these, Audiobook, Batch and Dub showed
+#: Arabic, Chinese and Kurdish as unsupported by the default model.
+_OMNIVOICE_PICKER_NAMES = {
+    "arabic": "standard arabic",
+    "chinese (simplified)": "chinese",
+    "chinese (traditional)": "chinese",
+    "haitian creole": "haitian",
+    "kurdish": "northern kurdish",
+    "kyrgyz": "kirghiz",
+    "pashto": "pushto",
+    "punjabi": "panjabi",
+}
+
+
 def language_options(backend_id: str) -> Optional[list[str]]:
     """Picker names for a finite engine; None leaves unknown/model-specific sets open.
 
@@ -3801,9 +3857,12 @@ def language_options(backend_id: str) -> Optional[list[str]]:
 
     backend = None
     try:
-        # The native OmniVoice adapters use this exact vocabulary at inference.
+        # The native OmniVoice adapters use this exact vocabulary at inference,
+        # and the pickers' own names for languages it has.
         if backend_id in {"omnivoice", "omnivoice-subprocess", "omnivoice-gguf"}:
-            return sorted(LANG_NAME_TO_ID)
+            return sorted(set(LANG_NAME_TO_ID) | {
+                name for name, vocabulary_name in _OMNIVOICE_PICKER_NAMES.items()
+                if vocabulary_name in LANG_NAME_TO_ID})
         backend = get_backend_class(backend_id)()
         if backend_id == "mlx-audio" and backend.model_identity() == backend.CURATED_MODELS.get("kokoro"):
             return _installed_kokoro_language_options()

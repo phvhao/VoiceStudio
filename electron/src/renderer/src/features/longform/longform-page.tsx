@@ -77,6 +77,8 @@ import {
 } from './longform-session';
 import { SAMPLE_AUDIOBOOK_SCRIPT } from '@shared/data/sampleAudiobook';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
+/** Built once: the page re-renders on every keystroke in the script. */
+const BOOK_LANGUAGES = ['Auto', ...LANG_CODES.map((item) => item.label)];
 interface Recovery {
   job_id: string;
   /** `audiobook` or `story`. */
@@ -341,7 +343,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               <EngineLanguagePicker
                 operation={ttsOperation}
                 value={draft.language}
-                options={['Auto', ...LANG_CODES.map((l) => l.label)]}
+                options={BOOK_LANGUAGES}
                 disabled={locked}
                 onValueChange={(language) => set({ language })}
               />

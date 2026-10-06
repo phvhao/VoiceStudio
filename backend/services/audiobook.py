@@ -102,7 +102,11 @@ class ExpressiveOptions:
     content-addressed caching. Any non-default field is folded into every cache
     signature via :meth:`cache_signature` (chapter cache, segment cache, and the
     preview cache all consume it) so a changed setting can never silently replay
-    stale audio — the whole point of the CRITICAL TRAP guard.
+    stale audio — the whole point of the CRITICAL TRAP guard. For the default
+    engine, the steps and postprocessing the Settings → Performance preset
+    renders at are written into ``num_step`` / ``postprocess_output`` before
+    any key is derived (``api.routers.audiobook._preset_opts``), so the preset
+    keys the caches too.
 
     ``emo_*`` reach only engines that understand them (IndexTTS2) through the
     generic synth closure; the VoiceStudio model rejects unknown config kwargs, so
@@ -208,10 +212,17 @@ class ExpressiveOptions:
         return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
     def take_signature(self) -> str:
-        """:meth:`cache_signature` without voice leveling: what keys a single
-        take (the segment cache). Leveling only re-balances finished takes, so
-        turning it on or changing a voice's volume re-assembles chapters from
-        the takes already cached instead of synthesizing them again."""
+        """:meth:`cache_signature` without what only joins finished takes:
+        what keys a single take (the segment cache). Voice leveling re-balances
+        finished takes and the gap between lines is silence put between spans,
+        never inside one, so turning leveling on, changing a voice's volume or
+        changing the line gap re-assembles chapters from the takes already
+        cached instead of synthesizing them again."""
+        return replace(self, level_voices=False, voice_gains=None, line_gap_ms=0).cache_signature()
+
+    def legacy_take_signature(self) -> str:
+        """:meth:`take_signature` as builds before the line gap left it keyed
+        segments — so a segment cached under it is still found."""
         return replace(self, level_voices=False, voice_gains=None).cache_signature()
 
     def to_manifest(self) -> dict:
@@ -275,11 +286,12 @@ class ExpressiveOptions:
 def voice_map_signature(voice_map: Optional[dict]) -> str:
     """Deterministic cache-key fragment for a name→profile voice map (#1217).
 
-    A longform render can carry a ``voice_map`` (``[voice:NAME]`` → profile id);
-    remapping a name must re-render, so the map is folded into every cache key
-    exactly like :meth:`ExpressiveOptions.cache_signature`. Empty for
-    ``None``/``{}`` (so an absent map keeps today's byte-identical keys and
-    existing books never re-render); else canonical JSON over string keys."""
+    A longform render can carry a ``voice_map`` (``[voice:NAME]`` → profile id).
+    Builds before per-voice keys folded the whole map into every cache key, so
+    recasting one name re-rendered every line of the book; a span is now keyed
+    by the voice it resolves to alone, and this fragment only rebuilds those
+    older keys so their audio is still found. Empty for ``None``/``{}``; else
+    canonical JSON over string keys."""
     if not voice_map:
         return ""
     return json.dumps({str(k): v for k, v in voice_map.items()},
@@ -538,6 +550,7 @@ def synthesize_chapter(
     voice_gains: Optional[dict] = None,
     voice_names: Optional[Sequence[str]] = None,
     timing: Optional[list] = None,
+    recognizer: Optional[bool] = None,
 ):
     """Render a chapter's spans to one waveform via an injected ``synth``.
 
@@ -562,7 +575,13 @@ def synthesize_chapter(
     :class:`services.speech_verify.SpeechVerifier`) listens back to each take
     and retakes the ones that say something else; ``synth`` then receives
     ``attempt=n`` for a retake when it accepts that keyword, so a pinned seed
-    still yields a different take.
+    still yields a different take. What it found is kept with each span in
+    the segment cache — takes it could not listen to (no working recognizer)
+    counted as unchecked, never as checked — and the chapter's total, cached
+    spans included, goes in the timing document (``speech_check``). A cached
+    span with unchecked takes is rendered again, and checked, once the
+    recognizer answers: asked once per chapter with that span's audio, unless
+    ``recognizer`` already says it does (``True``) or does not (``False``).
 
     ``level_voices`` / ``voice_gains`` re-balance the rendered spans before
     they are joined (:mod:`services.voice_leveling`): each voice — span ``i``
@@ -640,6 +659,21 @@ def synthesize_chapter(
             return trace_call("synthesis", synth, text, span.voice_id, span.speed)
         return verifier.render(text, take) if verifier is not None else take(0)
 
+    # What the speech check found in this chapter: the spans rendered now and
+    # what was kept with the spans reused from the cache (from a verifier that
+    # counts what it listened to, as SpeechVerifier does).
+    report = speech_check_record() if _counts_checks(verifier) else None
+    listens = {"answer": recognizer}
+
+    def rechecks(audio) -> bool:
+        """Whether a cached span the check could not listen to is rendered
+        again now: only while the recognizer answers."""
+        if getattr(verifier, "unavailable", False):
+            return False
+        if listens["answer"] is None:
+            listens["answer"] = speech_check_answers(verifier, audio, sample_rate)
+        return listens["answer"]
+
     # Take ranges inside each span's audio, by the index of its "a" item:
     # ``[[take index, start, end], …]`` in samples, ``None`` where unknown.
     span_timing: dict = {}
@@ -651,8 +685,18 @@ def synthesize_chapter(
             audio = trace_call("cache", segment_cache.load, span, nonce=occ) if segment_cache is not None else None
             units = None
             if audio is not None:
-                units = _cached_take_ranges(segment_cache, span, occ, audio.shape[-1])
-            else:
+                found = (_cached_check(segment_cache, span, occ, audio.shape[-1])
+                         if report is not None else None)
+                if found and found["unchecked"] and rechecks(audio):
+                    # Rendered while no recognizer answered: check it now.
+                    if hasattr(segment_cache, "discount"):
+                        segment_cache.discount()
+                    audio = None
+                else:
+                    units = _cached_take_ranges(segment_cache, span, occ, audio.shape[-1])
+                    if found:
+                        add_speech_check(report, found)
+            if audio is None:
                 # A blank line inside one span is a paragraph break: render
                 # each paragraph on its own so the join can put a deliberate
                 # gap there instead of running the paragraphs together.
@@ -661,6 +705,7 @@ def synthesize_chapter(
                 rendered_paragraphs = []
                 paragraph_ranges = []
                 first_take = 0
+                before = _check_marks(verifier) if report is not None else None
                 for chunks, gaps in paragraphs:
                     rendered = []
                     for c in chunks:
@@ -693,11 +738,15 @@ def synthesize_chapter(
                     units = [[k, start + a, start + b]
                              for start, ranges in zip(starts, paragraph_ranges)
                              if start is not None for k, a, b in ranges if b > a] or None
+                found = _span_check(verifier, before, paragraphs) if report is not None else None
+                if found is not None:
+                    add_speech_check(report, found)
                 if audio is not None and segment_cache is not None:
                     trace_call("cache", segment_cache.store, span, audio, nonce=occ)
-                    if units and hasattr(segment_cache, "store_timing"):
-                        segment_cache.store_timing(span, units, nonce=occ,
-                                                   samples=audio.shape[-1])
+                    if (units or found) and hasattr(segment_cache, "store_timing"):
+                        extra = {"check": found} if found is not None else {}
+                        segment_cache.store_timing(span, units or [], nonce=occ,
+                                                   samples=audio.shape[-1], **extra)
             if audio is not None:
                 if pending_gap_ms > 0:
                     n = int(sample_rate * pending_gap_ms / 1000.0)
@@ -716,10 +765,13 @@ def synthesize_chapter(
             if n > 0:
                 items.append(("s", n, None))
 
+    if report is not None and getattr(verifier, "unavailable", False):
+        report["unavailable"] = True
     if not items:
         if timing is not None:
             timing.append(chapter_timing_doc([], sample_rate, 0,
-                                             phrases=punctuation_pauses is not None))
+                                             phrases=punctuation_pauses is not None,
+                                             speech_check=report))
         return torch.zeros(0, dtype=torch.float32), 0.0
     # What leveling measured per voice, for the timing document.
     levels: dict = {}
@@ -772,8 +824,94 @@ def synthesize_chapter(
         if cursor == audio.shape[-1]:
             timing.append(chapter_timing_doc(entries, sample_rate, cursor,
                                              phrases=punctuation_pauses is not None,
-                                             levels=levels))
+                                             levels=levels, speech_check=report))
     return audio, audio.shape[-1] / float(sample_rate)
+
+
+# ── Speech-check results kept with the audio ────────────────────────────────
+
+#: Seconds of a cached span played to the recognizer to learn whether it
+#: answers — enough speech for any recognizer to return words.
+_PROBE_SECONDS = 30
+
+
+def speech_check_record() -> dict:
+    """An empty speech-check result (``longform_render.valid_speech_check``)."""
+    return {"checked": 0, "retaken": 0, "unchecked": 0, "suspect": [], "unavailable": False}
+
+
+def add_speech_check(total: dict, part: dict) -> None:
+    """Add one span's (or chapter's) speech-check result to ``total``."""
+    for key in ("checked", "retaken", "unchecked"):
+        total[key] += part.get(key, 0)
+    total["suspect"].extend(part.get("suspect") or [])
+    total["unavailable"] = bool(total["unavailable"] or part.get("unavailable"))
+
+
+def speech_check_answers(verifier, audio, sample_rate: int) -> bool:
+    """Whether ``verifier``'s recognizer answers now — asked before takes it
+    could not listen to earlier are rendered again for it, so a render with
+    no working recognizer reuses them instead of synthesizing them again to
+    learn the same. Plays it up to :data:`_PROBE_SECONDS` of ``audio`` (speech
+    already rendered); a recognizer that already listened to a take of this
+    chapter has answered; one with no recognizer installed to ask
+    (``may_answer``) is not asked at all. Never raises."""
+    if getattr(verifier, "unavailable", False):
+        return False
+    if getattr(verifier, "checked", 0):
+        return True
+    transcribe = getattr(verifier, "transcribe", None)
+    if transcribe is None or audio is None:
+        return False
+    try:
+        may_answer = getattr(verifier, "may_answer", None)
+        if may_answer is not None and not may_answer():
+            return False
+        return transcribe(audio[..., :int(sample_rate * _PROBE_SECONDS)], sample_rate) is not None
+    except Exception:  # noqa: BLE001 — a check never fails a render
+        return False
+
+
+def _counts_checks(verifier) -> bool:
+    """Whether ``verifier`` counts what it listened to (``checked``,
+    ``retaken``, ``suspect``), so what it found can be kept per span."""
+    return verifier is not None and all(
+        hasattr(verifier, name) for name in ("checked", "retaken", "suspect"))
+
+
+def _check_marks(verifier) -> tuple:
+    """Where ``verifier``'s counters stand, to tell one span's takes apart."""
+    return (verifier.checked, verifier.retaken, len(verifier.suspect))
+
+
+def _span_check(verifier, before: tuple, paragraphs: list) -> dict:
+    """What the speech check found in the takes of one span just rendered.
+
+    A take the recognizer could not judge — too short — needs no check; one
+    long enough that it did not listen to (no working recognizer, a failed
+    transcription) is counted ``unchecked``, so the span is never kept as
+    checked."""
+    from services.speech_verify import checkable
+
+    checked, retaken, suspects = before
+    listened = verifier.checked - checked
+    judged = sum(1 for chunks, _gaps in paragraphs for text in chunks if checkable(text))
+    unchecked = max(0, judged - listened)
+    return {"checked": listened, "retaken": verifier.retaken - retaken,
+            "unchecked": unchecked,
+            "suspect": [dict(item) for item in verifier.suspect[suspects:]],
+            "unavailable": bool(unchecked and getattr(verifier, "unavailable", False))}
+
+
+def _cached_check(segment_cache, span, nonce: int, samples: int) -> Optional[dict]:
+    """The speech-check result kept with a cached segment, or ``None``."""
+    load = getattr(segment_cache, "load_check", None)
+    if load is None:
+        return None
+    try:
+        return load(span, nonce, samples=samples)
+    except Exception:  # noqa: BLE001 — a missing result only means unknown
+        return None
 
 
 def _cached_take_ranges(segment_cache, span, nonce: int, samples: int) -> Optional[list]:
@@ -793,7 +931,8 @@ def _cached_take_ranges(segment_cache, span, nonce: int, samples: int) -> Option
 
 
 def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: bool,
-                       levels: Optional[dict] = None) -> dict:
+                       levels: Optional[dict] = None,
+                       speech_check: Optional[dict] = None) -> dict:
     """The timing document of one rendered chapter (version 1).
 
     ``spans`` lists every span that put audio in the chapter: ``{"span":
@@ -811,11 +950,18 @@ def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: 
     chapter's audio — the cache sidecar, a remote worker's embedded chunk — so
     a chapter replayed from the cache still reports its leveling. Readers
     ignore keys they do not know.
+
+    ``speech_check`` (written only when the speech check ran) is what it
+    found in the chapter, spans reused from the cache included
+    (``longform_render.valid_speech_check``) — kept the same way, so a cached
+    chapter still lists the phrases to listen to.
     """
     doc = {"version": TIMELINE_VERSION, "sample_rate": int(sample_rate),
            "samples": int(samples), "phrases": bool(phrases), "spans": spans}
     if levels:
         doc["levels"] = levels
+    if speech_check is not None:
+        doc["speech_check"] = speech_check
     return doc
 
 

@@ -20,12 +20,12 @@ import {
   type MediaPlayerInstance,
 } from './media-player';
 import { Button } from './ui/button';
-import { formatClock } from './waveform-player';
 import {
   publishPlaybackClock,
   resetPlaybackClock,
   usePlaybackSeek,
 } from '@/lib/audio/playback-clock';
+import { formatClock } from '@/lib/format-clock';
 export const VideoPlayer = memo(function VideoPlayer({
   src,
   source = 'video',
@@ -76,7 +76,7 @@ export const VideoPlayer = memo(function VideoPlayer({
     >
       <MediaProvider
         loaders={videoLoaders}
-        className="relative aspect-video [&_[data-remotion-canvas]]:h-full [&_[data-remotion-canvas]]:w-full [&_[data-remotion-container]]:h-full [&_[data-remotion-container]]:w-full [&_video]:h-full [&_video]:w-full [&_iframe]:h-full [&_iframe]:w-full"
+        className="relative aspect-video [&_video]:h-full [&_video]:w-full [&_iframe]:h-full [&_iframe]:w-full"
       >
         <Poster alt="" className="absolute inset-0 h-full w-full object-contain opacity-0 data-[visible]:opacity-100 data-[hidden]:hidden" />
       </MediaProvider>

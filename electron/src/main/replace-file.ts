@@ -20,7 +20,12 @@ const RENAME_BACKOFF_CAP_MS = 400;
 export interface ReplaceFileOptions {
   platform?: NodeJS.Platform;
   sleep?: (ms: number) => Promise<void>;
+  /** Abandons the write; the destination stays as it was. */
+  signal?: AbortSignal;
 }
+
+/** Bytes in hand, or chunks written as they arrive, so a download never has to fit in memory. */
+export type ReplaceFileData = string | Uint8Array | AsyncIterable<Uint8Array>;
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -62,24 +67,26 @@ async function resolveDestination(path: string): Promise<string> {
  *
  * The bytes go to a hidden sibling first and only replace the destination by
  * rename once fully written and flushed, so a failed write (full disk, removed
- * drive, permission change) leaves an existing export exactly as it was. The
- * sibling lives in the same directory so the rename never crosses volumes.
- * POSIX permission bits of a replaced file are kept; Windows files take the
- * directory's inherited ACL, as a freshly saved file would.
+ * drive, permission change, a download that breaks off or is aborted) leaves an
+ * existing export exactly as it was and removes the sibling. The sibling lives
+ * in the same directory so the rename never crosses volumes. POSIX permission
+ * bits of a replaced file are kept; Windows files take the directory's
+ * inherited ACL, as a freshly saved file would.
  */
 export async function replaceFile(
   path: string,
-  data: string | Uint8Array,
+  data: ReplaceFileData,
   fs: ReplaceFileSystem = NODE_FILE_SYSTEM,
   options: ReplaceFileOptions = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted();
   const destination = await resolveDestination(path);
   const existing = await stat(destination).catch(() => null);
   const temporary = join(dirname(destination), `.${basename(destination)}.${randomUUID()}.partial`);
   const handle = await fs.open(temporary, 'wx');
   try {
     try {
-      await handle.writeFile(data);
+      await handle.writeFile(data, { signal: options.signal });
       if (existing?.isFile() && process.platform !== 'win32') {
         await handle.chmod(existing.mode & 0o7777);
       }
