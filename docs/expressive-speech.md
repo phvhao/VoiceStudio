@@ -253,9 +253,11 @@ the pipeline goes out of its way not to break tags:
   are left unchanged.
 - The text-normalization pass (numbers, abbreviations) skips every `[…]` span
   (`backend/services/text_normalization.py`).
-- The same pass drops double quotation marks, which are never spoken: the
-  default model misread a word glued to a typographic quote (`“đừng` came out
-  as "dừng"). It also speaks shouted words that carry accents in lower case
+- The same pass drops quotation marks, which are never spoken: the default
+  model misread or stumbled on a word glued to one (`“đừng` came out as
+  "dừng"; `'đừng bỏ cuộc'` and `‘hãy tiếp tục’` jolted). Double quotes go
+  everywhere; a single quote between two letters is an apostrophe (`don't`,
+  `l'eau`) and stays. It also speaks shouted words that carry accents in lower case
   (`MÙA THU` → `mùa thu`), since the model tends to spell all-caps words letter
   by letter; vowel-less acronyms (`ĐHQG`), Roman numerals and lone plain-ASCII
   capitals (`USA`, `KTNB`) stay as written — use `[spell]…[/spell]` to have an

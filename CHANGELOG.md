@@ -32,7 +32,7 @@ metadata and the backend fallback mirror it.
 - `[volume -6dB]…[/volume]` reads one passage quieter or louder, set from the toolbar, a tag card, the right-click menu or `[` suggestions; Cast shows what leveling added to each voice in the last render
 - The finished audiobook plays from a compact card with chapter marks, chapter skips and speed; Open reader shows the whole text, follows the voice word by word, and plays from any word you click
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
-- Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
+- Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks, double or single, are not spoken (apostrophes stay)
 - Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books
 - Audiobook `## Section` and `### Section` lines open sections inside a chapter: the title is read aloud without the marks and never resets the voice; chapters containing such lines re-render once
 - A Contents rail in the Audiobook editor lists chapters and sections, jumps to a heading, renames, adds or removes headings, shows whether each chapter is rendered or changed since the last book (with the reason on hover), and renders one chapter on its own; it folds away, and text before the first heading shows as the intro with an Add title action

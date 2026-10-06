@@ -572,6 +572,18 @@ def test_double_quotes_are_not_spoken(raw, expected):
 
 
 @pytest.mark.parametrize("raw, expected", [
+    ("Anh nói: 'đừng bỏ cuộc' và ‘hãy tiếp tục’.", "Anh nói: đừng bỏ cuộc và hãy tiếp tục."),
+    ("‹oui›, dit-elle", "oui, dit-elle"),
+    ("the players' ball", "the players ball"),
+    ("in the '90s", "in the 90s"),
+    ("don't, l'eau, rock’n’roll", "don't, l'eau, rock’n’roll"),  # apostrophes stay
+    ("x [[‘a’|b]] y", "x [[‘a’|b]] y"),  # bracket grammar untouched
+])
+def test_single_quotation_marks_are_not_spoken(raw, expected):
+    assert normalize_text(raw, None) == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
     ("MÙA XUÂN là; MÙA THU là", "mùa xuân là; mùa thu là"),
     ("ĐHQG HÀ NỘI", "ĐHQG hà nội"),            # no vowel: an acronym
     ("CHƯƠNG IV", "chương IV"),                           # Roman numeral stays

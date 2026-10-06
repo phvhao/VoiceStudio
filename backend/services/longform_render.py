@@ -343,10 +343,11 @@ def load_chapter_timeline(wav_path: str) -> Optional[dict]:
 #: that carries an override include this marker so those older renders are
 #: never replayed. Text without one keeps its byte-identical key.
 INLINE_OVERRIDES_RENDER = 1
-#: Same idea for the reading rules that drop double quotes and lower shouted
+#: Same idea for the reading rules that drop quotation marks and lower shouted
 #: words (``text_normalization``): text they rewrite was spoken differently
-#: before them, so its keys carry this marker.
-QUOTE_CAPS_RULES_RENDER = 1
+#: before them, so its keys carry this marker. Bump it whenever those rules
+#: change what they rewrite (2: single quotation marks are dropped too).
+QUOTE_CAPS_RULES_RENDER = 2
 
 
 def _render_rule_markers(texts: Iterable[str]) -> dict:

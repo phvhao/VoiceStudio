@@ -358,28 +358,40 @@ def _outside_brackets(text: str, fn: Callable[[str], str]) -> str:
     return "".join(parts)
 
 
-# ── Double quotation marks ───────────────────────────────────────────────────
+# ── Quotation marks ──────────────────────────────────────────────────────────
 #
-# Quotation marks are never spoken, and the default model misreads a word
-# glued to a typographic one: “đừng ... came back as "dừng" in every take,
-# while the same sentence without the quote said "đừng". They are dropped;
-# one that sat between two letters leaves a space so the words stay apart.
-# Apostrophes and single quotes are kept (they live inside words: don’t).
+# Quotation marks are never spoken, and the default model misreads or stumbles
+# on a word glued to one: “đừng ... came back as "dừng" in every take, while
+# the same sentence without the quote said "đừng"; 'đừng bỏ cuộc' and
+# ‘hãy tiếp tục’ jolted the same way. Double quotes are dropped; one that sat
+# between two letters or digits leaves a space so the words stay apart. A
+# single quote between two letters is an apostrophe (don’t, l'eau) and stays;
+# anywhere else it is a quotation mark and is dropped.
 
 _DOUBLE_QUOTE_RE = re.compile('[\u0022\u201c\u201d\u201e\u201f\u00ab\u00bb\uff02]')
+_SINGLE_QUOTE_RE = re.compile("[\u0027\u2018\u2019\u201a\u201b\u2039\u203a\uff07]")
 _SPACE_RUN_RE = re.compile(r"[ \t]{2,}")
 
 
-def _drop_double_quotes(text: str) -> str:
-    if not _DOUBLE_QUOTE_RE.search(text):
+def _drop_quotation_marks(text: str) -> str:
+    if not (_DOUBLE_QUOTE_RE.search(text) or _SINGLE_QUOTE_RE.search(text)):
         return text
 
-    def _replace(m: re.Match) -> str:
-        before = text[m.start() - 1] if m.start() else ""
-        after = text[m.end()] if m.end() < len(text) else ""
+    def _neighbours(m: re.Match) -> tuple[str, str]:
+        before = m.string[m.start() - 1] if m.start() else ""
+        after = m.string[m.end()] if m.end() < len(m.string) else ""
+        return before, after
+
+    def _double(m: re.Match) -> str:
+        before, after = _neighbours(m)
         return " " if before.isalnum() and after.isalnum() else ""
 
-    return _SPACE_RUN_RE.sub(" ", _DOUBLE_QUOTE_RE.sub(_replace, text))
+    def _single(m: re.Match) -> str:
+        before, after = _neighbours(m)
+        return m.group() if before.isalpha() and after.isalpha() else ""
+
+    text = _SINGLE_QUOTE_RE.sub(_single, _DOUBLE_QUOTE_RE.sub(_double, text))
+    return _SPACE_RUN_RE.sub(" ", text)
 
 
 # ── Shouted words (ALL CAPS, Latin script) ───────────────────────────────────
@@ -441,7 +453,7 @@ def changed_by_quote_and_caps_rules(text: str) -> bool:
     ``text`` — long-form cache keys use it so audio rendered before those rules
     is not replayed for exactly the lines they now read differently."""
     return any(_outside_brackets(text, fn) != text
-               for fn in (_drop_double_quotes, _lowercase_shouted_words))
+               for fn in (_drop_quotation_marks, _lowercase_shouted_words))
 
 
 # ── Abbreviation expansion ────────────────────────────────────────────────────
@@ -746,7 +758,7 @@ def normalize_text(text: str, language: Optional[str] = None) -> str:
     if not text:
         return text or ""
     out = _safety_filters(text)
-    out = _outside_brackets(out, _drop_double_quotes)
+    out = _outside_brackets(out, _drop_quotation_marks)
     out = _outside_brackets(out, _lowercase_shouted_words)
     # Runs outside the num2words gate below: ko/ja/zh keep their digits (that
     # gate returns None for them) but still need the range mark spoken.
