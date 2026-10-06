@@ -129,3 +129,11 @@ def test_generate_without_reading_is_unchanged():
     model = _Model()
     _run(model, TEXT)
     assert model.texts == [TEXT]
+
+@pytest.fixture(autouse=True)
+def _cut_at_marks_only(monkeypatch):
+    """These tests pin where marks cut phrases and what the cuts carry; joining
+    short phrases is tested on its own in test_phrase_rendering.py."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)

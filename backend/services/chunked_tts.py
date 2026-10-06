@@ -209,8 +209,17 @@ PHRASE_MAX_CHARS = 200
 #: Revision of :func:`split_into_phrases`, folded into the long-form cache keys
 #: of phrase-rendered chapters so a render cut under older rules is never
 #: replayed. Bump it whenever the phrases it returns change (2: a line break
-#: ends a phrase); ``tests/test_phrase_rendering.py`` fails until you do.
-PHRASE_SPLIT_REVISION = 2
+#: ends a phrase; 3: short phrases join the next one);
+#: ``tests/test_phrase_rendering.py`` fails until you do.
+PHRASE_SPLIT_REVISION = 3
+#: A phrase shorter than this joins the phrase after it. Measured on a
+#: three-minute Vietnamese take: takes under ~45 characters drifted twice as
+#: far in pitch from one another (about 30 Hz against 14 Hz) and came out
+#: breathier, which listeners heard as a wobbling, "warped" voice.
+PHRASE_MIN_CHARS = 40
+#: A joined phrase stays at or under this, so a run of short parallel clauses
+#: is not rebuilt into the long take that swapped them.
+PHRASE_JOIN_MAX_CHARS = 120
 
 # One candidate boundary: a run of one punctuation family. Fullwidth forms are
 # escapes to keep the repo's no-literal-CJK gate clean. Linear: each branch is
@@ -354,10 +363,34 @@ def split_into_phrases(text: str, pauses: Optional[dict] = None, *,
         parts = split_text_into_chunks(piece, max_chars)
         for k, part in enumerate(parts):
             phrases.append((part, family if k == len(parts) - 1 else _family_of_end(part)))
+    phrases = _join_short_phrases(phrases)
     out = [(phrase, int(silence.get(family, 0)) if family else 0) for phrase, family in phrases]
     if out:
         out[-1] = (out[-1][0], 0)
     return out
+
+
+def _join_short_phrases(phrases: List[tuple]) -> List[tuple]:
+    """Join each phrase shorter than :data:`PHRASE_MIN_CHARS` to the next one
+    (the last one to the one before), so the engine reads them in one take and
+    pauses at the mark itself. A phrase that ended at a bare line break (a
+    heading or list item with no mark of its own) stays apart: only the
+    inserted silence pauses after it. Joins never pass
+    :data:`PHRASE_JOIN_MAX_CHARS`."""
+    def joinable(a: str, b: str) -> bool:
+        return (_family_of_end(a) is not None
+                and len(a) + 1 + len(b) <= min(PHRASE_JOIN_MAX_CHARS,
+                                                 _effective_max_chars(a + " " + b, PHRASE_MAX_CHARS)))
+
+    out: List[list] = []
+    for phrase, family in phrases:
+        if out and len(out[-1][0]) < PHRASE_MIN_CHARS and joinable(out[-1][0], phrase):
+            out[-1] = [f"{out[-1][0]} {phrase}", family]
+        else:
+            out.append([phrase, family])
+    if len(out) > 1 and len(out[-1][0]) < PHRASE_MIN_CHARS and joinable(out[-2][0], out[-1][0]):
+        out[-2:] = [[f"{out[-2][0]} {out[-1][0]}", out[-1][1]]]
+    return [tuple(item) for item in out]
 
 
 def join_phrases(rendered: list, sample_rate: int, pauses_ms: list, *,

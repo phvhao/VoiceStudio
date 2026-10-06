@@ -165,7 +165,39 @@ _SPLIT_CORPUS = [
     ("word " * 30).strip() + ", " + ("word " * 30).strip() + ".",
 ]
 #: ``split_into_phrases`` output over ``_SPLIT_CORPUS`` per PHRASE_SPLIT_REVISION.
-_SPLIT_FINGERPRINTS = {2: "bd6d24f320b25872"}
+_SPLIT_FINGERPRINTS = {3: "a45424c1f124b203"}
+_SHIPPED_MIN_CHARS = __import__("services.chunked_tts", fromlist=["x"]).PHRASE_MIN_CHARS
+
+
+def test_short_phrases_join_the_next_one_and_marked_lines_only(monkeypatch):
+    """Measured: takes under ~45 characters drift twice as far in pitch from
+    one another and sound warped, so a short phrase is read with its neighbour."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    d = DEFAULT_PUNCTUATION_PAUSES
+    text = "\n".join([
+        "Main ideas",  # a heading: no mark, so it keeps its own take and pause
+        "Be yourself – you are the only one among billions of people.",
+        "Habits decide fate. Two or three good habits, kept up, make the difference.",
+        "Live fully.",  # short and last: joins the one before
+    ])
+    assert split_into_phrases(text) == [
+        ("Main ideas", d["sentence"]),
+        ("Be yourself – you are the only one among billions of people.", d["sentence"]),
+        ("Habits decide fate. Two or three good habits, kept up, make the difference. "
+         "Live fully.", 0),
+    ]
+
+
+def test_joining_never_rebuilds_a_long_take(monkeypatch):
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
+    phrases = [p for p, _ in split_into_phrases(SEASONS)]
+    assert all(len(p) <= chunked_tts.PHRASE_JOIN_MAX_CHARS for p in phrases)
+    # The parallel clauses that once swapped still get a take each.
+    assert [p.count("MÙA") for p in phrases] == [1, 1, 1, 1]
 
 
 def _split_fingerprint() -> str:
@@ -178,12 +210,15 @@ def _split_fingerprint() -> str:
     return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
-def test_a_change_to_the_phrases_bumps_the_split_revision():
+def test_a_change_to_the_phrases_bumps_the_split_revision(monkeypatch):
     """Cached chapters are keyed by the split revision, not the splitter's
     code: phrases that change under the same revision replay old audio (a new
     line-break rule rendered nothing until the revision moved)."""
+    from services import chunked_tts
     from services.chunked_tts import PHRASE_SPLIT_REVISION
 
+    # The fingerprint is of the splitter as it ships, short-phrase joining included.
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", _SHIPPED_MIN_CHARS)
     assert _SPLIT_FINGERPRINTS.get(PHRASE_SPLIT_REVISION) == _split_fingerprint(), (
         "split_into_phrases now returns different phrases: bump "
         "PHRASE_SPLIT_REVISION and record the new fingerprint here")
@@ -299,3 +334,11 @@ def test_the_app_and_the_server_share_one_set_of_default_pauses():
     block = re.search(r"DEFAULT_PUNCTUATION_PAUSES = \{(.*?)\};", js, re.S).group(1)
     app = {key: int(value) for key, value in re.findall(r"(\w+):\s*(\d+)", block)}
     assert app == DEFAULT_PUNCTUATION_PAUSES
+
+@pytest.fixture(autouse=True)
+def _cut_at_marks_only(monkeypatch):
+    """These tests pin where marks cut phrases and what the cuts carry; joining
+    short phrases is tested on its own in test_phrase_rendering.py."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)

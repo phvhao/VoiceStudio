@@ -346,3 +346,11 @@ def test_scrolling_the_contents_or_a_field_does_not_stop_the_follow():
     assert "INPUT|SELECT|TEXTAREA" in follow
     assert "window.addEventListener('wheel', userScrolled" not in js
     assert "ownScroll(event.target, false)" in follow and "ownScroll(event.target, true)" in follow
+
+@pytest.fixture(autouse=True)
+def _cut_at_marks_only(monkeypatch):
+    """These tests pin where marks cut phrases and what the cuts carry; joining
+    short phrases is tested on its own in test_phrase_rendering.py."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)

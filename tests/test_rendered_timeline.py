@@ -509,3 +509,11 @@ def test_timeline_endpoint_serves_a_books_sidecar_only(outputs):
     # A sidecar that names another book is not this book's timeline.
     (outputs / "story_x.mp3.timeline.json").write_text(json.dumps(doc), encoding="utf-8")
     assert client.get("/audiobook/timeline/story_x.mp3").status_code == 404
+
+@pytest.fixture(autouse=True)
+def _cut_at_marks_only(monkeypatch):
+    """These tests pin where marks cut phrases and what the cuts carry; joining
+    short phrases is tested on its own in test_phrase_rendering.py."""
+    from services import chunked_tts
+
+    monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)
