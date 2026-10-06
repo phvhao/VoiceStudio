@@ -1,0 +1,131 @@
+# Bàn giao: nâng cấp Sách nói / Truyện (fork phvhao)
+
+Cập nhật: 2026-10-06 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
+`phvhao/VoiceStudio` trỏ cùng commit `d41e8765`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
+
+## Trạng thái nhanh
+
+- Toàn bộ tính năng được yêu cầu đã làm, commit và push.
+- Kiểm tra lần cuối đạt: typecheck, lint, locale (21 ngôn ngữ), ~1775 test renderer, ~2990 test
+  shared, hơn 2500 test Python, các smoke giao diện CI chạy (longform-layout, playback, longform,
+  language-picker, dub).
+- Một test luôn đỏ trên máy này do môi trường, không do thay đổi: `electron/src/main/backend-setup.test.ts`
+  ("only ever names a uv that is really there", `OMNIVOICE_BUNDLED_UV` rỗng).
+- Repo gốc đã có thêm 4 commit (MCP generation budgets, PR #2612) chưa đồng bộ vào nhánh này.
+
+## Các commit
+
+| Commit | Nội dung |
+|---|---|
+| `6016071d` | Thanh công cụ markup dùng chung, editor tô sáng tag |
+| `825abf34` | Hướng dẫn giọng mặc định, nghe thử đoạn chọn, phát âm `[[từ\|cách đọc]]` |
+| `3d322d53` | Đọc từng câu, kiểm tra lời đọc (ASR + đọc lại), Cài đặt → Đọc, menu chuột phải |
+| `39cbf5cc` | Xuống dòng tính như dấu chấm |
+| `23086381` | Cache chương/đoạn render lại khi quy tắc đọc thay đổi (`PHRASE_SPLIT_REVISION`) |
+| `0dfc44d1` | Lề số dòng + dải màu giọng, tag tương tác, gợi ý `[`, cân bằng âm lượng, trình đọc |
+| `b4b371ef` | Timeline câu chính xác, `## Phần`, Mục lục, tạo từng chương, xuất HTML, ô chọn giọng |
+| `bef3a9cf` | 24 lỗi từ review đối kháng |
+| `9d4e5a21` | Bảo mật: file tạm xuất HTML nằm trong thư mục dữ liệu app, không ở temp dùng chung |
+| `81fab8f1` | Thư viện sách/truyện, tag `[volume]`, HTML kiểu e-book, zoom, cột mục lục, hiệu năng trình đọc, Nhân bản/Thiết kế chèn pause |
+| `d41e8765` | Cài đặt kiểm tra chính tả, gợi ý `[` theo trang |
+
+## Đã làm
+
+### Editor kịch bản (Sách nói, Truyện)
+- Lề trái: số dòng, dải màu theo giọng đang đọc (đổi giọng giữa dòng thì đổi từ dòng đó; mỗi chương
+  về giọng mặc định), dấu chương/phần/mở đầu ở lề. Tag giọng màu theo từng giọng, khớp chấm màu trong
+  Dàn giọng. Dòng đang soạn và tiêu đề chương có dải nền.
+- Tag tương tác: rê chuột hiện gợi ý; bấm hoặc `Alt+Enter` mở bảng thao tác theo loại tag (đổi giọng,
+  gán hồ sơ, âm lượng giọng, nghe/chọn đoạn, đổi độ dài pause, đổi kiểu nhấn nhá cả cặp, sửa cách đọc,
+  xóa). Chuột phải có cùng thao tác (kể cả macOS). Gõ `[` hiện gợi ý tag.
+- Thanh trạng thái: dòng/cột, giọng tại con trỏ, số chương/từ/thời lượng; zoom 80–160 %
+  (`Ctrl +/−/0`, `Ctrl` + lăn chuột). Mọi thao tác hoàn tác được bằng `Ctrl+Z`; gõ Telex không bị ảnh hưởng.
+- Kiểm tra chính tả: Cài đặt → Chung, mặc định tắt; bật thì kiểm tra tiếng Việt + tiếng Anh
+  (Windows/macOS dùng bộ của hệ điều hành; Linux không tải từ điển qua mạng).
+
+### Giọng và âm lượng
+- Ô chọn giọng có tìm kiếm (không dấu) cho Giọng mặc định và từng dòng Dàn giọng.
+- Cân bằng âm lượng tự động giữa các giọng (bật sẵn): đo độ to phần có lời của từng giọng trong chương,
+  đưa về −20 dBFS, tối đa ±12 dB, chặn đỉnh. Chỉ ghép lại từ cache, không tạo lại giọng.
+- Chỉnh tay ±12 dB theo tên giọng (Dàn giọng hoặc bảng thao tác của tag); Dàn giọng hiện "Tự động: … ·
+  Tổng: …" sau khi tạo sách.
+- Tag `[volume ±N dB]…[/volume]` cho từng đoạn, áp sau cân bằng (đoạn thì thầm không bị kéo lên).
+- `[voice:default]` (mọi kiểu viết hoa) luôn là giọng mặc định.
+
+### Đọc và render
+- Đọc từng câu/vế với khoảng nghỉ theo dấu câu (Cài đặt → Đọc, dùng chung cả app); xuống dòng = dấu chấm.
+- Kiểm tra lời đọc tùy chọn (ASR, đọc lại tối đa 2 lần, liệt kê câu cần nghe lại).
+- Chuẩn hóa: bỏ ngoặc kép (“đừng” không còn thành “dừng”), chữ HOA có dấu đọc thành từ.
+- Khóa cache có phiên bản quy tắc tách câu (test dấu vân tay buộc tăng `PHRASE_SPLIT_REVISION` khi đổi
+  quy tắc) và dấu mốc cho dòng bị quy tắc ngoặc kép/chữ HOA ảnh hưởng.
+
+### Sách nói
+- `## Phần` / `### Phần`: đọc tên phần (không đọc `#`), không tạo chapter m4b; parser Python và JS
+  khớp nhau qua `tests/fixtures/longform_parser_cases.json`.
+- Cột Mục lục cạnh editor: bấm để nhảy, thêm/đổi tên/xóa tiêu đề, trạng thái từng chương (chưa tạo /
+  đã có / đã đổi), tạo và nghe thử từng chương.
+- Timeline chính xác theo câu: `<output>.timeline.json` cạnh file sách, lưu kèm cache đoạn và chương;
+  `GET /audiobook/timeline/{output}`. Bản cũ không có timeline thì ước lượng.
+- Phần nghe: thẻ "đang phát" gọn + cửa sổ trình đọc (tô câu đang đọc, bấm từ để phát, tự cuộn chỉ trong
+  cửa sổ, chữ căn đều); chỉ vẽ lại khi đổi từ.
+- Xuất HTML: zip gồm `index.html` chạy offline (bìa, mục lục, đoạn văn, chữ căn đều, cỡ chữ, nền
+  sáng/sepia/tối, karaoke, in ấn) + audio + ảnh bìa.
+
+### Quản lý và các trang khác
+- Thư viện sách/truyện: ô chuyển sách ở đầu trang, tìm/mới/mở/đổi tên/nhân bản/xóa, tự lưu sau ~1 giây,
+  chuyển dữ liệu cũ an toàn, một dự án hỏng không làm hỏng cả thư viện. Trang Dự án mở đúng sách của
+  từng lần tạo.
+- Nhân bản và Thiết kế: menu Chèn có pause, tô màu tag, gợi ý `[` chỉ pause/âm thanh, tag không dùng được
+  ở trang này bị gạch đỏ kèm giải thích.
+
+## Chưa làm
+
+| Việc | Ghi chú |
+|---|---|
+| Kéo thả sắp xếp chương trong Mục lục | Đã nói để sau |
+| Karaoke khớp từng từ bằng ASR | Hiện từ được ước lượng trong từng câu (câu thì chính xác); có thể tận dụng bước kiểm tra lời đọc |
+| Gợi ý sửa chính tả khi chuột phải | Editor đã có menu chuột phải riêng; cần gộp vào |
+| Lưu mức âm lượng đo được vào hồ sơ giọng | Chờ quyết định; chỉ để tham khảo, không thay cân bằng |
+| PR lên repo gốc | Chưa gửi |
+| Đồng bộ 4 commit mới của repo gốc | `git merge upstream/main`, chạy lại test rồi push |
+
+## Cần kiểm tra thủ công
+
+- File HTML xuất ra trên Firefox và Safari (mới thử Chromium).
+- Cột Mục lục khi cửa sổ hẹp (< 720 px); nhãn chương ở lề với tiếng Trung, Nhật, Thái.
+- Số đo hiệu năng trình đọc trên app thật (đã đo bằng jsdom; trước khi sửa đo trên app: ~57 lần
+  layout/giây, ~33 % CPU luồng giao diện).
+
+## Vấn đề đã biết
+
+- **App dev thỉnh thoảng thoát với mã 9** khi agent vừa sửa code vừa chạy test (đã loại trừ: test của
+  tiến trình chính, từng file test longform, việc electron-vite khởi động lại). Chưa rõ gốc; không thấy
+  ở bản cài đặt. Bẫy theo dõi: `exit-trap.ps1` (ghi các tiến trình chạy trong 60 giây trước khi
+  Electron biến mất).
+- Máy GPU từ xa chạy bản cũ bỏ qua `[volume]` và cân bằng âm lượng.
+- Hạ cấp app (mở thư viện bằng bản cũ hơn) thấy danh sách dự án trống; bản nháp đang dùng không mất.
+- Kịch bản có dòng `##` và dự án từng gán giọng cho `[voice:default]` sẽ render lại các chương liên
+  quan một lần (đúng ý đồ).
+
+## Chạy và kiểm tra trên Windows
+
+```powershell
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+$env:PATH = "$env:USERPROFILE\.bun\bin;$env:LOCALAPPDATA\Programs\VoiceStudio\resources\tools;$env:PATH"
+bun run dev
+```
+
+```bash
+cd electron && bun run typecheck && bun run lint && bun run locale:check
+bun x vp test --run                                   # renderer
+bun x vp test --run --config vite.shared.config.ts    # shared
+cd ../backend && ../.venv/Scripts/python -m pytest -q -p no:cacheprovider ../tests
+```
+
+`bun run dev` có thể đổi xuống dòng của `bun.lock`; nếu `git diff --ignore-cr-at-eol bun.lock` rỗng thì
+`git checkout -- bun.lock`.
+
+## Tài liệu liên quan
+
+`docs/expressive-speech.md` (markup, đọc từng câu, âm lượng, chính tả), `docs/electron-longform.md`
+(timeline, xuất HTML, thư viện), `CHANGELOG.md` mục `[Unreleased]`.
