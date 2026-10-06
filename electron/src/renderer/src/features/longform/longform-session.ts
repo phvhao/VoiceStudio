@@ -22,6 +22,9 @@ import { consumeLongformStream } from '@shared/utils/longformStream';
 import { storyToSpans } from '@shared/utils/storyToSpans';
 import { beginAppActivity } from '@/lib/app-activity';
 import { publicFailureFromEvent, type PublicFailure } from '@/lib/api/failure';
+import { chapterLevels, type VoiceLevels } from './auto-levels';
+import { scriptSize } from './story-clear';
+import { ProjectMissingError, projectLibrary, type LongformProjectMeta } from './project-library';
 export type Mode = 'stories' | 'audiobook';
 export interface Character {
   id: string;
@@ -44,6 +47,10 @@ export interface AudiobookRenderChapter {
   error?: string;
   /** Phrases the speech check still heard differently after its retakes. */
   suspects?: string[];
+  /** What voice leveling measured per voice in this chapter (newer backends, leveling on). */
+  levels?: VoiceLevels;
+  /** The script gave the chapter no title (its `title` is then blank). */
+  untitled?: boolean;
 }
 /** Phrases a render's speech check reported for listening (newer backends). */
 export function suspectPhrases(event: Record<string, unknown>): string[] {
@@ -75,6 +82,12 @@ export interface Draft extends BookOptions {
   outputChapters: AudiobookRenderChapter[];
   outputCachedChapters: number;
   outputFailedChapters: number;
+  /**
+   * When an edit last changed this draft (ms), kept with it in the working
+   * copy and in its project: the newer of the two copies is the book. 0 for
+   * a draft from before this was kept.
+   */
+  editedAt: number;
 }
 interface Session {
   drafts: Record<Mode, Draft>;
@@ -88,7 +101,12 @@ interface Session {
   storageError: boolean;
   chapters: AudiobookRenderChapter[];
   stopped: boolean;
+  /** Where the open project of each mode stands in the library. */
+  saving: Record<Mode, ProjectSaveState>;
+  saveError: Record<Mode, string | null>;
 }
+/** `idle`: nothing to keep yet (a new, empty draft). */
+export type ProjectSaveState = 'idle' | 'saving' | 'saved' | 'error';
 export const blankLongformDraft = (): Draft => ({
   projectId: null,
   importText: '',
@@ -109,7 +127,54 @@ export const blankLongformDraft = (): Draft => ({
   outputChapters: [],
   outputCachedChapters: 0,
   outputFailedChapters: 0,
+  editedAt: 0,
 });
+/**
+ * A stored draft as the editor can use it — the working copy in localStorage
+ * or a library project — with every field checked and older shapes filled in;
+ * `null` when it is not a draft at all.
+ */
+export function restoreDraft(s: any): Draft | null {
+  if (!s || typeof s.script !== 'string' || !Array.isArray(s.lines)) return null;
+  return {
+    ...restoreBookOptions(s),
+    importText: typeof s.importText === 'string' ? s.importText : '',
+    cast: Array.isArray(s.cast)
+      ? s.cast.filter((c: Character) => c && typeof c.id === 'string' && typeof c.name === 'string')
+      : [],
+    globalSpeed:
+      typeof s.globalSpeed === 'number' && s.globalSpeed >= 0.5 && s.globalSpeed <= 2
+        ? s.globalSpeed
+        : 1,
+    projectId: typeof s.projectId === 'string' ? s.projectId : null,
+    overrides: { ...DEFAULT_OVERRIDES, ...s.overrides },
+    voiceCast: Object.fromEntries(
+      Object.entries(s.voiceCast || {}).flatMap(([key, value]) =>
+        typeof value === 'string' ? [[key, value]] : [],
+      ),
+    ),
+    voiceGains: restoreVoiceGains(s.voiceGains),
+    script: s.script,
+    lines: s.lines.filter(
+      (line: Line) => line && typeof line.id === 'string' && typeof line.text === 'string',
+    ),
+    title: typeof s.title === 'string' ? s.title : '',
+    voice: typeof s.voice === 'string' ? s.voice : null,
+    format: s.format === 'mp3' ? 'mp3' : 'm4b',
+    language: typeof s.language === 'string' ? s.language : 'Auto',
+    output: typeof s.output === 'string' ? s.output : '',
+    outputScript: typeof s.outputScript === 'string' ? s.outputScript : '',
+    outputChapters: Array.isArray(s.outputChapters)
+      ? s.outputChapters.filter(
+          (chapter: AudiobookRenderChapter) =>
+            chapter && typeof chapter.title === 'string' && typeof chapter.status === 'string',
+        )
+      : [],
+    outputCachedChapters: typeof s.outputCachedChapters === 'number' ? s.outputCachedChapters : 0,
+    outputFailedChapters: typeof s.outputFailedChapters === 'number' ? s.outputFailedChapters : 0,
+    editedAt: Number.isFinite(s.editedAt) && s.editedAt > 0 ? s.editedAt : 0,
+  };
+}
 const key = 'voicestudio.longform.v1';
 const drafts = {
   stories: blankLongformDraft(),
@@ -117,51 +182,8 @@ const drafts = {
 };
 try {
   const saved = JSON.parse(localStorage.getItem(key) || 'null');
-  for (const mode of ['stories', 'audiobook'] as const) {
-    const s = saved?.[mode];
-    if (s && typeof s.script === 'string' && Array.isArray(s.lines))
-      drafts[mode] = {
-        ...restoreBookOptions(s),
-        importText: typeof s.importText === 'string' ? s.importText : '',
-        cast: Array.isArray(s.cast)
-          ? s.cast.filter(
-              (c: Character) => c && typeof c.id === 'string' && typeof c.name === 'string',
-            )
-          : [],
-        globalSpeed:
-          typeof s.globalSpeed === 'number' && s.globalSpeed >= 0.5 && s.globalSpeed <= 2
-            ? s.globalSpeed
-            : 1,
-        projectId: typeof s.projectId === 'string' ? s.projectId : null,
-        overrides: { ...DEFAULT_OVERRIDES, ...s.overrides },
-        voiceCast: Object.fromEntries(
-          Object.entries(s.voiceCast || {}).flatMap(([key, value]) =>
-            typeof value === 'string' ? [[key, value]] : [],
-          ),
-        ),
-        voiceGains: restoreVoiceGains(s.voiceGains),
-        script: s.script,
-        lines: s.lines.filter(
-          (line: Line) => line && typeof line.id === 'string' && typeof line.text === 'string',
-        ),
-        title: typeof s.title === 'string' ? s.title : '',
-        voice: typeof s.voice === 'string' ? s.voice : null,
-        format: s.format === 'mp3' ? 'mp3' : 'm4b',
-        language: typeof s.language === 'string' ? s.language : 'Auto',
-        output: typeof s.output === 'string' ? s.output : '',
-        outputScript: typeof s.outputScript === 'string' ? s.outputScript : '',
-        outputChapters: Array.isArray(s.outputChapters)
-          ? s.outputChapters.filter(
-              (chapter: AudiobookRenderChapter) =>
-                chapter && typeof chapter.title === 'string' && typeof chapter.status === 'string',
-            )
-          : [],
-        outputCachedChapters:
-          typeof s.outputCachedChapters === 'number' ? s.outputCachedChapters : 0,
-        outputFailedChapters:
-          typeof s.outputFailedChapters === 'number' ? s.outputFailedChapters : 0,
-      };
-  }
+  for (const mode of ['stories', 'audiobook'] as const)
+    drafts[mode] = restoreDraft(saved?.[mode]) ?? drafts[mode];
 } catch {
   /* Invalid drafts do not prevent opening the editor. */
 }
@@ -177,6 +199,8 @@ export const longformSession = new Store<Session>({
   storageError: false,
   chapters: [],
   stopped: false,
+  saving: { stories: 'idle', audiobook: 'idle' },
+  saveError: { stories: null, audiobook: null },
 });
 export const useLongformSession = () => useStore(longformSession);
 /** Fences document imports that finish after a new dub replaces the Stories draft. */
@@ -190,29 +214,415 @@ const storage = createCoalescedJsonStorage({
   warn: () => patch({ storageError: true }),
 });
 storage.configurePersistenceRole('main');
-export function flushLongformSessionPersistence(): void {
+/**
+ * Writes the working drafts now and saves every open project with edits
+ * still waiting for the auto-save; resolves once they are in the library.
+ */
+export function flushLongformSessionPersistence(): Promise<void> {
   storage.flushPendingWrites();
+  return flushLongformProjects();
 }
 const removeLifecycle = storage.installPersistenceLifecycleFlush();
+// A closing or hidden page saves the open books at once, not a second later.
+const flushOnHide = () => void flushLongformProjects();
+const flushWhenHidden = () => {
+  if (document.visibilityState === 'hidden') flushOnHide();
+};
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flushOnHide);
+  document.addEventListener('visibilitychange', flushWhenHidden);
+}
 if (import.meta.hot)
   import.meta.hot.dispose(() => {
     storage.flushPendingWrites();
+    void flushLongformProjects();
     removeLifecycle();
+    window.removeEventListener('pagehide', flushOnHide);
+    document.removeEventListener('visibilitychange', flushWhenHidden);
     controller?.abort();
   });
-function updateDraft(mode: Mode, value: Partial<Draft>) {
+function updateDraft(mode: Mode, value: Partial<Draft>, autosave = true) {
+  const current = longformSession.state.drafts[mode];
+  if ('projectId' in value && value.projectId !== current.projectId) {
+    // Another book takes this one's place (a dub loaded into Stories, a
+    // project opened): what was typed in the last second is saved to the
+    // book it belongs to before it is gone.
+    if (autosaveTimers[mode] || (!current.projectId && hasContent(mode, current))) {
+      cancelAutosave(mode);
+      void queueProjectSave(mode, current).catch(() => {});
+    }
+    lineage[mode] += 1;
+  }
+  // An edit stamps the draft; a book opened from the library keeps its stamp.
+  const edited = autosave ? { editedAt: Math.max(Date.now(), current.editedAt + 1) } : {};
   const next = {
     ...longformSession.state.drafts,
-    [mode]: { ...longformSession.state.drafts[mode], ...value },
+    [mode]: { ...current, ...value, ...edited },
   };
   patch({ drafts: next });
   storage.queueJsonWrite(key, () => longformSession.state.drafts);
+  if (autosave && !autosaveSuspended) scheduleAutosave(mode);
 }
 
 /** Prevent queued and pagehide writes from recreating a draft during a confirmed data reset. */
 export function clearLongformDraftForReset(): void {
+  autosaveSuspended = true;
+  for (const mode of MODES) cancelAutosave(mode);
   storage.suspendJsonWrites((candidate) => candidate === key);
   localStorage.removeItem(key);
+}
+
+// ── The library: auto-save and switching books ──────────────────────────────
+
+const MODES = ['stories', 'audiobook'] as const;
+/** How long the editor waits after the last edit before saving the book. */
+export const AUTOSAVE_DELAY_MS = 1000;
+const autosaveTimers: Record<Mode, ReturnType<typeof setTimeout> | null> = {
+  stories: null,
+  audiobook: null,
+};
+const saveChains: Record<Mode, Promise<unknown>> = {
+  stories: Promise.resolve(),
+  audiobook: Promise.resolve(),
+};
+/** Bumped whenever another book replaces a mode's draft. */
+const lineage: Record<Mode, number> = { stories: 0, audiobook: 0 };
+let autosaveSuspended = false;
+let adoption: Promise<void> | null = null;
+
+/** Whether a draft holds anything worth a project: text, a title or a finished file. */
+export function hasContent(mode: Mode, draft: Draft): boolean {
+  return scriptSize(mode, draft) > 0 || !!draft.title.trim() || !!draft.output;
+}
+
+function setSaveState(mode: Mode, state: ProjectSaveState, error: string | null = null) {
+  const s = longformSession.state;
+  if (s.saving[mode] === state && s.saveError[mode] === error) return;
+  patch({ saving: { ...s.saving, [mode]: state }, saveError: { ...s.saveError, [mode]: error } });
+}
+
+function cancelAutosave(mode: Mode) {
+  const timer = autosaveTimers[mode];
+  if (timer) clearTimeout(timer);
+  autosaveTimers[mode] = null;
+}
+
+function scheduleAutosave(mode: Mode) {
+  cancelAutosave(mode);
+  if (!claimProjectId(mode)) return;
+  setSaveState(mode, 'saving');
+  autosaveTimers[mode] = setTimeout(() => {
+    autosaveTimers[mode] = null;
+    void saveLongformProject(mode).catch(() => {});
+  }, AUTOSAVE_DELAY_MS);
+}
+
+/** "Untitled book 3": the first number no project of this mode is named with. */
+function untitledName(mode: Mode, taken: string[]): string {
+  const names = new Set(taken);
+  const label = (n: number) =>
+    tr(mode === 'audiobook' ? 'library.untitled_book' : 'library.untitled_story', { n });
+  let n = 1;
+  while (n <= taken.length && names.has(label(n))) n += 1;
+  return label(n);
+}
+
+function linkDraft(mode: Mode, projectId: string | null) {
+  const drafts = longformSession.state.drafts;
+  patch({ drafts: { ...drafts, [mode]: { ...drafts[mode], projectId } } });
+  storage.queueJsonWrite(key, () => longformSession.state.drafts);
+}
+
+/**
+ * The id of the open book's project — given at once, on the first edit that
+ * puts something in a new book, so a render started a moment later already
+ * names its project; the project itself is written by the save. Null while
+ * the draft is empty and has none.
+ */
+function claimProjectId(mode: Mode): string | null {
+  const draft = longformSession.state.drafts[mode];
+  if (draft.projectId) return draft.projectId;
+  if (!hasContent(mode, draft)) return null;
+  const id = crypto.randomUUID();
+  linkDraft(mode, id);
+  return id;
+}
+
+/**
+ * Saves `snapshot` into its project, creating the project the first time
+ * (named from the title, or "Untitled book N"). One save at a time per mode.
+ */
+function queueProjectSave(mode: Mode, snapshot: Draft): Promise<void> {
+  // A save started for a book that another book has replaced since then
+  // still lands in its own project, but no longer speaks for the editor.
+  const generation = lineage[mode];
+  const current = () => lineage[mode] === generation;
+  const run = saveChains[mode].then(async () => {
+    try {
+      const id = snapshot.projectId ?? crypto.randomUUID();
+      const draft = { ...snapshot, projectId: id };
+      try {
+        await projectLibrary.save(id, draft);
+      } catch (error) {
+        if (!(error instanceof ProjectMissingError)) throw error;
+        // New (or removed elsewhere while open): the text is kept as a project.
+        if (!hasContent(mode, draft)) {
+          if (current()) {
+            linkDraft(mode, null);
+            if (!autosaveTimers[mode]) setSaveState(mode, 'idle');
+          }
+          return;
+        }
+        const taken = (await projectLibrary.list()).map((project) => project.name);
+        const name = draft.title.trim() || untitledName(mode, taken);
+        await projectLibrary.create(mode, draft, name, { autoName: true, id });
+      }
+      if (current() && !autosaveTimers[mode]) setSaveState(mode, 'saved');
+      void queryClient.invalidateQueries({ queryKey: ['longform-projects'] });
+    } catch (error) {
+      if (current())
+        setSaveState(mode, 'error', error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  });
+  saveChains[mode] = run.catch(() => {});
+  return run;
+}
+
+/** Saves the open project of `mode` now; rejects when it could not be saved. */
+export function saveLongformProject(mode: Mode): Promise<void> {
+  cancelAutosave(mode);
+  claimProjectId(mode);
+  return queueProjectSave(mode, longformSession.state.drafts[mode]);
+}
+
+/** Saves every open project with edits still waiting for the auto-save. */
+export function flushLongformProjects(): Promise<void> {
+  return Promise.all(
+    MODES.map((mode) =>
+      autosaveTimers[mode] ? saveLongformProject(mode).catch(() => {}) : saveChains[mode],
+    ),
+  ).then(() => undefined);
+}
+
+/**
+ * Bring the working copy of each open book (kept in localStorage) and its
+ * project together, once per app start. The library is the durable copy and
+ * the working copy can lag behind it — a write over the storage quota fails
+ * and leaves the old value, a crash loses writes the library already has —
+ * so the working copy wins only with an edit newer than the project's.
+ *
+ * Once, the drafts kept from before the library join it: a draft opened from
+ * (or saved as) a project updates that project — never a duplicate — and one
+ * that never was becomes a new project. Afterwards a working copy never
+ * overwrites a project on its own say.
+ */
+export function adoptLongformDrafts(): Promise<void> {
+  return (adoption ??= (async () => {
+    const adopted = await projectLibrary.draftsAdopted();
+    let legacy = false;
+    for (const mode of MODES) if (await reconcileDraft(mode, adopted)) legacy = true;
+    if (legacy) await projectLibrary.markDraftsAdopted();
+  })().catch((error) => {
+    adoption = null;
+    throw error;
+  }));
+}
+
+/** One mode's half of `adoptLongformDrafts`; true when a draft from before the library joined it. */
+async function reconcileDraft(mode: Mode, adopted: boolean): Promise<boolean> {
+  const draft = longformSession.state.drafts[mode];
+  // Edits made since the app started are on their way to the library already.
+  if (autosaveTimers[mode]) return false;
+  const legacy = !adopted && draft.editedAt === 0;
+  const id = draft.projectId;
+  if (!id) {
+    if (!legacy || !hasContent(mode, draft)) return false;
+    await saveLongformProject(mode);
+    return true;
+  }
+  const project = await projectLibrary.get(id).catch(() => null);
+  // Edited or replaced while the library was read: that edit is the newest.
+  if (longformSession.state.drafts[mode] !== draft || autosaveTimers[mode]) return false;
+  const stored = project && !legacy ? restoreDraft(project.draft) : null;
+  if (stored && stored.editedAt >= draft.editedAt) {
+    // The project is as new as the working copy, or newer: it is the book.
+    const same = await projectLibrary.sameDraft(id, draft);
+    if (!same && longformSession.state.drafts[mode] === draft)
+      updateDraft(mode, { ...stored, projectId: id }, false);
+    setSaveState(mode, 'saved');
+    return false;
+  }
+  if (legacy && project && (await projectLibrary.sameDraft(id, draft))) setSaveState(mode, 'saved');
+  // Newer edits than the project's, or a book whose project was never written.
+  else await saveLongformProject(mode);
+  return legacy;
+}
+// As the app starts, before the open books are shown for editing.
+void adoptLongformDrafts().catch(() => {});
+
+/** Every project of the library, newest edit first, after the working drafts joined it. */
+export async function listLongformProjects(): Promise<LongformProjectMeta[]> {
+  await adoptLongformDrafts();
+  return projectLibrary.list();
+}
+
+/** Why the open book of `mode` cannot be switched now, or null. */
+export function switchBlocker(mode: Mode): string | null {
+  return longformSession.state.active === mode ? tr('library.busy_rendering') : null;
+}
+
+function assertCanSwitch(mode: Mode) {
+  const reason = switchBlocker(mode);
+  if (reason) throw new Error(reason);
+}
+
+/** Settings a new book starts with: how the last one was read, not what it said. */
+function newDraft(mode: Mode): Draft {
+  const current = longformSession.state.drafts[mode];
+  return {
+    ...blankLongformDraft(),
+    voice: current.voice,
+    language: current.language,
+    format: current.format,
+    overrides: { ...current.overrides },
+    globalSpeed: current.globalSpeed,
+  };
+}
+
+/** A finished render to show with a book it is opened in. */
+export interface RenderOutput {
+  output: string;
+  /** Its chapters, when the project did not keep what it was shown with. */
+  chapters?: AudiobookRenderChapter[];
+}
+
+type OutputDetails = Pick<
+  Draft,
+  'outputScript' | 'outputChapters' | 'outputCachedChapters' | 'outputFailedChapters'
+>;
+const outputDetails = (draft: Draft): OutputDetails => ({
+  outputScript: draft.outputScript,
+  outputChapters: draft.outputChapters,
+  outputCachedChapters: draft.outputCachedChapters,
+  outputFailedChapters: draft.outputFailedChapters,
+});
+
+/**
+ * Before another finished file takes the place of the one `draft` shows, the
+ * project keeps what that one was shown with (script, chapters), so opening
+ * it again brings them back. Best-effort: losing them costs no audio.
+ */
+function keepShownRender(draft: Draft): Promise<void> {
+  if (!draft.projectId || !draft.output) return Promise.resolve();
+  return projectLibrary
+    .keepRender(draft.projectId, draft.output, outputDetails(draft))
+    .catch(() => {});
+}
+
+/** What a project kept about one of its renders, checked; null when it kept nothing usable. */
+async function keptRender(id: string, output: string): Promise<OutputDetails | null> {
+  const kept = await projectLibrary.renderDetails(id, output).catch(() => null);
+  const draft = kept && restoreDraft({ ...kept, script: '', lines: [] });
+  return draft ? outputDetails(draft) : null;
+}
+
+/**
+ * Open a library project in its editor, after the open book of that mode is
+ * saved; with `render`, that finished file is the one shown. Refused (with
+ * the reason) while that mode renders. Resolves to the project's mode.
+ */
+export async function openLongformProject(id: string, render?: RenderOutput): Promise<Mode> {
+  await adoptLongformDrafts();
+  const project = await projectLibrary.get(id);
+  if (!project) throw new Error(tr('library.missing'));
+  const mode = project.mode;
+  assertCanSwitch(mode);
+  if (longformSession.state.drafts[mode].projectId !== id) {
+    const draft = restoreDraft(project.draft);
+    if (!draft) throw new Error(tr('library.unreadable'));
+    await saveLongformProject(mode);
+    assertCanSwitch(mode);
+    updateDraft(mode, { ...draft, projectId: id }, false);
+    setSaveState(mode, 'saved');
+  }
+  const open = longformSession.state.drafts[mode];
+  if (render?.output && render.output !== open.output) {
+    // The render shown until now, and the one opened, each keep their details.
+    const kept = await keptRender(id, render.output);
+    await keepShownRender(open);
+    if (longformSession.state.drafts[mode].projectId === id)
+      updateDraft(mode, {
+        output: render.output,
+        ...(kept ?? {
+          outputScript: '',
+          outputChapters: render.chapters ?? [],
+          outputCachedChapters: 0,
+          outputFailedChapters: 0,
+        }),
+      });
+  }
+  return mode;
+}
+
+/** Start a new, empty book in `mode`; it becomes a project on its first edit. */
+export async function newLongformProject(mode: Mode): Promise<void> {
+  assertCanSwitch(mode);
+  await saveLongformProject(mode);
+  assertCanSwitch(mode);
+  updateDraft(mode, { ...newDraft(mode), projectId: null }, false);
+  setSaveState(mode, 'idle');
+}
+
+/** Create a project from a draft that is not in the library (a render's book) and open it. */
+export async function createLongformProject(
+  mode: Mode,
+  draft: Partial<Draft>,
+  name: string,
+): Promise<Mode> {
+  assertCanSwitch(mode);
+  const taken = (await listLongformProjects()).map((project) => project.name);
+  const meta = await projectLibrary.create(
+    mode,
+    { ...blankLongformDraft(), ...draft, projectId: null },
+    name.trim() || untitledName(mode, taken),
+  );
+  return openLongformProject(meta.id);
+}
+
+export async function renameLongformProject(id: string, name: string): Promise<void> {
+  await projectLibrary.rename(id, name);
+  void queryClient.invalidateQueries({ queryKey: ['longform-projects'] });
+}
+
+/** Copy a project (the open one as it stands now) under a new name; the copy is not opened. */
+export async function duplicateLongformProject(id: string, name: string) {
+  for (const mode of MODES)
+    if (longformSession.state.drafts[mode].projectId === id) await saveLongformProject(mode);
+  const meta = await projectLibrary.duplicate(id, name);
+  void queryClient.invalidateQueries({ queryKey: ['longform-projects'] });
+  return meta;
+}
+
+/**
+ * Delete a project from the library. Its rendered audio files are not
+ * touched. The open book of a mode, once deleted, gives way to a new empty one.
+ */
+export async function deleteLongformProject(id: string): Promise<void> {
+  const mode = MODES.find((m) => longformSession.state.drafts[m].projectId === id);
+  if (mode) {
+    assertCanSwitch(mode);
+    cancelAutosave(mode);
+    lineage[mode] += 1;
+    await saveChains[mode];
+  }
+  await projectLibrary.remove(id);
+  if (mode && longformSession.state.drafts[mode].projectId === id) {
+    cancelAutosave(mode);
+    updateDraft(mode, { ...newDraft(mode), projectId: null }, false);
+    setSaveState(mode, 'idle');
+  }
+  void queryClient.invalidateQueries({ queryKey: ['longform-projects'] });
 }
 let controller: AbortController | null = null;
 export function stopLongform() {
@@ -281,7 +691,11 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
   let done = false;
   let outputChapters: AudiobookRenderChapter[] = [];
   try {
+    // The book is saved as it starts rendering, and the render names its project.
+    if (!resumeId) void saveLongformProject(mode).catch(() => {});
     const draft = longformSession.state.drafts[mode];
+    // The book this render belongs to: its file goes to that book only.
+    const owner = draft.projectId;
     if (
       !resumeId &&
       !cachedTtsLanguagesSupported(queryClient, mode === 'stories' ? 'longform' : 'audiobook', [
@@ -302,7 +716,10 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
         ...(resumeId
           ? {}
           : {
-              body: JSON.stringify(renderBody(mode, draft)),
+              body: JSON.stringify({
+                ...renderBody(mode, draft),
+                ...(draft.projectId ? { project_id: draft.projectId } : {}),
+              }),
               headers: { 'Content-Type': 'application/json' },
             }),
       },
@@ -333,7 +750,10 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
           const index = Number(event.index);
           if (Number.isInteger(index) && index >= 0 && index < outputChapters.length)
             outputChapters[index] = {
-              title: typeof event.title === 'string' ? event.title : '',
+              // An untitled chapter's title is the render's English "Chapter N":
+              // left blank, every list names it in the app's language.
+              title: typeof event.title === 'string' && event.untitled !== true ? event.title : '',
+              ...(event.untitled === true ? { untitled: true } : {}),
               status: event.type === 'chapter_error' ? 'failed' : event.cached ? 'cached' : 'done',
               ...(Number.isFinite(Number(event.duration_s))
                 ? { duration_s: Number(event.duration_s) }
@@ -342,6 +762,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
                 ? { duration_ms: Number(event.duration_ms) }
                 : {}),
               ...(suspectPhrases(event).length ? { suspects: suspectPhrases(event) } : {}),
+              ...(chapterLevels(event) ? { levels: chapterLevels(event) } : {}),
               ...(event.type === 'chapter_error'
                 ? {
                     error:
@@ -374,13 +795,17 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
           const failed = Array.isArray(event.failed_chapters)
             ? event.failed_chapters.length
             : Number(event.failed_chapters) || 0;
-          updateDraft(mode, {
-            output: event.output,
-            outputScript: mode === 'audiobook' && !resumeId ? draft.script : '',
-            outputChapters: outputChapters.map((chapter) => ({ ...chapter })),
-            outputCachedChapters: Number(event.cached_chapters) || 0,
-            outputFailedChapters: failed,
-          });
+          const shown = longformSession.state.drafts[mode];
+          if (shown.projectId === owner) {
+            void keepShownRender(shown);
+            updateDraft(mode, {
+              output: event.output,
+              outputScript: mode === 'audiobook' && !resumeId ? draft.script : '',
+              outputChapters: outputChapters.map((chapter) => ({ ...chapter })),
+              outputCachedChapters: Number(event.cached_chapters) || 0,
+              outputFailedChapters: failed,
+            });
+          }
           patch({
             failed,
           });
@@ -398,6 +823,39 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
       controller = null;
       patch({ active: null, stage: '' });
     }
+  }
+}
+
+/** An interrupted render as `GET /audiobook/jobs` lists it (the fields resuming reads). */
+export interface ResumableRender {
+  job_id: string;
+  title?: string;
+  /** The library project it renders; renders started before the library name none. */
+  project_id?: string | null;
+}
+
+/**
+ * Resume an interrupted render into the book it belongs to: its project is
+ * opened first (the open book saved), so the finished file never lands in
+ * another book. A render that names no project (started before the library,
+ * or its project since deleted) finishes in a new book of its own.
+ */
+export async function resumeLongform(mode: Mode, job: ResumableRender): Promise<void> {
+  if (controller) return;
+  patch({ error: null, failure: null });
+  try {
+    const owner = job.project_id || null;
+    const isOpen = owner !== null && longformSession.state.drafts[mode].projectId === owner;
+    let target = mode;
+    if (!isOpen && owner && (await projectLibrary.get(owner).catch(() => null)))
+      target = await openLongformProject(owner);
+    else if (!isOpen) {
+      await newLongformProject(mode);
+      if (job.title?.trim()) updateDraft(mode, { title: job.title.trim() });
+    }
+    await renderLongform(target, job.job_id);
+  } catch (error) {
+    patch({ error: error instanceof Error ? error.message : String(error) });
   }
 }
 

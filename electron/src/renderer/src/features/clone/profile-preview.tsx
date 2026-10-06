@@ -98,6 +98,7 @@ export function ProfilePreview({
         disabled={busy}
         onChange={(event) => setText(event.target.value)}
         placeholder={t('voice_profile.test_placeholder')}
+        spellCheck={false}
         className="w-full resize-y rounded-md border border-input bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <Button

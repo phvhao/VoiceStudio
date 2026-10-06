@@ -38,6 +38,8 @@ import {
   DELIVERY_TAGS,
   PAUSE_PRESETS,
   VOICE_RESET_TOKEN,
+  VOLUME_CLOSE,
+  VOLUME_PRESETS,
   applyVoice,
   countHeadings,
   deliveryKind,
@@ -50,6 +52,7 @@ import {
   pronounceSelection,
   replaceRange,
   tokenAround,
+  volumeToken,
   wrapSelection,
   type DeliveryTag,
   type MarkupEdit,
@@ -209,6 +212,28 @@ function ExpressionItems({ choose }: { choose(tag: string): void }) {
   });
 }
 
+/** The `[volume]` steps to read a passage at, the current one checked. */
+function VolumeItems({ current, choose }: { current: number; choose(db: number): void }) {
+  const { t } = useTranslation();
+  const gainText = useVoiceGainText();
+  return (
+    <ContextMenu.RadioGroup
+      value={String(current)}
+      onValueChange={(value: string) => {
+        if (Number(value) !== current) choose(Number(value));
+      }}
+    >
+      {VOLUME_PRESETS.map((preset) => (
+        <Choice
+          key={preset.id}
+          value={String(preset.db)}
+          label={`${t(preset.label)} (${gainText(preset.db)})`}
+        />
+      ))}
+    </ContextMenu.RadioGroup>
+  );
+}
+
 /** A voice's volume in 1 dB steps, the menu kept open between them. */
 function VolumeSubmenu({
   gain,
@@ -253,6 +278,9 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
   const section = name === null ? null : act.section();
   const reads = section !== null && section[0] < section[1];
   const kind = deliveryKind(token.text);
+  // A `[volume]` passage's gain, from its opening tag.
+  const passage = token.kind === 'volume' ? act.volume() : null;
+  const gainText = useVoiceGainText();
   // A voice tag has its voice's volume; `[voice:]` the default voice's, except
   // in Stories, where it returns to each line's own voice.
   const volume = token.kind === 'voice' || (token.kind === 'voiceReset' && !act.toLine);
@@ -353,6 +381,15 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
           </ContextMenu.RadioGroup>
         </Submenu>
       )}
+      {passage !== null && (
+        <Submenu
+          icon={<Volume2Icon />}
+          label={t('editor.change_volume')}
+          hint={gainText(passage)}
+        >
+          <VolumeItems current={passage} choose={act.setVolume} />
+        </Submenu>
+      )}
       {token.kind === 'pronunciation' && (
         <Item
           icon={<PencilLineIcon />}
@@ -363,7 +400,7 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
       <Item
         icon={<Trash2Icon />}
         label={
-          token.kind === 'delivery'
+          token.kind === 'delivery' || token.kind === 'volume'
             ? t('context.remove_markup')
             : token.kind === 'pronunciation'
               ? t('context.keep_word')
@@ -401,6 +438,7 @@ export function MarkupContextMenu({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const gainText = useVoiceGainText();
   const { getTarget, headings = false, voiceCast, onVoiceCast } = tools;
   const [token, setToken] = useState<MarkupToken | null>(null);
   const [selection, setSelection] = useState(false);
@@ -512,6 +550,20 @@ export function MarkupContextMenu({
                   onClick={() =>
                     run((value, start, end) =>
                       wrapSelection(value, start, end, `[${tag}]`, `[/${tag}]`),
+                    )
+                  }
+                />
+              ))}
+            </Submenu>
+            <Submenu icon={<Volume2Icon />} label={t('editor.volume_wrap')}>
+              {VOLUME_PRESETS.map((preset) => (
+                <Item
+                  key={preset.id}
+                  label={t(preset.label)}
+                  hint={gainText(preset.db)}
+                  onClick={() =>
+                    run((value, start, end) =>
+                      wrapSelection(value, start, end, volumeToken(preset.db), VOLUME_CLOSE),
                     )
                   }
                 />

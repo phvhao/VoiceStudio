@@ -169,34 +169,42 @@ try {
   );
   assert.equal(await page.getByLabel('Author', { exact: true }).inputValue(), 'Test author');
   assert.equal(await page.getByLabel('Word', { exact: true }).inputValue(), 'SQL');
+  // The book saved itself as it was written: the header names it, and its
+  // library (search, new, rename, duplicate, delete) opens from there.
+  const library = page.getByRole('button', { name: /\u2014 Open the library$/ });
   await page
-    .locator('[data-slot=secondary-sidebar]')
-    .getByText('Projects', { exact: true })
-    .click();
-  await page.getByLabel('Project name', { exact: true }).fill('Saved book fixture');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await page.getByRole('button', { name: 'Saved book fixture', exact: true }).waitFor();
-  await page.getByRole('textbox', { name: 'Script', exact: true }).fill('Unsaved edit');
+    .getByRole('status')
+    .filter({ hasText: /^Saved$/ })
+    .waitFor();
+  await library.click();
+  let books = page.getByRole('dialog');
+  await books.getByRole('button', { name: /^Rename / }).click();
+  await books.getByLabel('Project name', { exact: true }).fill('Saved book fixture');
+  await books.getByRole('button', { name: 'Save name', exact: true }).click();
+  await books.getByRole('button', { name: /^Saved book fixture/ }).waitFor();
+  // A new book leaves the first one in the library, saved as it was.
+  await books.getByRole('button', { name: 'New book', exact: true }).click();
+  await books.waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('textbox', { name: 'Script', exact: true }).inputValue(), '');
+  await page.getByRole('textbox', { name: 'Script', exact: true }).fill('A second book');
+  await page.getByRole('button', { name: /^Untitled book 1 \u2014/ }).waitFor();
   await page.goto((process.env.VOICESTUDIO_UI_URL || 'http://localhost:3902') + '/#/projects');
   await page.getByRole('button', { name: 'Rename Saved book fixture', exact: true }).click();
   await page.getByLabel('Project name', { exact: true }).fill('Renamed book fixture');
   await page.getByRole('button', { name: 'Save name', exact: true }).click();
   await page.getByRole('button', { name: 'Renamed book fixture', exact: true }).waitFor();
   await page.reload();
+  // Opening a book needs no confirmation: the open one is saved first.
   await page.getByRole('button', { name: 'Renamed book fixture', exact: true }).click();
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
   await page.waitForFunction(() =>
     document.querySelector('textarea[aria-label="Script"]')?.value.includes('[voice:Mara]'),
   );
-  await page
-    .locator('[data-slot=secondary-sidebar]')
-    .getByText('Projects', { exact: true })
-    .click();
-  await page.getByRole('button', { name: 'Delete Renamed book fixture', exact: true }).click();
-  await page.getByRole('button', { name: 'Confirm', exact: true }).click();
-  await page
-    .getByRole('button', { name: 'Renamed book fixture', exact: true })
-    .waitFor({ state: 'detached' });
+  await library.click();
+  books = page.getByRole('dialog');
+  await books.getByRole('button', { name: 'Delete Untitled book 1', exact: true }).click();
+  await books.getByRole('alertdialog').getByRole('button', { name: 'Delete', exact: true }).click();
+  await books.getByRole('button', { name: /^Untitled book 1/ }).waitFor({ state: 'detached' });
+  await page.keyboard.press('Escape');
   // Stories is a group in the workspace navigation: an inline list, or a
   // flyout while the rail is compact beside the audiobook sidebar.
   const storiesGroup = page

@@ -189,6 +189,7 @@ function ToolForm({ tool }: { tool: Tool }) {
             className="min-h-36 w-full resize-y rounded-lg border border-input bg-transparent p-3 leading-7 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             disabled={busy}
             value={text}
+            spellCheck={tool.id !== 'rate-fit'}
             onChange={(event) => {
               setText(event.target.value);
               setResult(null);

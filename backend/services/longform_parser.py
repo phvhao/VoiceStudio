@@ -1,7 +1,7 @@
 """Canonical longform marker parser (#27) — the single source of grammar truth.
 
 The longform marker dialect (``# heading``, ``[voice:NAME]``, ``[pause …]``,
-``[slow]/[fast]/[emphasis]/[spell]``) was parsed by three independent code
+``[slow]/[fast]/[emphasis]/[spell]``, ``[volume -6dB]``) was parsed by three independent code
 paths that disagreed (client/server/regex-level). This module is the one
 canonical Python parser; ``electron/src/shared/utils/longformParser.js`` is its
 mechanically-mirrored JS twin, and ``tests/fixtures/longform_parser_cases.json``
@@ -43,6 +43,19 @@ _VOICE_RE = re.compile(r"\[voice:([^\]\[]*)\]")
 # A blank line (paragraph break). Linear: one ``\n``, a run of inline
 # whitespace, one ``\n`` — no nested quantifiers.
 _BLANK_LINE_RE = re.compile(r"\n[ \t\r]*\n")
+#: Stands in, inside the whitespace between two texts, for markup the parser
+#: took out there: a line holding only ``[pause]`` or ``[voice:B]`` is a line,
+#: not a blank one.
+LAYOUT_MARK = "\x00"
+
+
+def layout_break(gap: str) -> Optional[str]:
+    """How the text after ``gap`` (the whitespace before it, markup as
+    :data:`LAYOUT_MARK`) starts: ``"paragraph"`` after a blank line, ``"line"``
+    after a line break, ``None`` on the same line."""
+    if _BLANK_LINE_RE.search(gap):
+        return "paragraph"
+    return "line" if "\n" in gap else None
 
 
 def _normalize(text: Optional[str]) -> str:
@@ -88,50 +101,85 @@ def _parse_chapter_body(
 
 def _runs_to_spans(
     runs: list[tuple[Optional[str], str]], default_speed: Optional[float],
+    layout: Optional[dict] = None,
 ) -> list[dict]:
-    """Pause→SSML layering of voice runs into span dicts."""
+    """Pause→SSML layering of voice runs into span dicts.
+
+    ``layout`` (``{"gap": str, "seen": bool}``, carried across calls for one
+    chapter) asks for ``break_before`` on each span that starts a new line
+    (``"line"``) or paragraph (``"paragraph"``) of the script: the whitespace
+    since the previous text, whatever markup sat in it, decides
+    (:func:`layout_break`). Only the reader's layout reads it."""
     spans: list[dict] = []
     from services.ssml_lite import parse_ssml_lite, spell_out
 
     for voice, run_text in runs:
         for span_text, pause_ms in parse_pause_markers(run_text):
+            if layout is not None:
+                # A voice tag or a pause marker ends every run and piece.
+                layout["gap"] += LAYOUT_MARK
             t = span_text.strip()
             if not t and pause_ms == 0:
+                if layout is not None:
+                    layout["gap"] += span_text
                 continue  # pure whitespace between markers — nothing to render
-            # (text, speed, paragraph_break_before). The whitespace BETWEEN two
-            # kept segments is tracked so a blank line that happens to sit on a
-            # markup boundary still ends the line instead of being swallowed.
-            rendered: list[tuple[str, Optional[float], bool]] = []
+            # (text, speed, paragraph_break_before, gain_db). The whitespace
+            # BETWEEN two kept segments is tracked so a blank line that happens
+            # to sit on a markup boundary still ends the line instead of being
+            # swallowed.
+            rendered: list[tuple[str, Optional[float], bool, Optional[float]]] = []
             between = ""
+            # The layout gap before each kept segment (SSML tags as marks).
+            gaps: list[str] = []
+            gap = (layout["gap"] + span_text[:len(span_text) - len(span_text.lstrip())]
+                   if layout is not None else "")
             for seg in (parse_ssml_lite(t) if t else []):
                 raw = seg["text"]
                 st = (spell_out(raw) if seg["spell"] else raw).strip()
+                gap += LAYOUT_MARK
                 if not st:
                     between += raw
+                    gap += raw
                     continue
                 # Inline SSML speed overrides the per-line default; a plain
                 # segment inherits default_speed.
                 sp = seg["speed"] if seg["speed"] is not None else default_speed
                 lead = raw[:len(raw) - len(raw.lstrip())]
-                rendered.append((st, sp, bool(_BLANK_LINE_RE.search(between + lead))))
+                rendered.append((st, sp, bool(_BLANK_LINE_RE.search(between + lead)),
+                                 seg.get("gain_db")))
+                gaps.append(gap + lead)
                 between = raw[len(raw.rstrip()):]
+                gap = between
+            if layout is not None:
+                layout["gap"] = gap + span_text[len(span_text.rstrip()):] if t else gap
             if not rendered:
                 # Only-markers / empty text but a real pause → carry the silence.
                 if pause_ms > 0:
                     spans.append({"voice_id": voice, "text": "",
                                   "pause_ms_after": pause_ms, "speed": None})
                 continue
-            for j, (st, sp, _brk) in enumerate(rendered):
+            for j, (st, sp, _brk, gain) in enumerate(rendered):
                 span = {
                     "voice_id": voice, "text": st,
                     "pause_ms_after": pause_ms if j == len(rendered) - 1 else 0,
                     "speed": sp,
                 }
+                if gain:
+                    # A [volume] passage: its gain in dB, applied after voice
+                    # leveling. Key present only here — every other span (and
+                    # so every cache key of a script without the tag) is
+                    # byte-identical.
+                    span["gain_db"] = gain
                 if j < len(rendered) - 1:
                     # Inline markup split one run of text. Say how this span
                     # joins the next: straight on, or across a blank line. Key
                     # present only here — plain scripts parse byte-identically.
                     span["join"] = "paragraph" if rendered[j + 1][2] else "continue"
+                if layout is not None:
+                    brk = layout_break(gaps[j]) if layout["seen"] else None
+                    if brk:
+                        span["break_before"] = brk
+                    layout["seen"] = True
                 spans.append(span)
     return spans
 
@@ -156,6 +204,7 @@ def _parse_sectioned_body(
     *,
     default_voice: Optional[str] = None,
     default_speed: Optional[float] = None,
+    layout: bool = False,
 ) -> list[dict]:
     """One Audiobook chapter body, ``##``/``###`` section headings included.
 
@@ -166,19 +215,21 @@ def _parse_sectioned_body(
     paragraph break (``join: "paragraph"``). The voice runs on across it, and
     so does a delivery tag open around it (``[slow]`` … ``## Part`` …
     ``[/slow]``), as if the heading were ordinary text. Without a heading this
-    is exactly :func:`_parse_chapter_body`."""
+    is exactly :func:`_parse_chapter_body`. ``layout`` adds ``break_before``
+    (:func:`_runs_to_spans`); a heading is a paragraph of its own there too."""
     spans: list[dict] = []
     voice = default_voice
     pending: Optional[tuple[str, int]] = None
     breaks: set[int] = set()
     carry = ""
+    state = {"gap": "", "seen": False} if layout else None
 
     def add(text: str, heading: Optional[tuple[str, int]] = None) -> None:
         nonlocal voice, pending, carry
         text = carry + text
         carry = _open_delivery(text)
         runs, voice = _voice_runs(text, default_voice, voice)
-        block = _runs_to_spans(runs, default_speed)
+        block = _runs_to_spans(runs, default_speed, state)
         if heading is not None:
             if spans:
                 breaks.add(len(spans) - 1)
@@ -202,6 +253,12 @@ def _parse_sectioned_body(
         if (i < len(spans) - 1 and span["text"] and not span["pause_ms_after"]
                 and "join" not in span):
             span["join"] = "paragraph"
+    if layout:
+        for i in sorted(breaks):
+            # The first text after a heading boundary opens a paragraph.
+            after = next((k for k in range(i + 1, len(spans)) if spans[k]["text"]), None)
+            if after is not None and any(spans[k]["text"] for k in range(after)):
+                spans[after]["break_before"] = "paragraph"
     return spans
 
 
@@ -210,12 +267,14 @@ def parse_script_to_spans(
     *,
     default_voice: Optional[str] = None,
     default_speed: Optional[float] = None,
+    layout: bool = False,
 ) -> list[dict]:
     """Parse a chapter-delimited script into ``[{"title", "spans": [...]}, …]``.
 
     span dict == ``{"voice_id": str|None, "text": str, "pause_ms_after": int,
     "speed": float|None}`` (key order matches ``Span.to_dict()``), plus
-    ``join`` / ``section`` / ``section_level`` only where they apply.
+    ``gain_db`` / ``join`` / ``section`` / ``section_level`` only where they
+    apply (``gain_db``: the dB a ``[volume]`` passage is moved by).
 
     Contract:
       * None / "" / whitespace-only input → ``[]``.
@@ -230,6 +289,11 @@ def parse_script_to_spans(
         numbered ``Chapter {kept_so_far + 1}`` (post-drop numbering) and
         carry ``untitled: True``, so a reader can name them in its own
         language (key present only there).
+      * ``layout=True`` (Python only — the server builds the reader's
+        timeline) adds ``break_before: "line" | "paragraph"`` to each span
+        that starts a new line or paragraph of the script, never to the
+        first text of a chapter. It is display only: synthesis and every
+        cache key ignore it, and the golden corpus parses without it.
     """
     text = _normalize(text)
     matches = list(_HEADING_RE.finditer(text))
@@ -247,7 +311,7 @@ def parse_script_to_spans(
     chapters: list[dict] = []
     for title, body in raw:
         spans = _parse_sectioned_body(body, default_voice=default_voice,
-                                      default_speed=default_speed)
+                                      default_speed=default_speed, layout=layout)
         if not spans:
             continue
         chapter = {"title": title or f"Chapter {len(chapters) + 1}", "spans": spans}

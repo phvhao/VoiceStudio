@@ -64,8 +64,9 @@ response-body progress takes over when audio delivery begins.
 
 The voice selector labels the active voice explicitly. Voice sample opens its
 reference pane, and an empty script prompts with the selected voice name.
-Paste and Insert remain secondary actions; Insert explains expression tokens
-in its accessible label and tooltip. These refinements preserve the anchored layout.
+Paste and Insert remain secondary actions; Insert offers pauses (the Audiobook
+presets and a custom length) above the expression tokens, and says so in its
+accessible label and tooltip. These refinements preserve the anchored layout.
 
 ## Reference transcription and editing
 

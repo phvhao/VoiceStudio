@@ -51,6 +51,8 @@ import { toast } from 'sonner';
 import { Link } from '@tanstack/react-router';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { ScriptInsertMenu, useScriptInsertMenu } from '@/components/script-insert-menu';
+import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { useGenerateClone } from '@/hooks/use-generate';
 import { OutputPanel } from '@/features/clone/output-panel';
 import { QualityControls } from '@/features/clone/quality-controls';
@@ -89,6 +91,9 @@ export function DesignPage() {
   const client = useQueryClient();
   const profiles = useProfiles();
   const savedProfilesRef = useRef<HTMLDetailsElement>(null);
+  const scriptRef = useRef<HTMLTextAreaElement>(null);
+  const insert = useScriptInsertMenu(scriptRef);
+  const setScript = (text: string) => setDraft((current) => ({ ...current, text }));
   const designProfiles = profiles.data?.filter((profile) => profile.kind === 'design') ?? [];
   // The saved voice this draft still is; any edit turns it into a new design.
   const activeProfile = linkedDesignProfile(draft, profiles.data);
@@ -495,20 +500,24 @@ export function DesignPage() {
                 setCloneSetting('language', preset.language || 'Auto');
               }}
             />
-            <label htmlFor="design-script" className="text-sm font-medium">
-              {t('clone.text_label')}
-            </label>
-            <textarea
+            <div className="flex items-center justify-between gap-3">
+              <label htmlFor="design-script" className="text-sm font-medium">
+                {t('clone.text_label')}
+              </label>
+              <ScriptInsertMenu menu={insert} setText={setScript} />
+            </div>
+            <MarkupTextarea
               id="design-script"
-              className="min-h-40 flex-1 resize-none bg-transparent text-base leading-7 outline-none"
+              textareaRef={scriptRef}
+              className="min-h-40 flex-1"
+              textClassName="text-base leading-7"
               value={draft.text}
               placeholder={t('clone.prompt_placeholder')}
-              onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  text: event.target.value,
-                }))
-              }
+              onValueChange={(text) => {
+                insert.close();
+                setScript(text);
+              }}
+              onKeyDown={insert.onEditorKeyDown}
             />
           </div>
           <div className="mx-auto w-full max-w-4xl shrink-0 px-6 pb-4">

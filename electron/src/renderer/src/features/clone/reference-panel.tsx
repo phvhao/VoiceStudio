@@ -232,6 +232,7 @@ export function OptionalDetails({
               className="min-h-16 resize-y"
               onChange={(event) => setCloneSetting('refText', event.target.value)}
               placeholder={t('clone.optional')}
+              spellCheck={false}
             />
             <p
               role="status"

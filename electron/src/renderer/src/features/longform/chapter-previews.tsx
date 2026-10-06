@@ -1,18 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { XIcon } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiJson, apiPath, describeError } from '@/lib/api/client';
 import { chapterPreviewBody, type Draft } from './longform-session';
 import { beginAppActivity } from '@/lib/app-activity';
 
+/** A rendered chapter preview: its audio, and which chapter of the plan it is. */
+export interface ChapterPreviewOutput {
+  output: string;
+  /** The plan's index of the chapter. */
+  index: number;
+  /** Its title as the render names it; `''` when the script gave it none. */
+  title: string;
+}
+
 export interface ChapterPreviewState {
   /** Render chapter `index` of the plan and hold its audio. */
   render(index: number): Promise<void>;
   pending: boolean;
-  output: { output: string; title: string } | null;
+  output: ChapterPreviewOutput | null;
   error: string | null;
   dismiss(): void;
+  /** Put the preview's audio away. */
+  close(): void;
 }
 
 /**
@@ -34,7 +47,7 @@ export function useChapterPreview(
     onRendered?: () => void;
   },
 ): ChapterPreviewState {
-  const [output, setOutput] = useState<{ output: string; title: string } | null>(null);
+  const [output, setOutput] = useState<ChapterPreviewOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const controller = useRef<AbortController | null>(null);
@@ -58,12 +71,17 @@ export function useChapterPreview(
     setPending(true);
     setError(null);
     try {
-      const preview = await apiJson<{ output: string; title: string }>('/audiobook/preview', {
-        method: 'POST',
-        body: JSON.stringify(chapterPreviewBody(draft, chapter)),
-        signal: current.signal,
-      });
-      if (!current.signal.aborted) setOutput(preview);
+      const preview = await apiJson<{ output: string; title?: string; untitled?: boolean }>(
+        '/audiobook/preview',
+        {
+          method: 'POST',
+          body: JSON.stringify(chapterPreviewBody(draft, chapter)),
+          signal: current.signal,
+        },
+      );
+      // An untitled chapter's title is the render's English "Chapter N".
+      const title = preview.untitled === true ? '' : (preview.title ?? '');
+      if (!current.signal.aborted) setOutput({ output: preview.output, index: chapter, title });
     } catch (cause) {
       if (!current.signal.aborted) setError(describeError(cause));
     } finally {
@@ -76,12 +94,33 @@ export function useChapterPreview(
       onRendered?.();
     }
   };
-  return { render, pending, output, error, dismiss: () => setError(null) };
+  return {
+    render,
+    pending,
+    output,
+    error,
+    dismiss: () => setError(null),
+    close: () => setOutput(null),
+  };
 }
 
-/** A chapter preview's progress, failure or audio. */
-export function ChapterPreview({ preview }: { preview: ChapterPreviewState }) {
+/**
+ * A chapter preview's progress, failure or audio: a compact player under the
+ * chapter's name. `label` names the chapter as the outline does; without it,
+ * the render's title, or "Chapter N" in the app's language for an untitled one.
+ */
+export function ChapterPreview({
+  preview,
+  label,
+}: {
+  preview: ChapterPreviewState;
+  label?: string;
+}) {
   const { t } = useTranslation();
+  const output = preview.output;
+  const name = output
+    ? label || output.title || t('audiobook.chapter_n', { n: output.index + 1 })
+    : '';
   return (
     <>
       {preview.pending && (
@@ -90,12 +129,26 @@ export function ChapterPreview({ preview }: { preview: ChapterPreviewState }) {
         </p>
       )}
       {preview.error && <PipelineFailure fallback={preview.error} onDismiss={preview.dismiss} />}
-      {preview.output && (
-        <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{preview.output.title}</p>
+      {output && (
+        <div data-slot="chapter-preview" className="space-y-1">
+          <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 truncate" title={name}>
+              {name}
+            </span>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label={t('common.close')}
+              onClick={preview.close}
+            >
+              <XIcon />
+            </Button>
+          </p>
           <WaveformPlayer
+            compact
             showWaveform={false}
-            src={apiPath('/audio/' + encodeURIComponent(preview.output.output))}
+            height={24}
+            src={apiPath('/audio/' + encodeURIComponent(output.output))}
             source="chapter-preview"
           />
         </div>

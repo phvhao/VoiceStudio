@@ -7,6 +7,7 @@ import {
   EllipsisIcon,
   HeadingIcon,
   ListTreeIcon,
+  PanelLeftCloseIcon,
   PencilLineIcon,
   PlayIcon,
   Trash2Icon,
@@ -34,7 +35,12 @@ import type { MarkupEdit } from './script-markup';
 export type ChapterStatus = 'rendered' | 'changed' | 'not_rendered';
 
 interface OutlineStatus {
-  chapters: Array<{ title: string; status: ChapterStatus; cached: boolean | null }>;
+  chapters: Array<{
+    title: string;
+    untitled?: boolean;
+    status: ChapterStatus;
+    cached: boolean | null;
+  }>;
   book: boolean;
 }
 
@@ -58,16 +64,29 @@ const STATUS_LABELS: Record<ChapterStatus, [label: string, hint: string]> = {
   not_rendered: ['book.status_not_rendered', 'book.hint_not_rendered'],
 };
 
+/**
+ * Why a chapter has its status, as the key of its tooltip. "Changed" means
+ * the last audiobook holds another version of the chapter: its script or the
+ * settings it is read with changed since. When that new version is already
+ * rendered on its own (cached), the next audiobook reuses it; otherwise the
+ * chapter renders again.
+ */
+export function statusHint(status: ChapterStatus, cached: boolean | null): string {
+  return status === 'changed' && cached ? 'book.hint_changed_ready' : STATUS_LABELS[status][1];
+}
+
 const MENU_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-3 py-2 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50';
 
 /**
- * The book's table of contents beside the Audiobook editor: chapters and
- * their sections, each with its length and — for chapters — whether its audio
- * is rendered for the script and settings as they are now, or changed since
- * the last book. A row moves the editor's caret to its heading; its menu
- * renames, adds or removes headings (undoable edits in the editor), and a
- * chapter renders on its own, filling the caches the full book reuses.
+ * The book's table of contents, a rail inside the Audiobook editor: chapters
+ * and their sections, each with its length and — for chapters — whether its
+ * audio is rendered for the script and settings as they are now, or changed
+ * since the last book. A row moves the editor's caret to its heading and
+ * scrolls the editor, never the page; its menu renames, adds or removes
+ * headings (undoable edits in the editor), and a chapter renders on its own,
+ * filling the caches the full book reuses. The untitled text before the first
+ * heading is the intro, never a "Chapter 1": its menu gives it a heading.
  */
 export function BookOutline({
   draft,
@@ -75,12 +94,20 @@ export function BookOutline({
   canPreview,
   onBusy,
   getTarget,
+  onCollapse,
+  onReveal,
+  className,
 }: {
   draft: Draft;
   disabled: boolean;
   canPreview: boolean;
   onBusy: (busy: boolean) => void;
   getTarget: () => MarkupTarget | null;
+  /** Fold the rail away. */
+  onCollapse?: () => void;
+  /** A row moved the editor's caret to its heading. */
+  onReveal?: () => void;
+  className?: string;
 }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -129,16 +156,21 @@ export function BookOutline({
   };
   const reveal = (node: OutlineNode) => {
     const element = getTarget()?.element;
-    if (element) revealOffset(element, node.titleStart ?? node.start);
+    if (!element) return;
+    revealOffset(element, node.titleStart ?? node.start);
+    onReveal?.();
   };
-  const titleOf = (node: OutlineNode, chapter: OutlineChapter, index: number) =>
-    node.title !== null
-      ? displayTitle(node.title) || node.title
-      : t('audiobook.chapter_n', { n: (chapter.plan ?? index) + 1 });
   const chapterCount = outline.filter((chapter) => chapter.title !== null).length;
+  // Only the text before the first heading has no title: the intro when
+  // chapters follow it, else the book's one chapter (no heading at all).
+  const untitledName =
+    chapterCount > 0 ? t('book.intro_untitled') : t('audiobook.chapter_n', { n: 1 });
+  const titleOf = (node: OutlineNode) =>
+    node.title !== null ? displayTitle(node.title) || node.title : untitledName;
+  const previewed = outline.find((chapter) => chapter.plan === preview.output?.index);
 
-  const row = (node: OutlineNode, chapter: OutlineChapter, index: number) => {
-    const title = titleOf(node, chapter, index);
+  const row = (node: OutlineNode, chapter: OutlineChapter) => {
+    const title = titleOf(node);
     const state = node.level === 1 && chapter.plan !== null ? statuses?.[chapter.plan] : undefined;
     const editing = renaming === node.start && node.title !== null;
     const actions: NodeAction[] = [];
@@ -148,6 +180,22 @@ export function BookOutline({
         icon: <PencilLineIcon />,
         label: t('book.rename'),
         run: () => setRenaming(node.start),
+      });
+    else
+      actions.push({
+        key: 'title',
+        icon: <PencilLineIcon />,
+        label: t('book.add_title'),
+        // A `# ` heading above the intro, its title selected to type over.
+        run: () =>
+          edit((text) =>
+            insertHeading(
+              text,
+              node.start,
+              1,
+              chapterCount > 0 ? t('book.intro_heading') : t('audiobook.chapter_n', { n: 1 }),
+            ),
+          ),
       });
     actions.push(
       {
@@ -186,16 +234,21 @@ export function BookOutline({
         )}
       >
         {/* The title takes the row's width; its length and status sit on a
-            line of their own under it, so a narrow sidebar still shows it. */}
+            line of their own under it, so a narrow rail still shows it. */}
         <div className="min-w-0 flex-1">
           {editing ? (
             <Input
               autoFocus
+              spellCheck={false}
               defaultValue={node.title ?? ''}
               aria-label={t('book.rename_title', { title })}
               className="h-7 w-full text-sm"
               onKeyDown={(event) => {
-                if (event.key === 'Escape') stopRenaming(node.start);
+                if (event.key === 'Escape') {
+                  // Handled: it ends the rename, not the contents around it.
+                  event.preventDefault();
+                  stopRenaming(node.start);
+                }
                 if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
                 const value = event.currentTarget.value;
                 stopRenaming(
@@ -216,6 +269,7 @@ export function BookOutline({
               className={cn(
                 'block w-full truncate rounded-sm px-1 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
                 node.level === 1 ? 'text-sm font-medium' : 'text-[13px] text-foreground/85',
+                node.title === null && 'text-muted-foreground italic',
               )}
               title={title}
               onClick={() => reveal(node)}
@@ -243,7 +297,7 @@ export function BookOutline({
                 state && (
                   <StatusBadge
                     className={STATUS_CLASSES[state.status]}
-                    title={t(STATUS_LABELS[state.status][1])}
+                    title={t(statusHint(state.status, state.cached))}
                   >
                     {t(STATUS_LABELS[state.status][0])}
                   </StatusBadge>
@@ -269,21 +323,36 @@ export function BookOutline({
   };
 
   return (
-    <details open className="space-y-2">
-      <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-        <ListTreeIcon className="size-4 text-muted-foreground" aria-hidden="true" />
-        {t('book.contents')}
-      </summary>
+    <section
+      data-slot="book-outline"
+      aria-label={t('book.contents')}
+      className={cn('flex min-h-0 flex-col gap-2', className)}
+    >
+      <div className="flex shrink-0 items-center gap-2 ps-1">
+        <ListTreeIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium">{t('book.contents')}</h2>
+        {onCollapse && (
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={t('book.hide_contents')}
+            title={t('book.hide_contents')}
+            onClick={onCollapse}
+          >
+            <PanelLeftCloseIcon />
+          </Button>
+        )}
+      </div>
       {outline.length ? (
-        <nav aria-label={t('book.contents')} className="max-h-80 overflow-y-auto">
+        <nav aria-label={t('book.contents')} className="min-h-0 flex-1 overflow-y-auto">
           <ol className="space-y-0.5">
-            {outline.map((chapter, index) => (
+            {outline.map((chapter) => (
               <li key={chapter.start}>
-                {row(chapter, chapter, index)}
+                {row(chapter, chapter)}
                 {chapter.sections.length > 0 && (
                   <ol>
                     {chapter.sections.map((section) => (
-                      <li key={section.start}>{row(section, chapter, index)}</li>
+                      <li key={section.start}>{row(section, chapter)}</li>
                     ))}
                   </ol>
                 )}
@@ -292,10 +361,12 @@ export function BookOutline({
           </ol>
         </nav>
       ) : (
-        <p className="text-xs text-muted-foreground">{t('book.empty')}</p>
+        <p className="min-h-0 flex-1 px-1 text-xs text-muted-foreground">{t('book.empty')}</p>
       )}
-      <ChapterPreview preview={preview} />
-    </details>
+      <div className="shrink-0 space-y-2 empty:hidden">
+        <ChapterPreview preview={preview} label={previewed && titleOf(previewed)} />
+      </div>
+    </section>
   );
 }
 

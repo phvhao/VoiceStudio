@@ -98,6 +98,17 @@ describe('validateScript', () => {
     // Known grammar (pause / SSML / voice / reactions) must NOT warn.
     expect(warns.some((w) => w.type === 'unknown_tag' && w.tag !== '[wobble]')).toBe(false);
   });
+  it('knows [volume] passages, and flags one without a readable gain', () => {
+    const script =
+      '# C\nA [volume -6dB]quiet[/volume] [VOLUME +3 db]loud[/Volume] [volume 2]x ' +
+      '[volume] [volume loud] [volume 12345].';
+    expect(validateScript(script, {}).filter((w) => w.type === 'unknown_tag')).toEqual([
+      { type: 'unknown_tag', tag: '[volume]' },
+      { type: 'unknown_tag', tag: '[volume loud]' },
+      { type: 'unknown_tag', tag: '[volume 12345]' },
+    ]);
+    expect(scriptStats('A [volume -6dB]quiet words[/volume] here.').words).toBe(4);
+  });
   it('does not flag known reaction tags', () => {
     const warns = validateScript('# C\nHa [laughter] ha.', {});
     expect(warns.filter((w) => w.type === 'unknown_tag')).toEqual([]);

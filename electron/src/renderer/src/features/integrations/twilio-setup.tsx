@@ -905,6 +905,7 @@ export function TwilioSetup({ hero, rail }: IntegrationPanelProps) {
           maxLength={server.limits.max_greeting_chars}
           placeholder={t('twilioIntegration.greetingPlaceholder')}
           aria-describedby="twilio-greeting-hint"
+          spellCheck={false}
           onChange={(event) => set('greeting', event.target.value)}
         />
       </Field>
@@ -919,6 +920,7 @@ export function TwilioSetup({ hero, rail }: IntegrationPanelProps) {
               rows={2}
               value={callsDraft!.disclosure}
               aria-describedby="twilio-disclosure-hint"
+              spellCheck={false}
               onChange={(event) => setCalls('disclosure', event.target.value)}
             />
           </>

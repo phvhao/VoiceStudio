@@ -14,6 +14,7 @@ import { AnalyticsConsentBanner, AnalyticsRuntime } from '@/components/analytics
 import { getBridge } from '@/components/bridge';
 import { FirstSoundHandoff } from '@/components/first-sound-handoff';
 import { stepAppearanceScale } from '@/hooks/use-appearance';
+import { handleAppZoomKey } from '@/lib/zoom-keys';
 import { recordRouteBreadcrumb } from '@/lib/report-breadcrumb';
 import { ModelInstallSync } from '@/hooks/use-model-install-sync';
 import { RealtimeEventSync } from '@/hooks/use-realtime-events';
@@ -59,21 +60,9 @@ export function App() {
     return () => window.removeEventListener('hashchange', record);
   }, []);
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      const direction =
-        event.key === '0' || event.code === 'Digit0' || event.code === 'Numpad0'
-          ? 0
-          : event.key === '-' || event.code === 'Minus' || event.code === 'NumpadSubtract'
-            ? -1
-            : event.key === '+' || event.code === 'Equal' || event.code === 'NumpadAdd'
-              ? 1
-              : null;
-      if (direction === null) return;
-      event.preventDefault();
-      event.stopPropagation();
-      stepAppearanceScale(direction);
-    };
+    // Capture phase, ahead of the page — except where a part of it (the
+    // script editor) zooms its own text: those keys are left to it.
+    const onKeyDown = (event: KeyboardEvent) => void handleAppZoomKey(event, stepAppearanceScale);
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, []);
@@ -106,7 +95,8 @@ export function App() {
         import('@/features/longform/longform-session'),
         import('@/features/longform/project-library'),
       ]);
-      flushLongformSessionPersistence();
+      // Saves open books with edits still waiting for the auto-save.
+      await flushLongformSessionPersistence();
       await projectLibrary.flush();
     });
   }, []);

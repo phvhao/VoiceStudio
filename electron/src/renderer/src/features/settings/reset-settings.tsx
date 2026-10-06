@@ -141,8 +141,9 @@ async function clearFrontendState(plan: ReturnType<typeof resetPlan>): Promise<v
     localStorage.removeItem('omni_transcriptions');
   }
   if (plan.content) {
-    await projectLibrary.clear();
+    // Stops the books' auto-save first, so no save lands after the library is cleared.
     clearLongformDraftForReset();
+    await projectLibrary.clear();
     clearDubDraftForReset();
     localStorage.removeItem('voicestudio.design.v1');
     localStorage.removeItem('omni_transcriptions');

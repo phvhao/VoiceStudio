@@ -79,3 +79,11 @@ def test_atomic_write_leaves_no_tmp():
     lr.write_manifest(lr.build_manifest(job_id="atom", job_type="story",
                                         plan_chapters=_PLAN, params=_PARAMS))
     assert not any(n.endswith(".tmp") for n in os.listdir(lr.work_dir("story", "atom")))
+
+
+def test_build_manifest_keeps_the_project_only_when_known():
+    m = lr.build_manifest(job_id="p", job_type="audiobook", plan_chapters=_PLAN,
+                          params=_PARAMS, project_id="book-a")
+    assert m["project_id"] == "book-a"
+    assert "project_id" not in lr.build_manifest(job_id="p", job_type="audiobook",
+                                                 plan_chapters=_PLAN, params=_PARAMS)

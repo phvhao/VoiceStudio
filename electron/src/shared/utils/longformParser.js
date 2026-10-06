@@ -10,7 +10,9 @@
  * Grammar precedence (outer→inner):
  *   # chapter → ## section → [voice:] → [pause] → SSML-lite.
  */
-import { openSsmlTags, parseSsmlLite, spellOut } from './ssmlLite';
+import { openSsmlTags, parseSsmlLite, roundHalfToEven, spellOut } from './ssmlLite';
+
+export { roundHalfToEven };
 
 export const PAUSE_DEFAULT_MS = 350;
 export const PAUSE_MAX_MS = 10000;
@@ -30,16 +32,6 @@ const VOICE_RE = /\[voice:([^\][]*)\]/g;
 // overlap on the same run (ReDoS-safe, matches the Python atomic group exactly
 // on the full dialect + NO-MATCH boundary set).
 const PAUSE_RE = /\[\s*pause(?:\s+(\d+(?:\.\d+)?)(?:\s*(ms|s))?)?\s*\]/gi;
-
-/** Round half-to-even (banker's rounding) — matches Python int(round(x)). */
-export function roundHalfToEven(x) {
-  const f = Math.floor(x);
-  const diff = x - f;
-  if (diff < 0.5) return f;
-  if (diff > 0.5) return f + 1;
-  // exact .5 tie → round to the even neighbour
-  return f % 2 === 0 ? f : f + 1;
-}
 
 function _pauseMs(num, unit) {
   if (num == null) return PAUSE_DEFAULT_MS;
@@ -116,9 +108,9 @@ function runsToSpans(runs, defaultSpeed) {
     for (const [spanText, pauseMs] of parsePauseMarkers(runText)) {
       const t = (spanText || '').trim();
       if (!t && pauseMs === 0) continue;
-      // [text, speed, paragraphBreakBefore]. The whitespace BETWEEN two kept
-      // segments is tracked so a blank line sitting on a markup boundary still
-      // ends the line instead of being swallowed (py parity).
+      // [text, speed, paragraphBreakBefore, gainDb]. The whitespace BETWEEN two
+      // kept segments is tracked so a blank line sitting on a markup boundary
+      // still ends the line instead of being swallowed (py parity).
       const rendered = [];
       let between = '';
       for (const seg of t ? parseSsmlLite(t) : []) {
@@ -130,7 +122,7 @@ function runsToSpans(runs, defaultSpeed) {
         }
         const sp = seg.speed != null ? seg.speed : defaultSpeed;
         const lead = raw.slice(0, raw.length - raw.trimStart().length);
-        rendered.push([st, sp, BLANK_LINE_RE.test(between + lead)]);
+        rendered.push([st, sp, BLANK_LINE_RE.test(between + lead), seg.gain_db]);
         between = raw.slice(raw.trimEnd().length);
       }
       if (!rendered.length) {
@@ -139,13 +131,15 @@ function runsToSpans(runs, defaultSpeed) {
         }
         continue;
       }
-      rendered.forEach(([st, sp], j) => {
+      rendered.forEach(([st, sp, , gain], j) => {
         const span = {
           voice_id: voice,
           text: st,
           pause_ms_after: j === rendered.length - 1 ? pauseMs : 0,
           speed: sp,
         };
+        // A [volume] passage's gain in dB; key present only there (py parity).
+        if (gain) span.gain_db = gain;
         // Inline markup split one run of text: say how this span joins the next —
         // straight on, or across a blank line. Key present only here (py parity).
         if (j < rendered.length - 1) span.join = rendered[j + 1][2] ? 'paragraph' : 'continue';

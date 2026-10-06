@@ -1,9 +1,9 @@
 import type { ComponentProps } from 'react';
-import { expect, it } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import '@/i18n';
 import { parseCastNames } from '@shared/utils/audiobookScript';
-import { EditorStatusBar, createCaretSource } from './editor-status-bar';
+import { EditorStatusBar, createCaretSource, sameVoiceName } from './editor-status-bar';
 
 const profiles = [
   { id: 'p-hao', name: 'Hao PV' },
@@ -91,4 +91,49 @@ it('follows the caret on its own', () => {
   expect(screen.getByText('Ln 1, Col 1')).toBeVisible();
   act(() => caret.set(text.length));
   expect(screen.getByText('Ln 2, Col 4')).toBeVisible();
+});
+
+it('says a name once when it is cast to the voice it is named after', () => {
+  const { rerender } = bar('[voice:Hao PV] Hi.', 16, { voiceCast: { 'Hao PV': 'p-hao' } });
+  expect(screen.getByText('Voice: Hao PV')).toBeVisible();
+  // Case and spaces do not make it another name.
+  rerender(
+    <EditorStatusBar
+      text="[voice:haopv] Hi."
+      caret={createCaretSource(15)}
+      names={['haopv']}
+      voiceCast={{ haopv: 'p-hao' }}
+      profiles={profiles}
+    />,
+  );
+  expect(screen.getByText('Voice: haopv')).toBeVisible();
+  expect(sameVoiceName('Hào  PV', 'hào pv')).toBe(true);
+  expect(sameVoiceName('Mara', 'Hao PV')).toBe(false);
+});
+
+it('zooms the editor from its − / % / + control', async () => {
+  const onZoomChange = vi.fn();
+  const { rerender } = bar('one', 0, { zoom: 100, onZoomChange });
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+  expect(onZoomChange).toHaveBeenLastCalledWith(110);
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
+  expect(onZoomChange).toHaveBeenLastCalledWith(90);
+  fireEvent.click(screen.getByRole('button', { name: 'Text size: 100%' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: '140%' }));
+  expect(onZoomChange).toHaveBeenLastCalledWith(140);
+  rerender(
+    <EditorStatusBar
+      text="one"
+      caret={createCaretSource(0)}
+      names={[]}
+      voiceCast={{}}
+      profiles={profiles}
+      zoom={160}
+      onZoomChange={onZoomChange}
+    />,
+  );
+  expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Text size: 160%' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Reset to 100%' }));
+  expect(onZoomChange).toHaveBeenLastCalledWith(100);
 });

@@ -37,7 +37,15 @@ it('changes only the audiobook default voice', () => {
     drafts: { ...state.drafts, audiobook: draft },
   }));
   placeLongformVoice({ id: 'new', name: 'Narrator' }, 'audiobook');
-  expect(longformSession.state.drafts.audiobook).toEqual({ ...draft, voice: 'new' });
+  // A book with text becomes a library project on its first edit.
+  expect(longformSession.state.drafts.audiobook).toEqual({
+    ...draft,
+    voice: 'new',
+    projectId: expect.any(String),
+    // An edit, stamped: the newer of the working copy and the project wins.
+    editedAt: expect.any(Number),
+  });
+  expect(longformSession.state.drafts.audiobook.editedAt).toBeGreaterThan(0);
 });
 it('refuses to alter either draft during production', () => {
   longformSession.setState((state) => ({ ...state, active: 'stories' }));

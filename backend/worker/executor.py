@@ -512,10 +512,15 @@ class TaskExecutor:
                 kwargs["seed"] = seed
             return backend.generate(text, **kwargs)
 
+        from services.voice_leveling import clamp_gain_db
+
+        # A [volume] passage's gain, as synthesis bounds it; absent or
+        # unreadable is no gain.
         spans = [Span(voice_id=str(i), text=row.get("text", ""),
                       pause_ms_after=int(row.get("pause_ms_after") or 0),
                       speed=row.get("speed"),
-                      join=row.get("join") if row.get("join") in ("continue", "paragraph") else None)
+                      join=row.get("join") if row.get("join") in ("continue", "paragraph") else None,
+                      gain_db=clamp_gain_db(row.get("gain_db")) or None)
                  for i, row in enumerate(rows)]
         sample_rate = int(getattr(backend, "sample_rate", 0) or 24_000)
         # A span's voice_id here is its row index, so voice leveling groups

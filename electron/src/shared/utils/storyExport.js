@@ -30,6 +30,31 @@ export function concatBuffers(buffers, sampleRate) {
   return { sampleRate, numberOfChannels: 1, length: total, getChannelData: () => out };
 }
 
+// Mirrors services/voice_leveling.py: a boost stops before the loudest sample
+// passes PEAK_CEILING, and one passage moves by ±MAX_GAIN_DB at most.
+const PEAK_CEILING = 0.97;
+const MAX_GAIN_DB = 12;
+
+/**
+ * Move a `[volume]` passage's buffer by `gainDb`, in place — as the server
+ * render does (`apply_passage_gain`), so a preview sounds like the book.
+ */
+export function applyPassageGain(buffer, gainDb) {
+  let gain = Number.isFinite(gainDb) ? Math.max(-MAX_GAIN_DB, Math.min(MAX_GAIN_DB, gainDb)) : 0;
+  if (!gain) return buffer;
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) =>
+    buffer.getChannelData(i),
+  );
+  if (gain > 0) {
+    let peak = 0;
+    for (const data of channels) for (const value of data) peak = Math.max(peak, Math.abs(value));
+    if (peak > 0) gain = Math.max(0, Math.min(gain, 20 * Math.log10(PEAK_CEILING / peak)));
+  }
+  const factor = 10 ** (gain / 20);
+  for (const data of channels) for (let i = 0; i < data.length; i++) data[i] *= factor;
+  return buffer;
+}
+
 /** Encode a mono buffer to a 16-bit PCM WAV ArrayBuffer. */
 export function encodeWav(buffer, sampleRate) {
   const samples = buffer.getChannelData(0);
@@ -236,6 +261,7 @@ export async function exportStoryAudio(tracks, resolveOpts, fetchChunkBlob, onPr
             text: span.text,
             profileId: span.voice_id,
             speed: span.speed,
+            gainDb: span.gain_db,
           });
         if (span.pause_ms_after > 0)
           plan.push({ type: 'pause', seconds: span.pause_ms_after / 1000 });
@@ -258,7 +284,10 @@ export async function exportStoryAudio(tracks, resolveOpts, fetchChunkBlob, onPr
         continue;
       }
       const blob = await fetchChunkBlob(item.text, item.profileId, item.speed);
-      const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+      const decoded = applyPassageGain(
+        await ctx.decodeAudioData(await blob.arrayBuffer()),
+        item.gainDb,
+      );
       buffers.push(decoded);
       sampleCursor += decoded.length; // resamples to ctx.sampleRate → safe to concat
       onProgress?.(++done, chunkCount);

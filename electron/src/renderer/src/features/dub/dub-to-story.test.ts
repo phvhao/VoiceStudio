@@ -124,7 +124,8 @@ describe('loading a dub into Stories', () => {
       drafts: { ...s.drafts, stories: { ...s.drafts.stories, projectId: 'book-7' } },
     }));
     loadDubIntoStories(segments, { unknownSpeakerLabel: 'Speaker', newLineId: ids() });
-    expect(storiesDraft().projectId).toBeNull();
+    // The dub's lines become a book of their own in the library.
+    expect(storiesDraft().projectId).not.toBe('book-7');
   });
 
   it('refuses while a longform render is running, rather than half-applying', () => {

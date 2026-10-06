@@ -1,7 +1,7 @@
-import type { ReactNode, Ref } from 'react';
+import { Profiler, type ReactNode, type Ref } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 
 // One fake media element behind every useMediaState in the card and the
@@ -78,6 +78,8 @@ vi.mock('@/components/media-player', async () => {
     audioLoaders: [],
     audioSource: (src: string) => ({ src }),
     useMediaState: (key: 'currentTime') => useSyncExternalStore(subscribe, () => media.get(key)),
+    useMediaTime: <T,>(select: (time: number) => T) =>
+      useSyncExternalStore(subscribe, () => select(media.get('currentTime'))),
   };
 });
 
@@ -119,17 +121,27 @@ afterEach(() => {
   Reflect.deleteProperty(document, 'caretRangeFromPoint');
 });
 
-const renderPlayer = (output?: string) =>
+// Every commit inside the player, as React's profiler reports it.
+const commits = { count: 0, ms: 0 };
+const renderPlayer = (output?: string, book = { script, chapters }) =>
   render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <SyncedAudiobookPlayer
-        src="/api/audio/book.m4b"
-        script={script}
-        chapters={chapters}
-        output={output}
-      />
+      <Profiler
+        id="player"
+        onRender={(_id, _phase, actualDuration) => {
+          commits.count++;
+          commits.ms += actualDuration;
+        }}
+      >
+        <SyncedAudiobookPlayer
+          src="/api/audio/book.m4b"
+          script={book.script}
+          chapters={book.chapters}
+          output={output}
+        />
+      </Profiler>
     </QueryClientProvider>,
   );
 const advance = (time: number) => act(() => media.set({ currentTime: time }));
@@ -376,4 +388,176 @@ it('ignores a timeline written for another file and asks for none without an out
   api.mockClear();
   renderPlayer();
   expect(api).not.toHaveBeenCalled();
+});
+
+it('commits nothing on clock ticks that change no word, second or seek-bar step', async () => {
+  renderPlayer();
+  advance(4.1);
+  const { pane } = await openReader();
+  const observer = new MutationObserver(() => {});
+  observer.observe(document.body, {
+    subtree: true,
+    childList: true,
+    characterData: true,
+    attributes: true,
+  });
+  commits.count = 0;
+  // The media clock ticks every animation frame; Gamma is read from 4 s to 6 s.
+  for (const time of [4.2, 4.4, 4.6, 4.8, 4.95]) advance(time);
+  expect(commits.count).toBe(0);
+  expect(observer.takeRecords()).toEqual([]);
+
+  advance(6.1);
+  expect(commits.count).toBeGreaterThan(0);
+  expect(within(pane).getByText('delta.')).toHaveAttribute('aria-current', 'true');
+  observer.disconnect();
+});
+
+// While a book plays the media clock ticks every animation frame. jsdom has
+// no layout engine, so this counts what makes Chromium do layout and style
+// work (Performance.getMetrics' LayoutCount / RecalcStyleCount): frames with
+// DOM writes that move or resize boxes, frames with any DOM write, reads of
+// layout values, and React commits.
+describe('playback cost', () => {
+  const FRAME_S = 1 / 60;
+  const SECONDS = 10;
+  // 1,500 words in three chapters of ten paragraphs, read at 2.5 words a second.
+  const sentence = 'Sentence ' + 'word '.repeat(8) + 'end.';
+  const paragraph = Array.from({ length: 5 }, () => sentence).join(' ');
+  const longBook = {
+    script: [1, 2, 3]
+      .map((n) => `# Chapter ${n}\n` + Array.from({ length: 10 }, () => paragraph).join('\n\n'))
+      .join('\n\n'),
+    chapters: [1, 2, 3].map((n) => ({ title: `Chapter ${n}`, status: 'done', duration_s: 200 })),
+  };
+
+  // Seek bars 652px wide, as in the app's dialog and card.
+  class FixedWidthObserver {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      const entry = { target, contentRect: { width: 652, height: 20 } };
+      this.callback([entry as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+
+  function spyLayout() {
+    const counts = { reads: 0, valueWrites: 0 };
+    const restore: Array<() => void> = [];
+    const wrap = (target: object, name: string, wrapped: (d: PropertyDescriptor) => object) => {
+      const descriptor = Object.getOwnPropertyDescriptor(target, name);
+      if (!descriptor) return;
+      const patch = wrapped(descriptor);
+      // A method replaces an accessor outright: a descriptor holds one kind.
+      const { get: _get, set: _set, ...data } = descriptor;
+      Object.defineProperty(target, name, { ...('value' in patch ? data : descriptor), ...patch });
+      restore.push(() => Object.defineProperty(target, name, descriptor));
+    };
+    const read = (descriptor: PropertyDescriptor) => ({
+      get(this: unknown) {
+        counts.reads++;
+        return descriptor.get?.call(this);
+      },
+    });
+    // A method, whichever way jsdom defines it.
+    const call = (descriptor: PropertyDescriptor) => {
+      const method = (descriptor.value ?? descriptor.get?.call(window)) as (
+        ...args: unknown[]
+      ) => unknown;
+      return {
+        writable: true,
+        value(this: unknown, ...args: unknown[]) {
+          counts.reads++;
+          return method.apply(this, args);
+        },
+      };
+    };
+    for (const name of ['offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight']) {
+      wrap(HTMLElement.prototype, name, read);
+    }
+    for (const name of [
+      'clientWidth',
+      'clientHeight',
+      'scrollTop',
+      'scrollLeft',
+      'scrollWidth',
+      'scrollHeight',
+    ]) {
+      wrap(Element.prototype, name, read);
+    }
+    wrap(Element.prototype, 'getBoundingClientRect', call);
+    wrap(Element.prototype, 'getClientRects', call);
+    wrap(window, 'getComputedStyle', call);
+    // React tracks an input's value through the prototype's setter it finds
+    // at mount, so this goes in before the first render.
+    wrap(HTMLInputElement.prototype, 'value', (descriptor) => ({
+      set(this: HTMLInputElement, value: unknown) {
+        if (String(value) !== descriptor.get?.call(this)) counts.valueWrites++;
+        descriptor.set?.call(this, value);
+      },
+    }));
+    return { counts, restore: () => restore.reverse().forEach((undo) => undo()) };
+  }
+
+  async function measurePlayback({ reader }: { reader: boolean }) {
+    vi.stubGlobal('ResizeObserver', FixedWidthObserver);
+    const layout = spyLayout();
+    const observer = new MutationObserver(() => {});
+    try {
+      media.set({ duration: 600, currentTime: 30 });
+      renderPlayer(undefined, longBook);
+      if (reader) await openReader();
+      advance(30);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+      });
+      observer.takeRecords();
+      Object.assign(layout.counts, { reads: 0, valueWrites: 0 });
+      Object.assign(commits, { count: 0, ms: 0 });
+      let layoutFrames = 0;
+      let styleFrames = 0;
+      for (let frame = 1; frame <= SECONDS * 60; frame++) {
+        const writes = layout.counts.valueWrites;
+        advance(30 + frame * FRAME_S);
+        const records = observer.takeRecords();
+        const moved =
+          layout.counts.valueWrites > writes ||
+          records.some(
+            (record) => record.type !== 'attributes' || record.attributeName === 'style',
+          );
+        if (moved) layoutFrames++;
+        if (moved || records.length) styleFrames++;
+      }
+      const perSecond = (value: number) => Math.round((value / SECONDS) * 10) / 10;
+      return {
+        layoutFrames: perSecond(layoutFrames),
+        styleFrames: perSecond(styleFrames),
+        layoutReads: perSecond(layout.counts.reads),
+        commits: perSecond(commits.count),
+        renderMs: perSecond(commits.ms),
+      };
+    } finally {
+      observer.disconnect();
+      layout.restore();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it.each([{ reader: false }, { reader: true }])(
+    'stays light while a long book plays (reader open: $reader)',
+    async ({ reader }) => {
+      const cost = await measurePlayback({ reader });
+      console.info(`playback cost per second, reader open: ${reader}`, cost);
+      // A word changes 2.5 times a second, the clock and the seek thumb about once.
+      expect(cost.layoutFrames).toBeLessThan(5);
+      expect(cost.styleFrames).toBeLessThan(6);
+      expect(cost.commits).toBeLessThan(6);
+      expect(cost.layoutReads).toBeLessThan(40);
+    },
+    30_000,
+  );
 });

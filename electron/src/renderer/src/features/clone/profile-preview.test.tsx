@@ -91,3 +91,8 @@ it('discloses speech the backend dropped from a profile preview', async () => {
   await screen.findByTestId('preview-player');
   expect(mocks.warning).toHaveBeenCalledWith('tts.droppedChunks', expect.anything());
 });
+it('does not spell-check the test phrase against the system dictionary', () => {
+  mount();
+  fireEvent.click(screen.getByText('voice_profile.try_voice'));
+  expect(screen.getByRole('textbox')).toHaveAttribute('spellcheck', 'false');
+});

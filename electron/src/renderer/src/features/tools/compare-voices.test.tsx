@@ -125,3 +125,10 @@ it('does not announce dropped speech from a cancelled comparison', async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(mock.warning).not.toHaveBeenCalled();
 });
+it('does not spell-check the shared phrase against the system dictionary', () => {
+  mount();
+  expect(screen.getByRole('textbox', { name: 'compare.test_phrase' })).toHaveAttribute(
+    'spellcheck',
+    'false',
+  );
+});

@@ -10,6 +10,7 @@ import {
   voiceGainKey,
   type VoiceGains,
 } from '@shared/utils/longformOverrides';
+import { formatSignedDb } from './script-markup';
 import { DEFAULT_VOICE_ACCENT, voiceAccent } from './voice-palette';
 import { VoicePicker, type VoiceProfile } from './voice-picker';
 
@@ -26,11 +27,27 @@ function Swatch({ className }: { className: string }) {
 /** Formats a voice volume for display: "+3 dB", "0 dB", "-2 dB". */
 export function useVoiceGainText() {
   const { t, i18n } = useTranslation();
-  const number = new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language, {
-    signDisplay: 'exceptZero',
-    maximumFractionDigits: 1,
-  });
-  return (db: number) => t('leveling.db', { value: number.format(db) });
+  const locale = i18n.resolvedLanguage || i18n.language;
+  return (db: number) => t('leveling.db', { value: formatSignedDb(db, locale) });
+}
+
+/**
+ * What the automatic leveling added to one voice in the last render, and the
+ * voice's total with its own volume: "Auto: +5.2 dB · Total: +7.2 dB".
+ */
+export function AutoLevelLine({ auto, manual }: { auto: number; manual: number }) {
+  const { t } = useTranslation();
+  const gainText = useVoiceGainText();
+  const round = (db: number) => Math.round(db * 10) / 10 || 0;
+  const values = { auto: gainText(round(auto)), total: gainText(round(auto + manual)) };
+  return (
+    <p
+      className="text-[11px] text-muted-foreground tabular-nums"
+      title={t('leveling.auto_total_hint', values)}
+    >
+      {t('leveling.auto_total', values)}
+    </p>
+  );
 }
 
 /**
@@ -107,6 +124,7 @@ export function CastSettings({
   voiceGains,
   onVoiceGains,
   defaultVoiceName,
+  autoLevels,
 }: {
   /** Panel heading; defaults to the Audiobook "Cast" title. */
   title?: string;
@@ -127,16 +145,26 @@ export function CastSettings({
   onVoiceGains?: (gains: VoiceGains) => void;
   /** The default voice's profile name: on its volume row, and what an uncast name reads in. */
   defaultVoiceName?: string;
+  /**
+   * What leveling added to each voice in the last render (`bookAutoLevels`),
+   * by volume key; shown under its volume while leveling is on.
+   */
+  autoLevels?: Record<string, number>;
 }) {
   const { t } = useTranslation();
   const volume = (key: string, name: string) =>
     onVoiceGains && (
-      <VoiceGainControl
-        name={name}
-        value={voiceGain(voiceGains, key)}
-        disabled={disabled}
-        onChange={(db) => onVoiceGains(setVoiceGain(voiceGains, key, db))}
-      />
+      <>
+        <VoiceGainControl
+          name={name}
+          value={voiceGain(voiceGains, key)}
+          disabled={disabled}
+          onChange={(db) => onVoiceGains(setVoiceGain(voiceGains, key, db))}
+        />
+        {autoLevels && Object.hasOwn(autoLevels, key) && (
+          <AutoLevelLine auto={autoLevels[key]} manual={voiceGain(voiceGains, key)} />
+        )}
+      </>
     );
   return (
     <details className="space-y-3" open={names.length > 0}>
@@ -153,7 +181,9 @@ export function CastSettings({
             )}
           </p>
           {volume('', t('audiobook.default_voice'))}
-          <p className="text-xs text-muted-foreground">{t('leveling.volume_hint')}</p>
+          <p className="text-xs text-muted-foreground">
+            {t('leveling.volume_hint')} {t('leveling.passage_hint', { tag: '[volume -6dB]…[/volume]' })}
+          </p>
         </div>
       )}
       {!names.length && (

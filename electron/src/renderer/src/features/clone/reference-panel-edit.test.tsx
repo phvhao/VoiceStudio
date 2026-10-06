@@ -32,11 +32,11 @@ vi.mock('@/components/waveform-player', () => ({
     return null;
   },
 }));
-import { ReferencePanel } from './reference-panel';
+import { OptionalDetails, ReferencePanel } from './reference-panel';
 
 afterEach(() => {
   cleanup();
-  patchCloneSettings({ selectedProfileId: null });
+  patchCloneSettings({ selectedProfileId: null, refText: '' });
   setWorkspace.mockClear();
 });
 
@@ -48,4 +48,13 @@ it('opens the selected saved voice for editing without changing the selection', 
   fireEvent.click(screen.getByRole('button', { name: /clone.edit_voice/ }));
 
   expect(setWorkspace).toHaveBeenCalledWith({ editingProfileId: 'v1', panel: null });
+});
+
+it('does not spell-check the reference transcript against the system dictionary', () => {
+  patchCloneSettings({ refText: 'xin chao' });
+  render(<OptionalDetails />);
+  expect(screen.getByRole('textbox', { name: 'clone.transcript' })).toHaveAttribute(
+    'spellcheck',
+    'false',
+  );
 });

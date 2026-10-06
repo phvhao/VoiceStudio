@@ -140,8 +140,8 @@ def build_longform_library(
     * ``list_jobs(status="done", types=(...), limit=...)`` → done longform jobs, newest-first.
     * ``events_since(job_id)`` → that job's persisted SSE events.
 
-    Returns ``[{job_id, type, title?, summary?, output, duration_s, chapters,
-    created_at}]``. Jobs that aren't a longform type, or whose ``done`` event /
+    Returns ``[{job_id, type, title?, summary?, project_id?, timeline?, output,
+    duration_s, chapters, created_at}]``. Jobs that aren't a longform type, or whose ``done`` event /
     output filename can't be recovered, are silently skipped — the library only
     ever lists things the user can actually re-download.
     """
@@ -203,6 +203,14 @@ def build_longform_library(
                         title = None
             if title:
                 item["title"] = title
+            # The editor project it was rendered from (renders made before the
+            # library have none), and whether its reading timeline was kept —
+            # the text an older render's book can be rebuilt from.
+            project_id = row.get("project_id")
+            if isinstance(project_id, str) and project_id:
+                item["project_id"] = project_id
+            if done.get("timeline") is True:
+                item["timeline"] = True
             # How it was made (voice, speed, engine, joins) — renders finished
             # before this existed simply have none.
             summary = _clean_summary(done.get("summary"))

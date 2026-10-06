@@ -25,6 +25,7 @@ import {
   respellingParts,
   respellingRange,
   setRespelling,
+  setVolume,
   tokenAt,
   tokenizeMarkup,
   typedTagAt,
@@ -32,6 +33,9 @@ import {
   voiceName,
   voiceSection,
   voiceSwitches,
+  volumeDb,
+  volumeOpening,
+  volumeToken,
   wrapSelection,
   type MarkupEdit,
 } from './script-markup';
@@ -562,5 +566,86 @@ describe('typing a tag', () => {
     expect(edit.text).toBe('Say [slow][/slow]');
     expect(edit.selectionStart).toBe('Say [slow]'.length);
     expect(edit.selectionEnd).toBe(edit.selectionStart);
+  });
+});
+
+describe('[volume] passages', () => {
+  const line = 'Normal… [volume -6dB]a whisper[/volume] then on.';
+
+  it('reads [volume ±N dB] and [/volume] as volume tags, and a gainless one as unknown', () => {
+    const kinds = tokenizeMarkup(line + ' [volume loud] [volume +3 db]x [/Volume]')
+      .filter((segment) => segment.kind !== 'text')
+      .map((segment) => [segment.text, segment.kind]);
+    expect(kinds).toEqual([
+      ['[volume -6dB]', 'volume'],
+      ['[/volume]', 'volume'],
+      ['[volume loud]', 'unknown'],
+      ['[volume +3 db]', 'volume'],
+      ['[/Volume]', 'volume'],
+    ]);
+    expect(classifyToken('[volume 2]')).toBe('volume');
+    expect(classifyToken('[volume]')).toBe('unknown');
+  });
+
+  it('writes and reads a passage gain, clamped to ±12 dB', () => {
+    expect(volumeToken(-6)).toBe('[volume -6dB]');
+    expect(volumeToken(3)).toBe('[volume +3dB]');
+    expect(volumeToken(40)).toBe('[volume +12dB]');
+    // Ties to even, to 0.1 dB, as both parsers read the number.
+    expect(volumeToken(-1.25)).toBe('[volume -1.2dB]');
+    expect(volumeToken(1.25)).toBe('[volume +1.2dB]');
+    expect(volumeToken(1.35)).toBe('[volume +1.4dB]');
+    expect(volumeDb('[volume -6dB]')).toBe(-6);
+    expect(volumeDb('[VOLUME +2.5 db]')).toBe(2.5);
+    expect(volumeDb('[volume 20]')).toBe(12);
+    expect(volumeDb('[/volume]')).toBeNull();
+  });
+
+  it('wraps a selection so the render moves exactly the wrapped words', () => {
+    const plain = 'Normal… a whisper then on.';
+    const from = plain.indexOf('a whisper');
+    const edit = wrapSelection(plain, from, from + 'a whisper '.length, volumeToken(-6), '[/volume]');
+    expect(edit.text).toBe(line);
+    expect(spans(edit.text).map((span) => [span.text, span.gain_db])).toEqual([
+      ['Normal…', undefined],
+      ['a whisper', -6],
+      ['then on.', undefined],
+    ]);
+  });
+
+  it('changes the gain from either end, keeping the words and the closing tag', () => {
+    for (const tag of ['[volume', '[/volume]']) {
+      const token = tokenAt(line, line.indexOf(tag) + 2)!;
+      expect(volumeOpening(line, token)?.text).toBe('[volume -6dB]');
+      const edit = setVolume(line, token, 3);
+      expect(edit.text).toBe('Normal… [volume +3dB]a whisper[/volume] then on.');
+      // One replacement of the opening tag: one undo restores it.
+      expect(line.slice(edit.from, edit.to)).toBe('[volume -6dB]');
+    }
+    const lone = 'a [/volume] b';
+    expect(volumeOpening(lone, tokenAt(lone, 4)!)).toBeNull();
+  });
+
+  it('unwraps a passage from either end and keeps its words selected', () => {
+    for (const tag of ['[volume', '[/volume]']) {
+      const edit = removeToken(line, tokenAt(line, line.indexOf(tag) + 2)!);
+      expect(edit.text).toBe('Normal… a whisper then on.');
+      expect(selected(edit)).toBe('a whisper');
+    }
+  });
+
+  it('pairs nested tags the way the parser closes them', () => {
+    const nested = '[volume 3]a [volume -6]b[/volume] c[/volume] d';
+    const outer = tokenAt(nested, 1)!;
+    expect(removeToken(nested, outer).text).toBe('a [volume -6]b[/volume] c d');
+    const inner = tokenAt(nested, nested.indexOf('[volume -6]') + 1)!;
+    expect(removeToken(nested, inner).text).toBe('[volume 3]a b c[/volume] d');
+    // The same holds for delivery pairs of one kind.
+    const slow = '[slow]a [slow]b[/slow] c[/slow] d';
+    expect(removeToken(slow, tokenAt(slow, 1)!).text).toBe('a [slow]b[/slow] c d');
+    const lastClose = tokenAt(slow, slow.lastIndexOf('[/slow]') + 1)!;
+    expect(changeDeliveryKind(slow, lastClose, 'fast').text).toBe(
+      '[fast]a [slow]b[/slow] c[/fast] d',
+    );
   });
 });

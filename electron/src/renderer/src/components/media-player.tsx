@@ -3,6 +3,7 @@ import {
   VideoProviderLoader,
   MediaProvider as VidstackMediaProvider,
   MediaPlayer,
+  useMediaPlayer,
   isAudioProvider,
   isDASHProvider,
   isHLSProvider,
@@ -14,13 +15,42 @@ import {
   type VideoSrc,
 } from '@vidstack/react';
 import { RemotionProviderLoader } from '@vidstack/react/player/remotion';
-import { useEffect, useMemo, useRef, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type RefObject,
+} from 'react';
 import { claimPlayback } from '@/lib/audio/playback';
 import { useAecEnabled } from '@/lib/store/dictation-settings';
 import { attachPlaybackTap } from '@shared/utils/aec/playbackTap';
 
 export type { MediaPlayerInstance };
 export { useMediaState } from '@vidstack/react';
+
+/**
+ * Something derived from the surrounding player's playhead, such as the word
+ * being read or the clock text. `useMediaState('currentTime')` re-renders on
+ * every animation frame while media plays; this re-renders only when `select`
+ * returns a different value (`Object.is`), so return a primitive.
+ */
+export function useMediaTime<T>(select: (time: number) => T): T {
+  const player = useMediaPlayer();
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (!player) return () => {};
+      // Reading `currentTime` is what subscribes the effect to it.
+      return player.subscribe(({ currentTime }) => {
+        void currentTime;
+        onChange();
+      });
+    },
+    [player],
+  );
+  return useSyncExternalStore(subscribe, () => select(player?.currentTime ?? 0));
+}
 
 /**
  * Vidstack includes native audio/video, HLS, DASH, YouTube and Vimeo loaders.

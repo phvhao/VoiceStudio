@@ -370,8 +370,10 @@ def chapter_cache_key(
 ) -> str:
     """Deterministic content hash for a chapter's rendered audio.
 
-    ``spans`` is an ordered list of ``(voice_id, text, pause_ms_after[, speed[, join]])``
-    (speed optional, defaults to None; join only where inline markup split a line). Same inputs → same key → reuse the
+    ``spans`` is an ordered list of ``(voice_id, text, pause_ms_after[, speed[, join[, gain_db]]])``
+    (speed optional, defaults to None; join only where inline markup split a
+    line; gain_db only on a ``[volume]`` passage, ``join`` then ``None`` if
+    unset). Same inputs → same key → reuse the
     cached chapter WAV on a re-run (resume); any change (text, voice, order,
     pauses, speed, sample rate, engine, or a voice's resolved signature) → new
     key → re-render. ``voice_sig`` maps each voice id to a stable signature
@@ -385,8 +387,13 @@ def chapter_cache_key(
         # A 5th element is the span's ``join`` ("continue"/"paragraph") — it picks
         # the silence after the span, so it must move the key. Appended only when
         # present: a plan without one hashes exactly as it always has.
+        # A 6th element is a [volume] passage's gain in dB — it changes the
+        # audio, so it moves the key too, as ``{"gain_db": …}`` (never mistaken
+        # for a join) and only when set.
         "spans": [[s[0], s[1], int(s[2]), (s[3] if len(s) > 3 else None)]
-                  + ([s[4]] if len(s) > 4 and s[4] else []) for s in spans],
+                  + ([s[4]] if len(s) > 4 and s[4] else [])
+                  + ([{"gain_db": float(s[5])}] if len(s) > 5 and s[5] else [])
+                  for s in spans],
         "voices": {k: voice_sig[k] for k in sorted(voice_sig)} if voice_sig else {},
     }
     payload.update(_render_rule_markers(s[1] for s in spans))
@@ -1074,7 +1081,10 @@ def render_summary(
     spoken = [s for s in spans if (getattr(s, "text", "") or "").strip()]
     speeds = sorted({round(float(getattr(s, "speed", None) or 1.0), 2) for s in spoken
                      if math.isfinite(float(getattr(s, "speed", None) or 1.0))})
-    titles = [str(getattr(c, "title", "") or "") for c in chapters][:_SUMMARY_MAX_TITLES]
+    # An untitled chapter's title is the parser's English "Chapter N": kept
+    # blank, so whoever lists the titles names it in its own language.
+    titles = ["" if getattr(c, "untitled", False) else str(getattr(c, "title", "") or "")
+              for c in chapters][:_SUMMARY_MAX_TITLES]
     return {
         "engine": engine_id or "",
         "voices": [{"id": str(v.get("id") or ""), "name": str(v.get("name") or "")} for v in voices],

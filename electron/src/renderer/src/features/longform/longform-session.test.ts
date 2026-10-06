@@ -54,6 +54,45 @@ it('keeps the exact chapter milliseconds the cue sheet needs', async () => {
     { title: 'Three', status: 'cached', duration_s: 1.5 },
   ]);
 });
+it('keeps no English stand-in title for a chapter the script left untitled', async () => {
+  fetchMock.mockResolvedValue(
+    eventResponse([
+      { type: 'started', chapters: 3 },
+      { type: 'chapter', index: 0, title: 'Chapter 1', untitled: true },
+      { type: 'chapter', index: 1, title: 'Chapter 2' },
+      { type: 'chapter_error', index: 2, title: 'Chapter 3', untitled: true, error: 'boom' },
+      { type: 'done', output: 'new.m4b', failed_chapters: [2] },
+    ]),
+  );
+  await renderLongform('audiobook');
+  // A heading written "Chapter 2" is the user's own title, and stays.
+  expect(longformSession.state.drafts.audiobook.outputChapters).toEqual([
+    // Marked untitled: the lists name it ("Introduction", "Chapter N") in the app's language.
+    { title: '', untitled: true, status: 'done' },
+    { title: 'Chapter 2', status: 'done' },
+    { title: '', untitled: true, status: 'failed', error: 'boom' },
+  ]);
+});
+it('keeps what voice leveling measured in each chapter, for the Cast panel', async () => {
+  fetchMock.mockResolvedValue(
+    eventResponse([
+      { type: 'started', chapters: 2 },
+      {
+        type: 'chapter',
+        index: 0,
+        title: 'One',
+        levels: { '': { level_db: -26, auto_db: 6 }, Mara: { level_db: 'x', auto_db: 1 } },
+      },
+      { type: 'chapter', index: 1, title: 'Two', cached: true },
+      { type: 'done', output: 'new.m4b', failed_chapters: [] },
+    ]),
+  );
+  await renderLongform('audiobook');
+  expect(longformSession.state.drafts.audiobook.outputChapters).toEqual([
+    { title: 'One', status: 'done', levels: { '': { level_db: -26, auto_db: 6 } } },
+    { title: 'Two', status: 'cached' },
+  ]);
+});
 it('stop aborts the network request and blocks duplicate renders', async () => {
   fetchMock.mockImplementation(
     (_url, options) =>

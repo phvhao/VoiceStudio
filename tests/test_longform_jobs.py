@@ -324,3 +324,55 @@ def test_summary_records_effective_tier_settings(monkeypatch):
 def test_summary_oversized_speed_is_ignored():
     from api.routers.longform_jobs import _clean_summary
     assert _clean_summary({"speeds": [10 ** 1000, 1.2]})["speeds"] == [1.2]
+
+
+# ── Library projects: a render names the editor project it came from ────────
+
+
+def test_library_carries_the_project_and_whether_a_timeline_was_kept():
+    linked, legacy = _uid("book_linked"), _uid("book_legacy")
+    job_store.create(linked, type="audiobook", project_id="project-1")
+    job_store.mark_running(linked)
+    job_store.append_event(linked, json.dumps(
+        {"type": "done", "output": "linked.m4b", "timeline": True}))
+    job_store.mark_done(linked)
+    _seed_done(legacy, type="audiobook", done_payload={"type": "done", "output": "legacy.m4b"})
+    jobs = {j["job_id"]: j for j in build_longform_library(job_store.list_jobs, job_store.events_since, limit=500)}
+    assert jobs[linked]["project_id"] == "project-1"
+    assert jobs[linked]["timeline"] is True
+    # Renders made before the library keep their exact old shape.
+    assert "project_id" not in jobs[legacy] and "timeline" not in jobs[legacy]
+
+
+def test_render_records_its_sanitized_library_project(tmp_path, monkeypatch):
+    import asyncio
+    from api.routers import audiobook
+    from services.audiobook import AudiobookPlan, Chapter, Span
+
+    monkeypatch.setattr("core.config.OUTPUTS_DIR", str(tmp_path))
+    monkeypatch.setattr("services.ffmpeg_utils.find_ffmpeg", lambda: "/usr/bin/true")
+
+    async def gone():
+        return True
+
+    async def run(job_id, project_id):
+        plan = AudiobookPlan(chapters=[Chapter(title="One", spans=[Span(voice_id=None, text="a")])])
+        async for _ in audiobook._render_longform_sse(
+                plan, default_voice=None, job_id=job_id, project_id=project_id,
+                is_disconnected=gone):
+            pass
+
+    linked, plain = _uid("render_project"), _uid("render_plain")
+    asyncio.run(run(linked, "book/../1\n"))
+    asyncio.run(run(plain, None))
+    assert job_store.get(linked)["project_id"] == "book1"
+    assert job_store.get(plain)["project_id"] is None
+
+
+@pytest.mark.parametrize("model", ["AudiobookRequest", "LongformRenderRequest"])
+def test_render_requests_accept_an_optional_project(model):
+    from api.routers import audiobook
+    cls = getattr(audiobook, model)
+    body = {"text": "Hello"} if model == "AudiobookRequest" else {}
+    assert cls(**body).project_id is None
+    assert cls(**body, project_id="abc").project_id == "abc"

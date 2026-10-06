@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import i18n from '@/i18n';
 import { buildLyricsTimeline } from '@shared/utils/audiobookLyrics';
 import {
   buildReaderBook,
   chapterAt,
+  chapterTitle,
   endsSentence,
   followLine,
   followScroll,
   nextChapterStart,
   playbackClock,
   previousChapterStart,
+  seekBarTime,
   sentencePieces,
   type ReaderBook,
 } from './audiobook-reader';
@@ -105,6 +108,11 @@ describe('buildReaderBook', () => {
     ]);
     // Every spoken token keeps its own timing, shown or not.
     expect(reader.words.map((word) => word.text)).toContain('[[gif|jif]]');
+  });
+
+  it('hides [volume] markup like the other unspoken tags', () => {
+    const reader = book('# One\nSay [volume -6dB]it softly[/volume] now.\nDone.', [6]);
+    expect(sentences(reader)).toEqual(['Say it softly now.', 'Done.']);
   });
 
   it('hides the respelling of a multi-word override and still ends the sentence on it', () => {
@@ -213,6 +221,34 @@ describe('buildReaderBook — timeline sidecar', () => {
     ]);
   });
 
+  it("takes lines and paragraphs from the timeline's own breaks when the script moved on", () => {
+    const timeline = buildLyricsTimeline('', {
+      timeline: {
+        version: 1,
+        chapters: [
+          {
+            title: 'One',
+            start: 0,
+            end: 9,
+            precision: 'phrase',
+            phrases: [
+              { text: 'Alpha beta.', start: 0, end: 2 },
+              { text: 'Gamma.', start: 3, end: 5, break: 'line' },
+              { text: 'New one.', start: 6, end: 8, break: 'paragraph' },
+            ],
+          },
+        ],
+      },
+    });
+    const reader = buildReaderBook('# One\nSomething else entirely', timeline);
+    expect(sentences(reader)).toEqual(['Alpha beta.', 'Gamma.', 'New one.']);
+    expect(reader.words[reader.sentences[1].start].gap).toBe('line');
+    expect(reader.chapters[0].paragraphs).toEqual([
+      [0, 2],
+      [2, 3],
+    ]);
+  });
+
   it('pairs chapters with their script text when a failed chapter is missing', () => {
     const reader = timedBook('# One\nAlpha.\n# Two\nBeta.\n# Three\nGamma.\n\nDelta.', [
       ['One', 'phrase', ['Alpha.']],
@@ -250,6 +286,19 @@ describe('buildReaderBook — timeline sidecar', () => {
   });
 });
 
+describe('chapterTitle', () => {
+  it('names the untitled intro apart from a real "# Chương 1" (menu, header, now playing)', () => {
+    const t = i18n.t.bind(i18n);
+    const reader = book('Lời dẫn đầu sách.\n# Chương 1\nMột.\n# Chương 2\nHai.', [1, 2, 3]);
+    const titles = reader.chapters.map((_, index) => chapterTitle(t, reader, index));
+    expect(titles).toEqual([t('book.intro_heading'), 'Chương 1', 'Chương 2']);
+    expect(new Set(titles).size).toBe(titles.length);
+    // A book without headings is one chapter, not an intro.
+    const plain = book('Chỉ có văn bản.', [1]);
+    expect(chapterTitle(t, plain, 0)).toBe(t('audiobook.chapter_n', { n: 1 }));
+  });
+});
+
 describe('chapter steps', () => {
   // The second chapter has no words: without stream timings it spans no time.
   const chapters = [{ start: 0 }, { start: 10 }, { start: 10 }, { start: 25 }];
@@ -273,6 +322,29 @@ describe('chapter steps', () => {
     expect(previousChapterStart(chapters, 20)).toBe(10);
     expect(previousChapterStart(chapters, 2)).toBe(0);
     expect(previousChapterStart(chapters, 0)).toBeNull();
+  });
+});
+
+describe('seekBarTime', () => {
+  it('moves on a whole pixel or a whole second, whichever comes first', () => {
+    // A ten-minute book on a 600px bar: a pixel a second.
+    expect(seekBarTime(30.4, 600, 600)).toBe(30);
+    expect(seekBarTime(30.99, 600, 600)).toBe(30);
+    expect(seekBarTime(31, 600, 600)).toBe(31);
+    // A one-hour book: the clock moves first, the thumb every six seconds.
+    expect(seekBarTime(61.5, 3600, 600)).toBe(61);
+    // A short clip: every pixel.
+    expect(seekBarTime(4.53, 6, 600)).toBeCloseTo(4.53, 6);
+    expect(seekBarTime(4.535, 6, 600)).toBeCloseTo(4.53, 6);
+  });
+
+  it('keeps whole seconds while the bar is unmeasured, and stays within the book', () => {
+    expect(seekBarTime(4.7, 14, 0)).toBe(4);
+    expect(seekBarTime(-1, 14, 600)).toBe(0);
+    expect(seekBarTime(20, 14, 600)).toBe(14);
+    expect(seekBarTime(13.99, 13.99, 600)).toBe(13.99);
+    expect(seekBarTime(Number.NaN, 14, 600)).toBe(0);
+    expect(seekBarTime(3, 0, 600)).toBe(0);
   });
 });
 

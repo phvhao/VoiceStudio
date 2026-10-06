@@ -358,6 +358,9 @@ class AudiobookRequest(ExpressiveMixin):
     # Optional cast map {[voice:NAME] → profile id} for multi-voice books (#1217).
     # Absent/empty reproduces today's exact render + cache keys.
     voice_map: dict[str, str] | None = None
+    # The editor's library project this render belongs to, kept on the job row
+    # so the Projects library can group a book's renders and open the book.
+    project_id: str | None = Field(default=None, max_length=64)
 
 
 def _resolve_voice(profile_id: str | None) -> dict:
@@ -825,6 +828,46 @@ class _ChapterKeys:
     inputs: dict
 
 
+#: Voices a chapter event reports leveling for, at most.
+_MAX_LEVEL_VOICES = 200
+
+
+def _chapter_levels(timing) -> dict:
+    """What voice leveling measured in one chapter, from its timing document
+    (``services.audiobook.chapter_timing_doc``): voice name → ``{"level_db",
+    "auto_db"}``, rounded to 0.1 dB. Only well-formed entries — the document
+    may come from a remote worker — and ``{}`` when leveling was off or the
+    chapter was cached before this was kept."""
+    import math
+
+    raw = timing.get("levels") if isinstance(timing, dict) else None
+    if not isinstance(raw, dict):
+        return {}
+    levels = {}
+    for name, entry in list(raw.items())[:_MAX_LEVEL_VOICES]:
+        if not isinstance(name, str) or len(name) > 200 or not isinstance(entry, dict):
+            continue
+        values = [entry.get("level_db"), entry.get("auto_db")]
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+               for v in values):
+            levels[name] = {"level_db": round(float(values[0]), 1),
+                            "auto_db": round(float(values[1]), 1)}
+    return levels
+
+
+def _span_key_tuple(span) -> tuple:
+    """``(voice_id, text, pause_ms_after, speed[, join[, gain_db]])`` — what
+    :func:`services.longform_render.chapter_cache_key` hashes of one span. A
+    ``[volume]`` gain (the 6th element, behind ``join`` or a ``None`` in its
+    place) and ``join`` are appended only when set: every span without them
+    keeps its pre-existing key."""
+    key = (span.voice_id, span.text, span.pause_ms_after, getattr(span, "speed", None))
+    gain = getattr(span, "gain_db", None)
+    if gain:
+        return key + (span.join, gain)
+    return key + ((span.join,) if span.join else ())
+
+
 def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=None,
                         language=None, opts=None, voice_map=None,
                         default_voice=None) -> _ChapterKeys:
@@ -850,13 +893,11 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
 
     spans = [Span(voice_id=s.voice_id, text=normalize_for_tts(s.text, language),
                   pause_ms_after=s.pause_ms_after, speed=getattr(s, "speed", None),
-                  join=getattr(s, "join", None))
+                  join=getattr(s, "join", None), gain_db=getattr(s, "gain_db", None))
              for s in chapter.spans]
-    # `join` enters the tuple only when set, so a plan without inline-markup
-    # splits keeps its pre-existing chapter cache key.
-    spans_tuples = [(s.voice_id, s.text, s.pause_ms_after, getattr(s, "speed", None))
-                    + ((s.join,) if s.join else ())
-                    for s in spans]
+    # `join` and a [volume] gain enter the tuple only when set, so a plan
+    # without inline-markup splits keeps its pre-existing chapter cache key.
+    spans_tuples = [_span_key_tuple(s) for s in spans]
     # A voice's signature names its reference audio by its path INSIDE the
     # data dir, not the absolute path (#2279): the same profile must key the
     # same cache after the data dir is moved, remounted or spelled differently
@@ -949,7 +990,8 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
     # false". Keyed by the chapter's raw script, which no render input moves.
     content_id = chapter_content_id(
         [(s.voice_id, s.text, s.pause_ms_after, getattr(s, "speed", None),
-          getattr(s, "join", None)) for s in chapter.spans])
+          getattr(s, "join", None))
+         + ((s.gain_db,) if getattr(s, "gain_db", None) else ()) for s in chapter.spans])
     inputs: dict = {
         "sample rate": sr, "engine": engine_id, "normalized text": spans_tuples,
         "pronunciation lexicon": lex_sig, "expressive settings": expr_sig,
@@ -1114,6 +1156,10 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
             "speed": getattr(span, "speed", None),
             "join": getattr(span, "join", None),
         }
+        if getattr(span, "gain_db", None):
+            # A [volume] passage. Sent only where the script has one, so
+            # every other chapter keeps its remote key.
+            row["gain_db"] = span.gain_db
         if leveling:
             # The worker knows a span only by its row, so it is told which
             # voice to level it under. Sent only with leveling on, so every
@@ -1292,9 +1338,20 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
         "duration_s": round(dur, 2),
         "cached": was_cached,
         "title": chapter.title,
+        **_untitled(chapter),
         **({"speech_check": seg_stats["speech_check"]}
            if seg_stats and "speech_check" in seg_stats else {}),
     }
+
+
+def _untitled(chapter) -> dict:
+    """``{"untitled": True}`` for a chapter the script left untitled, else ``{}``.
+
+    Its ``title`` is then the parser's English "Chapter N" (the file's chapter
+    marks need one); every response that carries a chapter title carries this
+    flag beside it, so the app names the chapter in its own language instead.
+    """
+    return {"untitled": True} if getattr(chapter, "untitled", False) else {}
 
 
 def _cache_name(wav_path: str) -> str:
@@ -1395,9 +1452,24 @@ async def audiobook_outline(req: AudiobookOutlineRequest) -> dict:
         in_book = None if book_keys is None or key is None else key in book_keys
         status = ("rendered" if in_book or (in_book is None and cached)
                   else "changed" if in_book is False else "not_rendered")
-        chapters.append({"title": chapter.title, "status": status, "cached": cached,
-                         "in_book": in_book})
+        chapters.append({"title": chapter.title, **_untitled(chapter), "status": status,
+                         "cached": cached, "in_book": in_book})
     return {"chapters": chapters, "book": book is not None}
+
+
+def _project_token(value) -> str | None:
+    """The editor's library project id as a safe token (no path separators,
+    no CR/LF), or None — what job rows, manifests and listings carry."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", value if isinstance(value, str) else "")[:64] or None
+
+
+def _job_project(job_id: str) -> str | None:
+    """The project a job row was created for (best-effort; None without one)."""
+    try:
+        from core import job_store
+        return (job_store.get(job_id) or {}).get("project_id")
+    except Exception:
+        return None
 
 
 async def _render_longform_sse(
@@ -1415,6 +1487,7 @@ async def _render_longform_sse(
     voice_map: dict | None = None,
     job_type: str = "audiobook",
     job_id: str | None = None,
+    project_id: str | None = None,
     resume: bool = False,
     is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     on_completed: Callable[[], None] | None = None,
@@ -1441,20 +1514,24 @@ async def _render_longform_sse(
     # line — CodeQL py/path-injection + py/log-injection. Empty after the strip
     # → a fresh id.
     job_id = re.sub(r"[^A-Za-z0-9_-]", "", job_id or "")[:64] or uuid.uuid4().hex[:16]
+    project_id = _project_token(project_id)
     try:
         from core import job_store
         if not resume:
-            job_store.create(job_id, type=job_type)
+            job_store.create(job_id, type=job_type, project_id=project_id)
         job_store.mark_running(job_id)
     except Exception:
         job_store = None  # job history is best-effort; never block synthesis
 
     # Persist a durable resume manifest (plan + params) so an interrupted render
     # can be resumed later even without the original script. Best-effort.
-    title = (metadata or {}).get("title") or (plan.chapters[0].title if plan.chapters else "")
+    # An untitled first chapter's "Chapter 1" is no name for the book: without
+    # a title the job stays untitled, and the app says so in its own language.
+    title = (metadata or {}).get("title") or (
+        plan.chapters[0].title if plan.chapters and not _untitled(plan.chapters[0]) else "")
     try:
         longform_resume.write_manifest(longform_resume.build_manifest(
-            job_id=job_id, job_type=job_type, title=title,
+            job_id=job_id, job_type=job_type, title=title, project_id=project_id,
             plan_chapters=[
                 {"title": c.title, "spans": [s.to_dict() for s in c.spans],
                  **({"untitled": True} if getattr(c, "untitled", False) else {})}
@@ -1583,7 +1660,7 @@ async def _render_longform_sse(
                 # the Stories exporter keep working.
                 last_chapter_exc = e
                 yield _emit({"type": "chapter_error", "index": i, "total": total,
-                             "title": chapter.title,
+                             "title": chapter.title, **_untitled(chapter),
                              # No env diagnostic per chapter: a book can fail
                              # hundreds of times and it is identical every time.
                              # The terminal error below carries one.
@@ -1591,8 +1668,8 @@ async def _render_longform_sse(
                                              include_diagnostic=False)})
                 continue
             chapter_files.append(wav_path)
-            rendered_timing.append((chapter, dur, load_chapter_timeline(wav_path),
-                                    _cache_name(wav_path)))
+            chapter_timing = load_chapter_timeline(wav_path)
+            rendered_timing.append((chapter, dur, chapter_timing, _cache_name(wav_path)))
             dur_ms = int(round(dur * 1000))
             chapters_meta.append((chapter.title, dur_ms))
             cached_n += 1 if was_cached else 0
@@ -1600,7 +1677,7 @@ async def _render_longform_sse(
             # the embedded m4b chapters are built from, so a client summing it
             # reproduces their START offsets; `duration_s` is display-rounded.
             ev = {"type": "chapter", "index": i, "total": total,
-                  "title": chapter.title, "duration_s": round(dur, 2),
+                  "title": chapter.title, **_untitled(chapter), "duration_s": round(dur, 2),
                   "duration_ms": dur_ms, "cached": was_cached}
             if seg_stats is not None:
                 # Additive fields (old clients ignore them): segment-level
@@ -1611,6 +1688,12 @@ async def _render_longform_sse(
                     # Phrases that still differ from the script after their
                     # retakes — what the listener should check.
                     ev["speech_check"] = seg_stats["speech_check"]
+            levels = _chapter_levels(chapter_timing)
+            if levels:
+                # Additive: what voice leveling measured and added per voice
+                # (name → {level_db, auto_db}), for the Cast panel. Kept with
+                # the chapter's audio, so a cached chapter reports it too.
+                ev["levels"] = levels
             yield _emit(ev)
 
         route_notice = chapter_run.notice()
@@ -1889,6 +1972,7 @@ async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
         render_page,
         write_export_zip,
     )
+    from services.audiobook import timeline_with_layout
     from services.ffmpeg_utils import probe_duration
 
     audio_path = _book_path(req.output)
@@ -1905,11 +1989,17 @@ async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
             total = await probe_duration(audio_path, allowed_root=OUTPUTS_DIR)
         timeline = estimated_timeline(req.output, req.text, chapter_durations=durations,
                                       duration=total)
+    elif timeline is not None and req.text:
+        # A book timed before phrases kept their line and paragraph breaks
+        # takes them from the script it was rendered from.
+        timeline = await asyncio.to_thread(timeline_with_layout, timeline, req.text)
     meta = req.metadata or {}
-    chapters = (timeline or {}).get("chapters") or []
+    chapters = [c for c in (timeline or {}).get("chapters") or [] if isinstance(c, dict)]
     labels = labels_for(req.labels)
+    # The page names an untitled opening in its own words, never as the title.
+    named = next((c for c in chapters if not c.get("untitled") and c.get("title")), None)
     title = (req.title.strip() or (meta.get("title") or "").strip()
-             or (chapter_title(chapters[0], 1, labels) if chapters else "") or req.output)
+             or (chapter_title(named, 1, labels) if named else "") or req.output)
     cover = _safe_cover_path(req.cover_path)
     cover_entry = f"cover{os.path.splitext(cover)[1].lower()}" if cover else None
     entry = f"audio/{audio_name(req.output)}"
@@ -1976,7 +2066,7 @@ async def audiobook_synthesize(req: AudiobookRequest, request: Request = None):
             fmt=req.format, bitrate=req.bitrate,
             loudness=req.loudness, cover_path=req.cover_path, metadata=req.metadata,
             lexicon=req.lexicon, opts=_expressive_opts(req), voice_map=req.voice_map,
-            job_type="audiobook",
+            job_type="audiobook", project_id=req.project_id,
             is_disconnected=request.is_disconnected if request is not None else None,
         ),
         media_type="text/event-stream",
@@ -1993,6 +2083,9 @@ class LongformSpan(BaseModel):
     speed: float | None = None
     # Set by the parser only where inline markup split one run of text.
     join: Literal["continue", "paragraph"] | None = None
+    # A [volume] passage's gain in dB (the parser clamps it to ±12; so does
+    # synthesis).
+    gain_db: float | None = Field(default=None, ge=-MAX_LEVEL_GAIN_DB, le=MAX_LEVEL_GAIN_DB)
 
 
 class LongformChapter(BaseModel):
@@ -2012,6 +2105,8 @@ class LongformRenderRequest(ExpressiveMixin):
     lexicon: dict | None = None
     # Cast map {[voice:NAME] → profile id} (#1217); absent/empty = today's render.
     voice_map: dict[str, str] | None = None
+    # The editor's library project (see AudiobookRequest.project_id).
+    project_id: str | None = Field(default=None, max_length=64)
 
 
 @router.post("/longform/render")
@@ -2030,7 +2125,7 @@ async def longform_render(req: LongformRenderRequest, request: Request = None):
         # spans carry inter-line silence with empty text).
         spans = [Span(voice_id=s.voice_id, text=(s.text or "").strip(),
                       pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
-                      join=s.join)
+                      join=s.join, gain_db=s.gain_db or None)
                  for s in c.spans if ((s.text and s.text.strip()) or s.pause_ms_after > 0)]
         if spans:
             chapters.append(Chapter(title=c.title or f"Chapter {i + 1}", spans=spans,
@@ -2042,7 +2137,7 @@ async def longform_render(req: LongformRenderRequest, request: Request = None):
             fmt=req.format, bitrate=req.bitrate,
             loudness=req.loudness, cover_path=req.cover_path, metadata=req.metadata,
             lexicon=req.lexicon, opts=_expressive_opts(req), voice_map=req.voice_map,
-            job_type="story",
+            job_type="story", project_id=req.project_id,
             is_disconnected=request.is_disconnected if request is not None else None,
         ),
         media_type="text/event-stream",
@@ -2089,6 +2184,8 @@ def list_resumable_jobs() -> dict:
             "total_chapters": manifest.get("total_chapters", 0),
             "chapters_done": _chapters_done(jid),
             "created_at": job.get("created_at"),
+            # The book it renders, so Resume finishes it there and nowhere else.
+            "project_id": _project_token(manifest.get("project_id") or job.get("project_id")),
         })
     return {"jobs": out}
 
@@ -2141,6 +2238,9 @@ async def resume_longform(job_id: str, request: Request = None):
             opts=ExpressiveOptions.from_manifest(p.get("expressive")),
             voice_map=p.get("voice_map"),
             job_type=entry["job_type"],
+            # The resumed job (and its checkpoint) still belongs to its book.
+            project_id=_project_token(manifest.get("project_id")
+                                      or _job_project(entry["job_id"])),
             on_completed=retire_checkpoint,
             is_disconnected=request.is_disconnected if request is not None else None,
         ),

@@ -22,8 +22,29 @@ export function htmlExportLabels(t: TFunction) {
     player: t('book.html_player'),
     estimated: t('book.html_estimated'),
     keys: t('book.html_keys'),
+    keys_chapter: t('book.html_keys_chapter'),
     // A chapter the script left untitled; the page puts in its number.
     chapter_n: t('audiobook.chapter_n', { n: '{n}' }),
+    // The text before the first chapter heading.
+    intro: t('book.intro_heading'),
+    prev_chapter: t('book.html_prev_chapter'),
+    next_chapter: t('book.html_next_chapter'),
+    settings: t('book.html_settings'),
+    text_size: t('book.html_text_size'),
+    smaller: t('book.html_smaller'),
+    larger: t('book.html_larger'),
+    theme: t('book.html_theme'),
+    theme_auto: t('book.html_theme_auto'),
+    theme_light: t('book.html_theme_light'),
+    theme_sepia: t('book.html_theme_sepia'),
+    theme_dark: t('book.html_theme_dark'),
+    align: t('book.html_align'),
+    justify: t('book.html_justify'),
+    align_start: t('book.html_align_start'),
+    follow: t('book.html_follow'),
+    back_to_current: t('book.html_back_to_current'),
+    shortcuts: t('book.html_shortcuts'),
+    close: t('book.html_close'),
   };
 }
 

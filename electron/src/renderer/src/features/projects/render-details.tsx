@@ -24,6 +24,10 @@ export interface RenderRecord {
   duration_s?: number;
   chapters?: number;
   summary?: RenderSummary;
+  /** The library project it was rendered from; renders made before the library have none. */
+  project_id?: string;
+  /** Whether its reading timeline was kept. */
+  timeline?: boolean;
 }
 
 export function clock(seconds: number | undefined): string {

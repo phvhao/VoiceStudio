@@ -1,23 +1,19 @@
-import { createPortal } from 'react-dom';
-import { textareaCaret } from '@/lib/textarea-caret';
 import { importScript, SCRIPT_ACCEPT } from '@/lib/import-script';
 import {
   AlignLeftIcon,
   ChevronDownIcon,
   ClipboardPasteIcon,
-  PlusIcon,
   Undo2Icon,
   FileUpIcon,
   SparklesIcon,
 } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
-import { TAGS } from '@/lib/languages';
+import { ScriptInsertMenu, useScriptInsertMenu } from '@/components/script-insert-menu';
+import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
-import { cn } from '@/lib/utils';
 import { SectionLabel } from './section-label';
 
 export function ScriptPanel({
@@ -29,27 +25,22 @@ export function ScriptPanel({
   const text = useCloneSetting('text');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const pasteRef = useRef<HTMLDivElement>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
-  const [anchor, setAnchor] = useState({ left: 0, top: 0 });
   const [undo, setUndo] = useState<{ before: string; after: string } | null>(null);
-  const [insertOpen, setInsertOpen] = useState(false);
   const [pasting, setPasting] = useState(false);
-  const menuId = useId();
+  const insert = useScriptInsertMenu(textareaRef);
 
   useEffect(() => {
-    if (!insertOpen && !pasteOpen) return;
+    if (!pasteOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target;
-      if (!(target instanceof Node) || !menuRef.current?.contains(target)) setInsertOpen(false);
       if (!(target instanceof Node) || !pasteRef.current?.contains(target)) setPasteOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
-        setInsertOpen(false);
         setPasteOpen(false);
         textareaRef.current?.focus();
       }
@@ -60,7 +51,7 @@ export function ScriptPanel({
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [insertOpen, pasteOpen]);
+  }, [pasteOpen]);
 
   const edit = (value: string, replace = false) => {
     const field = textareaRef.current;
@@ -88,7 +79,7 @@ export function ScriptPanel({
       });
     } else setCloneSetting('text', field.value);
     if (replace) setUndo({ before, after });
-    setInsertOpen(false);
+    insert.close();
     setPasteOpen(false);
   };
 
@@ -107,36 +98,6 @@ export function ScriptPanel({
       setPasting(false);
     }
   };
-
-  const openInsert = (focusMenu = true) => {
-    const field = textareaRef.current;
-    if (!field) return;
-    const point = textareaCaret(field);
-    setAnchor({
-      left: Math.max(8, Math.min(point.left, window.innerWidth - 368)),
-      top: Math.max(8, Math.min(point.top + 6, window.innerHeight - 240)),
-    });
-    setPasteOpen(false);
-    setInsertOpen(true);
-    if (focusMenu)
-      requestAnimationFrame(() =>
-        menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true }),
-      );
-  };
-
-  useEffect(() => {
-    if (!insertOpen) return;
-    const close = (event: Event) => {
-      const target = event.target;
-      if (!(target instanceof Node) || !menuRef.current?.contains(target)) setInsertOpen(false);
-    };
-    window.addEventListener('resize', close);
-    document.addEventListener('scroll', close, true);
-    return () => {
-      window.removeEventListener('resize', close);
-      document.removeEventListener('scroll', close, true);
-    };
-  }, [insertOpen]);
 
   return (
     <section className="flex min-h-64 flex-1 flex-col">
@@ -203,7 +164,7 @@ export function ScriptPanel({
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={() => {
                   setPasteOpen(!pasteOpen);
-                  setInsertOpen(false);
+                  insert.close();
                 }}
               >
                 <ChevronDownIcon />
@@ -243,84 +204,11 @@ export function ScriptPanel({
                 {t('scriptEdit.undo')}
               </Button>
             )}
-            <div>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="font-normal text-muted-foreground hover:text-foreground"
-                title={t('clone.insert_token')}
-                onPointerDown={(event) => event.preventDefault()}
-                onClick={() => (insertOpen ? setInsertOpen(false) : openInsert())}
-                aria-expanded={insertOpen}
-                aria-haspopup="menu"
-                aria-controls={insertOpen ? menuId : undefined}
-                aria-label={t('clone.insert_token')}
-              >
-                <PlusIcon data-icon="inline-start" />
-                {t('clone.insert')}
-                <ChevronDownIcon
-                  className={cn('transition-transform', insertOpen && 'rotate-180')}
-                />
-              </Button>
-              {insertOpen
-                ? createPortal(
-                    <div
-                      ref={menuRef}
-                      style={{ left: anchor.left, top: anchor.top }}
-                      onKeyDown={(event) => {
-                        const buttons = Array.from(
-                          menuRef.current?.querySelectorAll<HTMLButtonElement>(
-                            '[role="menuitem"]',
-                          ) ?? [],
-                        );
-                        const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
-                        if (
-                          [
-                            'ArrowRight',
-                            'ArrowDown',
-                            'ArrowLeft',
-                            'ArrowUp',
-                            'Home',
-                            'End',
-                          ].includes(event.key)
-                        ) {
-                          event.preventDefault();
-                          const next =
-                            event.key === 'Home'
-                              ? 0
-                              : event.key === 'End'
-                                ? buttons.length - 1
-                                : (index +
-                                    (event.key === 'ArrowRight' || event.key === 'ArrowDown'
-                                      ? 1
-                                      : -1) +
-                                    buttons.length) %
-                                  buttons.length;
-                          buttons[next]?.focus();
-                        }
-                        if (event.key === 'Tab') setInsertOpen(false);
-                      }}
-                      id={menuId}
-                      role="menu"
-                      aria-label={t('clone.insert_token')}
-                      className="fixed z-50 flex max-h-56 w-[min(360px,calc(100vw-16px))] flex-wrap gap-1 overflow-y-auto rounded-lg bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10 animate-in fade-in-0 zoom-in-95 motion-reduce:animate-none"
-                    >
-                      {TAGS.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          role="menuitem"
-                          className="rounded-full px-2 py-0.5 text-[length:var(--text-caption)] text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
-                          onClick={() => edit(tag)}
-                        >
-                          {tag}
-                        </button>
-                      ))}
-                    </div>,
-                    document.body,
-                  )
-                : null}
-            </div>
+            <ScriptInsertMenu
+              menu={insert}
+              setText={(value) => setCloneSetting('text', value)}
+              onInsert={onUserEdit}
+            />
           </div>
         </div>
         {coachmark ? (
@@ -332,14 +220,14 @@ export function ScriptPanel({
             <span>{coachmark}</span>
           </div>
         ) : null}
-        <Textarea
+        <MarkupTextarea
           data-clone-script
-          ref={textareaRef}
+          textareaRef={textareaRef}
           value={text}
-          onChange={(event) => {
-            setInsertOpen(false);
+          onValueChange={(value) => {
+            insert.close();
             onUserEdit?.();
-            setCloneSetting('text', event.target.value);
+            setCloneSetting('text', value);
           }}
           placeholder={
             voiceName
@@ -347,14 +235,9 @@ export function ScriptPanel({
               : t('clone.prompt_placeholder')
           }
           aria-label={t('clone.text_label')}
-          className="min-h-32 flex-1 resize-none rounded-none border-0 bg-transparent px-0 py-3 leading-[var(--text-editor--line-height)] text-[length:var(--text-editor)] shadow-none ring-0 placeholder:text-muted-foreground focus-visible:ring-0 md:text-[length:var(--text-editor)] md:leading-[var(--text-editor--line-height)] dark:bg-transparent"
-          onKeyDown={(event) => {
-            if (event.altKey && event.key === '/') {
-              event.preventDefault();
-              openInsert();
-            } else if (event.key !== 'Escape') setInsertOpen(false);
-          }}
-          spellCheck
+          className="min-h-32 flex-1"
+          textClassName="py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
+          onKeyDown={insert.onEditorKeyDown}
         />
         <div className="flex justify-end">
           <span className="text-[length:var(--text-label)] text-muted-foreground tabular-nums">

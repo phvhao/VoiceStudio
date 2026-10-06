@@ -28,6 +28,10 @@ const INLINE_OVERRIDE_RE = /\[\[([^\]]{0,256})\]\]/g;
 // Recognized (non-voice) bracket tokens, so validation can flag the rest.
 const PAUSE_TOKEN_RE = /^\[\s*pause(?:\s+\d+(?:\.\d+)?(?:\s*(?:ms|s))?)?\s*\]$/i;
 const SSML_TOKEN_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
+// [volume ±N dB] / [/volume] (mirrors ssml_lite._TAG_RE: a bounded number, an
+// optional dB). A [volume] without a readable gain is read aloud: unknown.
+export const VOLUME_TOKEN_RE =
+  /^(?:\[volume[ \t]+([+-]?[0-9]{1,4}(?:\.[0-9]{1,4})?)[ \t]?(?:db)?\]|\[\/volume\])$/i;
 const REACTION_TOKENS = new Set(TAGS.map((s) => s.toLowerCase()));
 
 /** ~ words a listener hears per minute at an audiobook narration pace. */
@@ -189,6 +193,7 @@ export function validateScript(text, { mappedNames = [], profileIds = [] } = {})
       VOICE_RE.test(tok) ||
       PAUSE_TOKEN_RE.test(tok) ||
       SSML_TOKEN_RE.test(tok) ||
+      VOLUME_TOKEN_RE.test(tok) ||
       REACTION_TOKENS.has(lower);
     VOICE_RE.lastIndex = 0; // test() advances a /g regex — reset it
     if (!known && !seenTags.has(lower)) {

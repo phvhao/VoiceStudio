@@ -7,3 +7,5 @@ export function validateScript(
   options?: { mappedNames?: string[]; profileIds?: string[] },
 ): { type: string; name?: string; title?: string; tag?: string }[];
 export const AUDIOBOOK_WPM: number;
+/** A `[volume ±N dB]` (group 1: the gain as written) or `[/volume]` token. */
+export const VOLUME_TOKEN_RE: RegExp;

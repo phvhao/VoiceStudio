@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Popover } from '@base-ui/react/popover';
 import type { TFunction } from 'i18next';
-import { PauseIcon, SmileIcon } from 'lucide-react';
+import { PauseIcon, SmileIcon, Volume2Icon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { isImeComposing } from '@/lib/ime';
@@ -30,6 +30,8 @@ import {
   DELIVERY_TAGS,
   PAUSE_PRESETS,
   VOICE_RESET_TOKEN,
+  VOLUME_CLOSE,
+  VOLUME_PRESETS,
   castNameForProfile,
   completeTag,
   deliveryKind,
@@ -39,6 +41,7 @@ import {
   pauseToken,
   typedTagAt,
   voiceToken,
+  volumeToken,
   type TypedTag,
 } from './script-markup';
 import { voiceAccent } from './voice-palette';
@@ -47,7 +50,7 @@ import { voiceAccent } from './voice-palette';
 export interface Suggestion {
   /** Unique within the list. */
   key: string;
-  group: 'voice' | 'pause' | 'delivery' | 'expression';
+  group: 'voice' | 'pause' | 'delivery' | 'volume' | 'expression';
   /** The tag inserted, or the opening half of a delivery pair. */
   open: string;
   /** The closing half of a delivery pair. */
@@ -64,6 +67,7 @@ const GROUP_LABELS: Record<Suggestion['group'], string> = {
   voice: 'audiobook.insert_voice',
   pause: 'audiobook.insert_pause',
   delivery: 'context.delivery',
+  volume: 'markup.volume',
   expression: 'audiobook.insert_reactions',
 };
 
@@ -123,6 +127,13 @@ export function tagSuggestions(
       open: `[${tag}]`,
       close: `[/${tag}]`,
       label: t(DELIVERY_LABELS[tag]),
+    })),
+    ...VOLUME_PRESETS.map((preset): Suggestion => ({
+      key: `volume:${preset.id}`,
+      group: 'volume',
+      open: volumeToken(preset.db),
+      close: VOLUME_CLOSE,
+      label: t(preset.label),
     })),
     ...expressionGroups().flatMap((group) =>
       group.tags.map((tag): Suggestion => ({
@@ -377,6 +388,8 @@ function SuggestionIcon({ item, voices }: { item: Suggestion; voices: readonly s
       const Icon = DELIVERY_ICONS[deliveryKind(item.open) ?? 'slow'];
       return <Icon className="text-violet-500" />;
     }
+    case 'volume':
+      return <Volume2Icon className="text-fuchsia-500" />;
     case 'expression':
       return <SmileIcon className="text-emerald-500" />;
   }

@@ -16,6 +16,22 @@ export interface LongformDurableStore {
   clear(): Promise<void>;
 }
 
+/**
+ * Records under keys of their own, beside the single workspace record, in the
+ * same object store (its keys are out-of-line, so no database upgrade is
+ * needed). Values come back unchecked: a corrupt record is the caller's to
+ * judge, and judging it must never cost the records next to it.
+ */
+export interface LongformKeyedStore {
+  /** Every record whose key starts with `prefix`, in key order. */
+  entries(prefix: string): Promise<[string, unknown][]>;
+  get(key: string): Promise<unknown>;
+  /** Writes and removes records in one transaction: all of them land, or none. */
+  commit(change: { put?: [string, unknown][]; remove?: string[] }): Promise<void>;
+  /** Removes every record, the workspace record included. */
+  clearAll(): Promise<void>;
+}
+
 function isDurableRecord(value: unknown): value is DurableLongformRecord {
   if (value === null || typeof value !== 'object') return false;
   const record = value as Partial<DurableLongformRecord>;
@@ -51,7 +67,7 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
 export function createIndexedDbLongformStore(
   getFactory: () => IDBFactory = () => globalThis.indexedDB,
   databaseName = LONGFORM_DB_NAME,
-): LongformDurableStore {
+): LongformDurableStore & LongformKeyedStore {
   let databasePromise: Promise<IDBDatabase> | null = null;
 
   function invalidateDatabase(
@@ -161,6 +177,43 @@ export function createIndexedDbLongformStore(
       return withDatabase(async (database) => {
         const transaction = database.transaction(LONGFORM_DB_STORE, 'readwrite');
         transaction.objectStore(LONGFORM_DB_STORE).delete(LONGFORM_DB_RECORD_ID);
+        await transactionDone(transaction);
+      });
+    },
+    entries(prefix) {
+      return withDatabase(async (database) => {
+        const transaction = database.transaction(LONGFORM_DB_STORE, 'readonly');
+        const store = transaction.objectStore(LONGFORM_DB_STORE);
+        const range = IDBKeyRange.bound(prefix, prefix + '￿');
+        const [keys, values] = await Promise.all([
+          requestResult(store.getAllKeys(range)),
+          requestResult(store.getAll(range)),
+          transactionDone(transaction),
+        ]);
+        return keys.map((key, index) => [String(key), values[index]] as [string, unknown]);
+      });
+    },
+    get(key) {
+      return withDatabase(async (database) => {
+        const transaction = database.transaction(LONGFORM_DB_STORE, 'readonly');
+        const request = transaction.objectStore(LONGFORM_DB_STORE).get(key);
+        const [value] = await Promise.all([requestResult(request), transactionDone(transaction)]);
+        return value;
+      });
+    },
+    commit({ put = [], remove = [] }) {
+      return withDatabase(async (database) => {
+        const transaction = database.transaction(LONGFORM_DB_STORE, 'readwrite');
+        const store = transaction.objectStore(LONGFORM_DB_STORE);
+        for (const key of remove) store.delete(key);
+        for (const [key, value] of put) store.put(value, key);
+        await transactionDone(transaction);
+      });
+    },
+    clearAll() {
+      return withDatabase(async (database) => {
+        const transaction = database.transaction(LONGFORM_DB_STORE, 'readwrite');
+        transaction.objectStore(LONGFORM_DB_STORE).clear();
         await transactionDone(transaction);
       });
     },

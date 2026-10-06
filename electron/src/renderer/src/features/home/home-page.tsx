@@ -11,13 +11,14 @@ import { useProfiles } from '@/hooks/use-profiles';
 import { brandArtwork } from '@/lib/brand';
 import { patchCloneSettings } from '@/lib/store/clone-settings';
 import { selectCloneProfile } from '@/lib/store/reference';
-import { blankLongformDraft, editLongform } from '@/features/longform/longform-session';
-import { projectLibrary, type LongformProject } from '@/features/longform/project-library';
+import { listLongformProjects, openLongformProject } from '@/features/longform/longform-session';
+import type { LongformProjectMeta } from '@/features/longform/project-library';
+import { toast } from 'sonner';
 import { openDubProject } from '@/features/dub/dub-session';
 import type { DubProject } from '@/features/projects/project-format';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
-import { apiJson } from '@/lib/api/client';
+import { apiJson, describeError } from '@/lib/api/client';
 import {
   readDraft,
   replaceRecipe,
@@ -82,7 +83,7 @@ export function HomePage() {
   });
   const { data: longformProjects = [] } = useQuery({
     queryKey: ['longform-projects'],
-    queryFn: projectLibrary.list,
+    queryFn: listLongformProjects,
   });
   const destinations: Destination[] = [
     {
@@ -149,21 +150,20 @@ export function HomePage() {
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 4);
   const openProject = async (
-    item: { kind: 'dub'; project: DubProject } | { kind: 'longform'; project: LongformProject },
+    item: { kind: 'dub'; project: DubProject } | { kind: 'longform'; project: LongformProjectMeta },
   ) => {
     if (item.kind === 'dub') {
       const project = await apiJson<DubProject>('/projects/' + encodeURIComponent(item.project.id));
       if (openDubProject(project)) await navigate({ to: '/dub' });
       return;
     }
-    editLongform(item.project.mode, {
-      ...blankLongformDraft(),
-      ...structuredClone(item.project.draft),
-      projectId: item.project.id,
-    });
-    await navigate({
-      to: item.project.mode === 'stories' ? '/stories' : '/audiobook',
-    });
+    // Saves the open book first; refused (with the reason) while that editor renders.
+    try {
+      const mode = await openLongformProject(item.project.id);
+      await navigate({ to: mode === 'stories' ? '/stories' : '/audiobook' });
+    } catch (error) {
+      toast.error(describeError(error));
+    }
   };
   const useProfile = async (profile: (typeof profiles)[number]) => {
     if (profile.kind === 'design') {

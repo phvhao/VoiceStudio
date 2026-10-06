@@ -2237,5 +2237,374 @@
         "untitled": true
       }
     ]
+  },
+  {
+    "name": "volume_basic",
+    "input": "[voice:kim cuc] Bình thường… [volume -6dB]câu thì thầm[/volume] tiếp tục.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "kim cuc",
+            "text": "Bình thường…",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "continue"
+          },
+          {
+            "voice_id": "kim cuc",
+            "text": "câu thì thầm",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -6.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "kim cuc",
+            "text": "tiếp tục.",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_spellings",
+    "input": "a [volume -3 dB]b[/volume] [volume +2db]c[/volume] [VOLUME 1.5DB]d[/Volume] [volume 4]e[/volume] f",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -3.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "c",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 2.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "d",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 1.5,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "e",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 4.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "f",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_nested_adds_and_clamps",
+    "input": "a [volume +3dB]b [volume 20dB]c[/volume] d [volume -6]e[/volume][/volume] f",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 3.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "c",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 12.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "d",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": 3.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "e",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -3.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "f",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_rounds_half_to_even_tenths",
+    "input": "[volume -4.25]a[/volume] [volume 0.05]b[/volume] [volume -0]c[/volume]",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -4.2,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b c",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_unclosed_ends_at_pause",
+    "input": "a [volume -6]b [pause 1s] c",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 1000,
+            "speed": null,
+            "gain_db": -6.0
+          },
+          {
+            "voice_id": "v1",
+            "text": "c",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_unclosed_ends_at_voice_switch",
+    "input": "[volume -6]a [voice:B] b",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -6.0
+          },
+          {
+            "voice_id": "B",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_invalid_is_literal_text",
+    "input": "x [volume]y [volume loud]z [/volume 3] [volume 12345]w [slow 3]v",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "x [volume]y [volume loud]z [/volume 3] [volume 12345]w [slow 3]v",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_with_delivery",
+    "input": "[slow]a [volume -6dB]b[/slow] c[/volume] d",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "a",
+            "pause_ms_after": 0,
+            "speed": 0.85,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "b",
+            "pause_ms_after": 0,
+            "speed": 0.85,
+            "gain_db": -6.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "c",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -6.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "d",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "volume_across_section_heading",
+    "input": "# C\n[volume -4]Intro.\n## Part\nMore.[/volume] After.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "C",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Intro.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -4.0,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "Part",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -4.0,
+            "section": "Part",
+            "section_level": 2,
+            "join": "paragraph"
+          },
+          {
+            "voice_id": "v1",
+            "text": "More.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "gain_db": -4.0,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "After.",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "volume_with_default_speed",
+    "input": "plain [volume 3]loud[/volume]",
+    "default_voice": "v1",
+    "default_speed": 1.2,
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "plain",
+            "pause_ms_after": 0,
+            "speed": 1.2,
+            "join": "continue"
+          },
+          {
+            "voice_id": "v1",
+            "text": "loud",
+            "pause_ms_after": 0,
+            "speed": 1.2,
+            "gain_db": 3.0
+          }
+        ],
+        "untitled": true
+      }
+    ]
   }
 ]

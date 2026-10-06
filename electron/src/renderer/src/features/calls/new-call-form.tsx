@@ -257,6 +257,7 @@ export function NewCallForm({
             rows={2}
             value={disclosure}
             aria-describedby={`${ids}-disclosure-locked`}
+            spellCheck={false}
             onChange={(event) => set('disclosure', event.target.value)}
           />
         ) : null}

@@ -185,3 +185,30 @@ it('reads a tag on a chapter heading as part of its title', async () => {
   await screen.findByRole('menu');
   expect(screen.queryByRole('menuitem', { name: 'Remove tag' })).toBeNull();
 });
+
+it('changes and unwraps a [volume] passage from either half', async () => {
+  const onVoiceGains = vi.fn();
+  render(<Editor initial="say [volume -6dB]softly[/volume] now" onVoiceGains={onVoiceGains} />);
+  rightClickAt('say [volume -6dB]softly[/vol'.length);
+  const steps = await submenu(/Change volume/);
+  expect(within(steps).getByRole('menuitemradio', { name: 'Quieter (-6 dB)' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  fireEvent.click(within(steps).getByRole('menuitemradio', { name: 'Louder (+6 dB)' }));
+  expect(script().value).toBe('say [volume +6dB]softly[/volume] now');
+  // A passage is not a voice: no voice volume to step.
+  expect(onVoiceGains).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  rightClickAt('say [vol'.length);
+  fireEvent.click(await screen.findByRole('menuitem', { name: /keep the text/ }));
+  expect(script().value).toBe('say softly now');
+});
+
+it('wraps the selection in a [volume] step', async () => {
+  render(<Editor initial="say softly now" />);
+  rightClickAt(4, 10);
+  const steps = await submenu('Quieter or louder');
+  fireEvent.click(within(steps).getByRole('menuitem', { name: /A little louder/ }));
+  expect(script().value).toBe('say [volume +3dB]softly[/volume] now');
+});

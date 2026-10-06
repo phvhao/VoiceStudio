@@ -94,4 +94,73 @@ describe('IndexedDB long-form store', () => {
 
     await expect(store.read()).rejects.toMatchObject({ name: 'DataError' });
   });
+
+  it('keeps records under keys of their own, written all at once', async () => {
+    // One object store in memory; a readwrite transaction applies its
+    // operations only when it completes, as IndexedDB commits.
+    const records = new Map<string, unknown>([
+      ['meta:a', { id: 'a' }],
+      ['meta:b', { id: 'b' }],
+      ['other', 1],
+    ]);
+    const transactions: string[][] = [];
+    const database = {
+      close: vi.fn(),
+      objectStoreNames: { contains: () => true },
+      transaction: vi.fn(() => {
+        const ops: (() => void)[] = [];
+        const names: string[] = [];
+        transactions.push(names);
+        const transaction: Record<string, unknown> = { error: null };
+        const request = (result: () => unknown) => {
+          const value: Record<string, unknown> = { error: null };
+          queueMicrotask(() => {
+            value.result = result();
+            (value.onsuccess as (() => void) | undefined)?.();
+          });
+          return value;
+        };
+        const inRange = (range: { lower: string; upper: string }) =>
+          [...records.keys()].filter((key) => key >= range.lower && key <= range.upper).sort();
+        transaction.objectStore = () => ({
+          get: (key: string) => request(() => records.get(key)),
+          getAllKeys: (range: { lower: string; upper: string }) => request(() => inRange(range)),
+          getAll: (range: { lower: string; upper: string }) =>
+            request(() => inRange(range).map((key) => records.get(key))),
+          put: (value: unknown, key: string) => {
+            names.push('put ' + key);
+            ops.push(() => records.set(key, value));
+          },
+          delete: (key: string) => {
+            names.push('delete ' + key);
+            ops.push(() => records.delete(key));
+          },
+          clear: () => ops.push(() => records.clear()),
+        });
+        setTimeout(() => {
+          ops.forEach((op) => op());
+          (transaction.oncomplete as (() => void) | undefined)?.();
+        });
+        return transaction;
+      }),
+    } as unknown as IDBDatabase;
+    vi.stubGlobal('IDBKeyRange', {
+      bound: (lower: string, upper: string) => ({ lower, upper }),
+    });
+    try {
+      const store = createIndexedDbLongformStore(() => createReadableFactory(database));
+      expect(await store.entries('meta:')).toEqual([
+        ['meta:a', { id: 'a' }],
+        ['meta:b', { id: 'b' }],
+      ]);
+      await store.commit({ put: [['meta:c', { id: 'c' }]], remove: ['meta:a'] });
+      expect(transactions.at(-1)).toEqual(['delete meta:a', 'put meta:c']);
+      expect(await store.get('meta:c')).toEqual({ id: 'c' });
+      expect((await store.entries('meta:')).map(([key]) => key)).toEqual(['meta:b', 'meta:c']);
+      await store.clearAll();
+      expect(records.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

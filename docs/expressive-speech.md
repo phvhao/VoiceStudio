@@ -11,9 +11,10 @@ ignores.
 
 | You want | Do this | Works on |
 |---|---|---|
-| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text | Every engine |
-| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
+| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text — on Clone and Voice Design, ⊕ Insert (or **Alt+/**) offers the Audiobook pause lengths and a custom one; tags are highlighted as you type | Every engine |
+| Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Volume**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
 | Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
+| One passage quieter or louder (a whisper, a shout) | Wrap it in `[volume -6dB]…[/volume]` — the toolbar's **Volume** does it for the selected text — see [Voice volume](#voice-volume) | Every engine |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
 | Whispering | Style → `whisper` (the voice-design/style field) | Default engine |
@@ -65,33 +66,51 @@ the same color in the editor, the **Cast** panel and the toolbar's voice
 picker; `[voice:]` and `[voice:default]` (back to the default voice) are
 outlined in gray. The line with the cursor is shaded, `# Chapter` lines show
 as bands (`## Section` and `### Section` lines as lighter ones), and the
-status bar underneath shows the line and column, the voice in effect at the
-cursor and the profile cast to read it (for example *Voice: Mara, read by
-Lan*), and the script's length.
+gutter marks them: a chapter heading shows its number (*C1*, *C2*…) instead
+of the line number, a section shows *§*, and the lane breaks at every chapter
+heading, where the voice starts over. Text before the first heading is the
+book's intro and is labeled *Intro*. The status bar underneath shows the line
+and column, the voice in effect at the cursor and the profile cast to read it
+(*Voice: Mara, read by Lan*; just *Voice: Lan* when the name and the profile
+are the same), the script's length, and the text size: **−** / **+**, or
+click the percentage for 80–160 %. **Ctrl/⌘ +**, **Ctrl/⌘ −**, **Ctrl/⌘ 0**
+and Ctrl+wheel change it too while the pointer or the cursor is in the
+editor; the size is remembered on this computer. The browser's spelling check
+is off in script editors, since it would underline every Vietnamese word.
 
 `# Title` starts a chapter (a chapter of the finished file). `## Title` and
 `### Title` start a section inside it: the title is read aloud without the
 marks, as a paragraph of its own, by whichever voice is reading there — a
 section never resets the voice. `####` and deeper lines are ordinary text.
 
-The **Contents** panel beside the editor lists the chapters and their
-sections with their word count and estimated length. Click one to move the
-cursor to its heading; its menu renames it, adds a chapter or section after
-it, or removes the heading and keeps the text (all undoable with Ctrl+Z). Each
-chapter says whether its audio is **Rendered** for the script and settings as
-they are now, **Changed** since the last audiobook, or **Not rendered**; its
-play button renders that chapter on its own, and the full book reuses it.
+**Contents**, a rail on the left of the editor, lists the chapters and their
+sections with their word count and estimated length; fold it away with its
+button (in a narrow window it opens over the editor from the toggle). Click
+one to move the cursor to its heading and scroll the editor there; its menu
+renames it, adds a chapter or section after it, or removes the heading and
+keeps the text (all undoable with Ctrl+Z). The text before the first heading
+shows as *Intro (untitled)*, and its menu's **Add title** puts a `# ` heading
+above it. Each chapter says whether its audio is **Rendered** for the script
+and settings as they are now, **Changed** (its script or settings changed
+since the last audiobook, so it renders again; hover the badge for the
+reason), or **Not rendered**; its play button renders that chapter on its own
+in a compact player under the contents, and the full book reuses it.
 
 In Audiobook and Stories, click a tag — or put the cursor on it and press
 **Alt+Enter** — to open a card for it:
 
-- **`[voice:NAME]`** — switch the tag to another name or a voice profile, cast
-  the name to a profile (the same setting as the Cast panel), set the name's
-  volume, **Listen to this part** or **Select this part** (everything that
-  voice reads up to the next switch), or remove the tag.
+- **`[voice:NAME]`** — pick the **Reading voice**: the profile cast to the
+  name, for every passage of it (the same setting as the Cast panel); set the
+  name's volume, **Listen to this part** or **Select this part** (everything
+  that voice reads up to the next switch), or remove the tag. When the script
+  has two names or more, **Switch this tag to another role** moves this one
+  tag to another name, a voice profile or the default voice.
 - **`[pause …]`** — pick a preset or type a length.
 - **Delivery** (`[slow]`, `[fast]`, `[emphasis]`, `[spell]`) — switch both
   halves of the pair to another kind, or remove the pair.
+- **`[volume …]`** — pick a step (quieter, a little quieter, a little louder,
+  louder) or set the passage's gain with the slider; from either half, only
+  the opening tag changes. **Remove this markup** unwraps the words.
 - **`[[word|respelling]]`** — edit the respelling.
 - **Reactions** — swap for another sound.
 - **Unknown tags** — the card explains that the engine reads them aloud as
@@ -99,7 +118,7 @@ In Audiobook and Stories, click a tag — or put the cursor on it and press
 
 Every change is one ordinary edit, so **Ctrl+Z** undoes it. Right-clicking a
 tag offers the same actions. Typing `[` suggests voices (the script's names
-and your voice profiles), pauses, delivery and reactions; ↑↓ choose, **Enter** or **Tab** inserts and
+and your voice profiles), pauses, delivery, volume steps and reactions; ↑↓ choose, **Enter** or **Tab** inserts and
 **Esc** closes. Tags inside a `# Chapter` line are part of the title, so they
 are not clickable there.
 
@@ -117,15 +136,34 @@ boost never pushes a peak past 0.97 of full scale.
 To make one voice louder or quieter on top of that, use the volume slider for
 that name in the **Cast** panel (the **Default voice** row covers untagged text
 and `[voice:]`) or in a voice tag's card: −12 to +12 dB in 1 dB steps. It
-applies to every tag with that name. Turning leveling on or changing a volume
+applies to every passage that voice reads. Turning leveling on or changing a volume
 reassembles the affected chapters from takes already rendered, without new
 synthesis; a remote GPU worker has no take cache, so it renders those chapters
-once more.
+once more. After a render with leveling on, the **Cast** panel shows under each
+volume what leveling did, for example *Auto: +5.2 dB · Total: +7.2 dB* — the
+median of that voice's automatic gain across the book's chapters, and that plus
+your own volume.
+
+To change **one passage** only — a whisper, a shout — wrap it in
+`[volume -6dB]…[/volume]` (or use the toolbar's **Volume**, which wraps the
+selected text). The gain is in dB: `dB`, `db` or a bare number, with or
+without a space (`[volume +3 dB]`, `[volume -4]`), within ±12 dB; nested
+volumes add up and are capped at ±12 dB. Like `[slow]`, an unclosed
+`[volume]` lasts until the next `[pause]`, voice switch or chapter. A
+`[volume]` without a number it can read is an unknown tag, read aloud. The
+passage is moved after leveling and the voice's own volume, with the same peak
+guard, and leveling never measures it — so a whispered line does not make the
+whole voice louder. Changing a passage's volume reassembles its chapter from
+the takes already rendered; scripts without the tag keep their cached audio.
 
 API callers opt in per request: `/audiobook`, `/longform/render` and
 `/audiobook/preview` take `level_voices: true` and `voice_gains`, a map of
 voice name to dB (`""` is the default voice; at most 64 names, each value
-clamped to ±12 dB). Requests without them render exactly as before.
+clamped to ±12 dB). Requests without them render exactly as before. A
+`/longform/render` span may carry `gain_db` (±12), the passage gain the parser
+writes for `[volume]`. With leveling on, each SSE `chapter` event carries
+`levels`: voice name → `{level_db, auto_db}`, the measured speech level and
+the gain leveling added in that chapter.
 
 ## Listening back in the reader
 
@@ -151,11 +189,24 @@ can run slightly ahead of or behind the voice.
 **Export HTML** saves the book as a web page: a ZIP holding `index.html`, the
 audio (`.m4a` for an M4B book, so every browser plays it) and the cover. Unpack
 it and open `index.html` in any browser, offline — the page makes no network
-request. It shows the title, author and cover, a contents list of chapters and
-sections that jumps the audio, and the full text with the sentence being read
-highlighted and the current word tinted; play/pause, seek, speed, **Space** and
-**←/→** work as in the reader, and it follows the system's light or dark mode.
-Its labels are in the app's language.
+request and loads no web font. It reads like an e-book: a title block with the
+author, narrator and cover; chapters with a "Chapter N" label and their title,
+sections as subheadings, and the text in the script's own paragraphs and line
+breaks, justified (without automatic hyphenation) in a serif reading font. Text
+before the first chapter heading is shown as the opening, without a heading. A
+contents sidebar (a drawer on phones) lists chapters and sections, marks the one
+playing and jumps to it. The sentence being read is shaded and its word
+underlined; click any word to play from there. The page keeps the sentence being
+read in the upper third of the window, stops following when you scroll away and
+offers **Back to current**. The **Aa** menu sets the text size, the theme (auto,
+light, sepia, dark), justified or left-aligned text and whether to follow the
+voice; the browser remembers them. The player bar has previous/next chapter,
+back and forward 10 seconds, play/pause, a seek bar with chapter marks, the time
+and the speed; **?** lists the keys (**Space**, **←/→**, **Shift+←/→** for
+chapters). Printing gives the text alone. Its labels are in the app's language.
+The reader in the app justifies its text the same way. A book rendered before
+the timeline kept line and paragraph breaks takes them from the script it was
+rendered from, when the script still holds that text.
 
 ## Recovering an interrupted audiobook
 
@@ -278,8 +329,8 @@ synthesis or cache reads. Reduce the gaps or split the chapter to proceed.
 Accepted gaps retain their exact duration on fresh renders and cache reuse.
 
 **Longform-only tags.** Audiobook and Stories additionally parse SSML-lite —
-`[slow]…[/slow]`, `[fast]…[/fast]`, `[emphasis]…[/emphasis]`, `[spell]` —
-plus `[voice:NAME]` for multi-voice scripts
+`[slow]…[/slow]`, `[fast]…[/fast]`, `[emphasis]…[/emphasis]`, `[spell]`,
+`[volume -6dB]…[/volume]` — plus `[voice:NAME]` for multi-voice scripts
 (`backend/services/longform_parser.py`). These are not parsed on the Voice
 page.
 

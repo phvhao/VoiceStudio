@@ -281,6 +281,49 @@ describe('tag card', () => {
     expect(script().value).toBe('say softly now');
   });
 
+  it('changes a [volume] passage from either half, and unwraps it', async () => {
+    const onVoiceGains = vi.fn();
+    render(<Editor initial="say [volume -6dB]softly[/volume] now" onVoiceGains={onVoiceGains} />);
+    focus();
+    clickAt(7);
+    const quiet = await card('[volume -6dB]');
+    expect(
+      within(quiet).getByText('Reads the words up to [/volume] at -6 dB, and only them.'),
+    ).toBeVisible();
+    expect(within(quiet).getByRole('button', { name: /^Quieter/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    fireEvent.click(within(quiet).getByRole('button', { name: /A little louder/ }));
+    expect(script().value).toBe('say [volume +3dB]softly[/volume] now');
+    await waitFor(noCard);
+    // From the closing half, the slider sets the opening tag; the words stay.
+    clickAt('say [volume +3dB]softly[/vol'.length);
+    const end = await card('[/volume]');
+    const slider = within(end).getByRole('slider', { name: 'Volume of this passage' });
+    expect(slider).toHaveValue('3');
+    fireEvent.change(slider, { target: { value: '-9' } });
+    fireEvent.click(within(end).getByRole('button', { name: 'Apply' }));
+    expect(script().value).toBe('say [volume -9dB]softly[/volume] now');
+    await waitFor(noCard);
+    clickAt(7);
+    fireEvent.click(
+      within(await card('[volume -9dB]')).getByRole('button', { name: /keep the text/ }),
+    );
+    expect(script().value).toBe('say softly now');
+    // A passage volume never touches the voice's own volume.
+    expect(onVoiceGains).not.toHaveBeenCalled();
+  });
+
+  it('says a [/volume] without its opening tag changes nothing', async () => {
+    render(<Editor initial="say softly[/volume] now" />);
+    focus();
+    clickAt('say softly[/vol'.length);
+    const lone = await card('[/volume]');
+    expect(within(lone).getByText(/closes nothing/)).toBeVisible();
+    expect(within(lone).queryByRole('slider')).toBeNull();
+  });
+
   it('swaps an expression for another sound', async () => {
     render(<Editor initial="Oh [laughter] well" />);
     focus();
@@ -339,13 +382,15 @@ describe('voice card', () => {
     focus();
     clickAt(3);
     const voice = await card('[voice:Mara]');
-    const readBy = within(voice).getByRole('combobox', { name: 'Read by' });
-    expect(readBy).toHaveTextContent('Mai');
-    await pick(readBy, 'Hao PV');
+    const reading = within(voice).getByRole('combobox', { name: 'Reading voice' });
+    expect(reading).toHaveTextContent('Mai');
+    // It says the choice holds for the whole name, not this tag alone.
+    expect(within(voice).getByText('Applies to every passage of Mara.')).toBeVisible();
+    await pick(reading, 'Hao PV');
     expect(onVoiceCast).toHaveBeenLastCalledWith({ Mara: 'p-hao' });
     // Recasting changes no text, so the card stays to go on with.
     expect(screen.getByRole('dialog', { name: 'Tag [voice:Mara]' })).toBeVisible();
-    await pick(within(voice).getByRole('combobox', { name: 'Read by' }), /Default voice/);
+    await pick(within(voice).getByRole('combobox', { name: 'Reading voice' }), /Default voice/);
     expect(onVoiceCast).toHaveBeenLastCalledWith({});
     expect(within(voice).getByText(/not cast yet, so the default voice reads it/)).toBeVisible();
     expect(script().value).toBe('[voice:Mara] Hello. [voice:Mara] Again.');
@@ -356,7 +401,9 @@ describe('voice card', () => {
     render(<Editor initial="[voice:Mara] Hello." onVoiceCast={onVoiceCast} />);
     focus();
     clickAt(3);
-    fireEvent.click(within(await card('[voice:Mara]')).getByRole('combobox', { name: 'Read by' }));
+    fireEvent.click(
+      within(await card('[voice:Mara]')).getByRole('combobox', { name: 'Reading voice' }),
+    );
     const search = await screen.findByRole('combobox', { name: 'Search voices' });
     fireEvent.input(search, { target: { value: 'DAO' }, inputType: 'insertText' });
     // The avatar's initials are hidden from the accessible name.
@@ -383,7 +430,7 @@ describe('voice card', () => {
     const voice = await card('[voice:Mara]');
     expect(within(voice).queryByText(/voice cast to this name was deleted/)).toBeNull();
     expect(
-      within(voice).getByRole('combobox', { name: i18n.t('editor.read_by') }),
+      within(voice).getByRole('combobox', { name: i18n.t('editor.reading_voice') }),
     ).toHaveTextContent(i18n.t('common.loading'));
   });
 
@@ -396,24 +443,40 @@ describe('voice card', () => {
       />,
     );
     focus();
+    // Switching one tag is the secondary choice: a link reveals it.
+    const role = async (tag: string) => {
+      const opened = await card(tag);
+      expect(within(opened).queryByRole('combobox', { name: 'Role' })).toBeNull();
+      fireEvent.click(
+        within(opened).getByRole('button', { name: 'Switch this tag to another role' }),
+      );
+      return within(opened).getByRole('combobox', { name: 'Role' });
+    };
     clickAt(3);
-    await pick(within(await card('[voice:Mara]')).getByRole('combobox', { name: 'Voice' }), 'Ben');
+    await pick(await role('[voice:Mara]'), 'Ben');
     expect(script().value).toBe('[voice:Ben] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
     await waitFor(noCard);
     clickAt(3);
-    await pick(
-      within(await card('[voice:Ben]')).getByRole('combobox', { name: 'Voice' }),
-      'Hao PV',
-    );
+    await pick(await role('[voice:Ben]'), 'Hao PV');
     expect(onVoiceCast).toHaveBeenLastCalledWith({ 'Hao PV': 'p-hao' });
     expect(script().value).toBe('[voice:Hao PV] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
     await waitFor(noCard);
     clickAt(3);
-    await pick(
-      within(await card('[voice:Hao PV]')).getByRole('combobox', { name: 'Voice' }),
-      'Back to the default voice',
-    );
+    await pick(await role('[voice:Hao PV]'), 'Back to the default voice');
     expect(script().value).toBe('[voice:] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
+  });
+
+  it('names the voice once, and offers no role switch with one name in the script', async () => {
+    render(<Editor initial="[voice:Mara] Hello. [voice:Mara] Again." cast={{ Mara: 'p-mai' }} />);
+    focus();
+    clickAt(3);
+    const voice = await card('[voice:Mara]');
+    // The header names Mara once, without the tag as written beside it.
+    expect(within(voice).queryByText('[voice:Mara]')).toBeNull();
+    expect(within(voice).getAllByText('Mara')).toHaveLength(1);
+    expect(
+      within(voice).queryByRole('button', { name: 'Switch this tag to another role' }),
+    ).toBeNull();
   });
 
   it('sets the volume of the voice, the one the Cast panel shows', async () => {
@@ -435,7 +498,7 @@ describe('voice card', () => {
     fireEvent.change(volume, { target: { value: '5' } });
     expect(onVoiceGains).toHaveBeenLastCalledWith({ Mara: 5 });
     expect(within(voice).getByText('+5 dB')).toBeVisible();
-    expect(within(voice).getByText('Applies to every [voice:Mara] in the script.')).toBeVisible();
+    expect(within(voice).getByText('Applies to every passage this voice reads.')).toBeVisible();
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     await waitFor(noCard);
     // `[voice:]` hands the text to the default voice: its volume is the one stored under ''.
@@ -567,6 +630,20 @@ describe('suggestions', () => {
     await nextFrame();
     expect(script().selectionStart).toBe('Say [slow]'.length);
     expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('wraps a [volume] pair around the caret', async () => {
+    render(<Editor initial="Say " />);
+    focus();
+    script().setSelectionRange(4, 4);
+    type('[vol');
+    await screen.findByRole('listbox');
+    expect(options().every((option) => option.textContent!.includes('[/volume]'))).toBe(true);
+    expect(selected()).toHaveTextContent('Quieter');
+    fireEvent.keyDown(script(), { key: 'Enter' });
+    expect(script().value).toBe('Say [volume -6dB][/volume]');
+    await nextFrame();
+    expect(script().selectionStart).toBe('Say [volume -6dB]'.length);
   });
 
   it('casts a profile under a readable name when it is chosen', async () => {

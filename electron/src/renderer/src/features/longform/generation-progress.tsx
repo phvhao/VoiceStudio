@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckIcon, CircleIcon, LoaderCircleIcon, XIcon, ZapIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AudiobookRenderChapter } from './longform-session';
+import { chapterName } from './chapter-name';
 
 function formatElapsed(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
@@ -94,7 +95,7 @@ export function GenerationProgress({
                       : 'text-muted-foreground'
                 }`}
               >
-                {chapter.title || t('audiobook.chapter_n', { n: index + 1 })}
+                {chapterName(t, chapters, index)}
               </span>
               {chapter.status === 'cached' && (
                 <span className="shrink-0 text-muted-foreground">

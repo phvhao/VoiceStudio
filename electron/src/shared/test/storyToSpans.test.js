@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { storyToSpans } from '../utils/storyToSpans';
+import { applyPassageGain } from '../utils/storyExport';
 import { SAMPLE_STORY_CAST, SAMPLE_STORY_LINES } from '../data/sampleStory';
 
 const CAST = [
@@ -188,5 +189,34 @@ describe('storyToSpans', () => {
       ['p_bob', 'there'],
       ['p_fox', 'back'], // reverts to the cast voice (p_fox), NOT null
     ]);
+  });
+});
+
+describe('[volume] in Stories', () => {
+  it('carries a passage gain into the posted plan', () => {
+    const [chapter] = storyToSpans(
+      [{ character: 'c_fox', text: 'Psst. [volume -6dB]quiet now[/volume] Done.' }],
+      CAST,
+    );
+    expect(chapter.spans.map((s) => [s.text, s.gain_db])).toEqual([
+      ['Psst.', undefined],
+      ['quiet now', -6],
+      ['Done.', undefined],
+    ]);
+  });
+
+  it('moves a previewed passage like the server render, peak-guarded', () => {
+    const buffer = (values) => {
+      const data = Float32Array.from(values);
+      return { numberOfChannels: 1, length: data.length, getChannelData: () => data };
+    };
+    expect(Array.from(applyPassageGain(buffer([0.5, -0.5]), -6).getChannelData(0))).toEqual([
+      expect.closeTo(0.2506, 4),
+      expect.closeTo(-0.2506, 4),
+    ]);
+    // +12 dB would clip: the boost stops at the 0.97 ceiling.
+    expect(applyPassageGain(buffer([0.5, 0.1]), 12).getChannelData(0)[0]).toBeCloseTo(0.97, 5);
+    const untouched = buffer([0.5]);
+    expect(applyPassageGain(untouched, undefined).getChannelData(0)[0]).toBe(0.5);
   });
 });

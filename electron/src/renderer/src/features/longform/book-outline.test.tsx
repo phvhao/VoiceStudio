@@ -157,19 +157,118 @@ it('adds a chapter or a section after a node, and removes a heading', async () =
   );
 });
 
-it('names the opening text before any chapter heading', async () => {
+it('calls the text before the first heading the intro, never a second "Chapter 1"', async () => {
+  const initial = 'Prologue words.\n# Chương 1\nx';
+  render(<Harness initial={initial} />);
+  const tree = within(contents());
+  expect(tree.getByRole('button', { name: t('book.intro_untitled') })).toBeVisible();
+  expect(tree.getByRole('button', { name: 'Chương 1' })).toBeVisible();
+  expect(tree.queryByRole('button', { name: t('audiobook.chapter_n', { n: 1 }) })).toBeNull();
+  // The intro has no heading to rename or remove: its menu adds one above it.
+  await choose(t('book.intro_untitled'), 'book.add_title');
+  const heading = `# ${t('book.intro_heading')}\n\n`;
+  await waitFor(() => expect(script().value).toBe(heading + initial));
+  // The new title is selected, so typing names the chapter. (Focus after a
+  // menu action settles once the menu has closed, as in the tests below.)
+  await waitFor(() => expect(script()).toHaveFocus());
+  expect(script().value.slice(script().selectionStart, script().selectionEnd)).toBe(
+    t('book.intro_heading'),
+  );
+  expect(tree.queryByRole('button', { name: t('book.intro_untitled') })).toBeNull();
+  expect(tree.getByRole('button', { name: t('book.intro_heading') })).toBeVisible();
+});
+
+it('calls a book with no heading its one chapter, not an untitled intro', async () => {
+  const initial = 'Just prose.\n\nMore prose.';
+  render(<Harness initial={initial} />);
+  const tree = within(contents());
+  const only = t('audiobook.chapter_n', { n: 1 });
+  expect(tree.getByRole('button', { name: only })).toBeVisible();
+  expect(tree.queryByRole('button', { name: t('book.intro_untitled') })).toBeNull();
+  // Its title, added, matches what the row said.
+  await choose(only, 'book.add_title');
+  await waitFor(() => expect(script().value).toBe(`# ${only}\n\n${initial}`));
+});
+
+it('offers no rename or remove on the intro', async () => {
   render(<Harness initial={'Prologue words.\n# One\nx'} />);
-  expect(
-    within(contents()).getByRole('button', { name: t('audiobook.chapter_n', { n: 1 }) }),
-  ).toBeVisible();
-  // The opening has no heading to rename or remove.
   fireEvent.click(
-    screen.getByRole('button', {
-      name: t('book.more', { title: t('audiobook.chapter_n', { n: 1 }) }),
-    }),
+    screen.getByRole('button', { name: t('book.more', { title: t('book.intro_untitled') }) }),
   );
   expect(await screen.findByRole('menuitem', { name: t('book.add_chapter') })).toBeVisible();
   expect(screen.queryByRole('menuitem', { name: t('book.rename') })).toBeNull();
+  expect(screen.queryByRole('menuitem', { name: t('book.remove_heading') })).toBeNull();
+});
+
+it('says why a chapter changed, and when its new audio is ready', async () => {
+  mock.api.mockImplementation(async () => ({
+    book: true,
+    chapters: [
+      { title: 'One', status: 'changed', cached: true, in_book: false },
+      { title: 'Two', status: 'changed', cached: false, in_book: false },
+    ],
+  }));
+  render(<Harness initial={'# One\nFirst.\n# Two\nLast.'} output="audiobook_b1.m4b" />);
+  const row = (title: string) =>
+    within(within(contents()).getByRole('button', { name: title }).parentElement!);
+  expect(await row('One').findByText(t('book.status_changed'))).toHaveAttribute(
+    'title',
+    t('book.hint_changed_ready'),
+  );
+  expect(row('Two').getByText(t('book.status_changed'))).toHaveAttribute(
+    'title',
+    t('book.hint_changed'),
+  );
+  // The reason names the script and the settings, and what happens next.
+  expect(t('book.hint_changed', { lng: 'en' })).toMatch(/script or settings.*render again/i);
+});
+
+it("labels the chapter preview with the outline's localized name", async () => {
+  mock.api.mockImplementation(async (path: string) =>
+    path === '/audiobook/outline'
+      ? { book: false, chapters: [] }
+      : { output: 'longform_cache/intro.wav', title: 'Chapter 1', untitled: true },
+  );
+  render(<Harness initial={'Prologue words.\n# One\nx'} />);
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: t('audiobook.preview_chapter', { title: t('book.intro_untitled') }),
+    }),
+  );
+  expect(await screen.findByTestId('preview')).toBeInTheDocument();
+  const preview = screen
+    .getByTestId('preview')
+    .closest<HTMLElement>('[data-slot=chapter-preview]')!;
+  expect(within(preview).getByText(t('book.intro_untitled'))).toBeVisible();
+  expect(screen.queryByText('Chapter 1')).toBeNull();
+});
+
+it('folds away through its own button and reports a row that moved the caret', () => {
+  const onCollapse = vi.fn();
+  const onReveal = vi.fn();
+  function Rail() {
+    const [script, setScript] = useState(SCRIPT);
+    const input = useRef<HTMLTextAreaElement>(null);
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <textarea ref={input} aria-label="Script" value={script} onChange={() => {}} />
+        <BookOutline
+          draft={{ ...blankLongformDraft(), script, voice: 'narrator' }}
+          disabled={false}
+          canPreview
+          onBusy={() => {}}
+          getTarget={() => input.current && { element: input.current, setText: setScript }}
+          onCollapse={onCollapse}
+          onReveal={onReveal}
+        />
+      </QueryClientProvider>
+    );
+  }
+  render(<Rail />);
+  fireEvent.click(screen.getByRole('button', { name: t('book.hide_contents') }));
+  expect(onCollapse).toHaveBeenCalledTimes(1);
+  fireEvent.click(within(contents()).getByRole('button', { name: 'Two' }));
+  expect(onReveal).toHaveBeenCalledTimes(1);
 });
 
 it('hides the statuses of an earlier script until its own arrive', async () => {

@@ -143,3 +143,22 @@ it('keeps the Stories cast panel while the default voice has a volume only it se
   expect(showsCastPanel('stories', [], { '': -6 })).toBe(true);
   expect(showsCastPanel('stories', [], { '': 0, Mara: 3 })).toBe(false);
 });
+
+it('shows what leveling added in the last render, and the total with the voice’s volume', () => {
+  renderCast({ names: ['Mara'], autoLevels: { '': -1.5, Mara: 5.2 } });
+  expect(screen.getByText('Auto: +5.2 dB · Total: +8.2 dB')).toBeVisible();
+  expect(screen.getByText('Auto: -1.5 dB · Total: -1.5 dB')).toHaveAttribute(
+    'title',
+    'In the last render, automatic leveling moved this voice by -1.5 dB; with your volume it plays at -1.5 dB.',
+  );
+  // The [volume] tag is the way to change one passage.
+  expect(screen.getByText(/wrap it in \[volume -6dB\]…\[\/volume\]/)).toBeVisible();
+});
+
+it('shows no automatic level before a leveled render', () => {
+  renderCast({ names: ['Mara'] });
+  expect(screen.queryByText(/^Auto:/)).toBeNull();
+  renderCast({ names: ['Mara'], autoLevels: { Mara: 2 } });
+  // Only the voices the render measured.
+  expect(screen.getAllByText(/^Auto:/)).toHaveLength(1);
+});

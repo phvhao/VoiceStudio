@@ -103,7 +103,7 @@ export function WorkflowInputs({ step, onChange }: { step: WorkflowStep; onChang
   return <>
     <label htmlFor="workflow-scripts">{t('workflowRun.scripts')}</label>
     <p className="text-xs text-muted-foreground">{t('workflowRun.scripts_hint')}</p>
-    {!step.scripts?.length && <Textarea id="workflow-scripts" value={step.text} rows={9} maxLength={20_000}
+    {!step.scripts?.length && <Textarea id="workflow-scripts" value={step.text} rows={9} maxLength={20_000} spellCheck={false}
       onChange={(event) => onChange({ text: event.target.value })} />}
     {step.scripts?.map((script, index) => <div key={index} className="flex items-center justify-between text-xs gap-2">
       <span className="truncate">{script.name}</span><Button size="icon-xs" variant="ghost" aria-label={t('common.delete')} onClick={() => onChange({ scripts: step.scripts!.filter((_, i) => i !== index) })}><XIcon /></Button>

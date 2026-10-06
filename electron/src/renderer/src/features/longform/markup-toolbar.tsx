@@ -18,6 +18,7 @@ import {
   SpeechIcon,
   SpellCheckIcon,
   TurtleIcon,
+  Volume2Icon,
   WindIcon,
   ZapIcon,
 } from 'lucide-react';
@@ -30,10 +31,14 @@ import { cn } from '@/lib/utils';
 import { castVoice } from './cast-map';
 import { MARKUP_STYLES } from './markup-textarea';
 import { voiceAccent } from './voice-palette';
+import { useVoiceGainText } from './cast-settings';
 import {
+  MAX_PASSAGE_GAIN_DB,
   PAUSE_MAX_MS,
   PAUSE_PRESETS,
   VOICE_RESET_TOKEN,
+  VOLUME_CLOSE,
+  VOLUME_PRESETS,
   applyVoice,
   castNameForProfile,
   countHeadings,
@@ -46,6 +51,7 @@ import {
   pronounceSelection,
   sanitizeCastName,
   secondsUnit,
+  volumeToken,
   wrapSelection,
   type DeliveryTag,
   type MarkupEdit,
@@ -196,8 +202,12 @@ export function MarkupToolbar({
 }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
-  const [open, setOpen] = useState<'pause' | 'voice' | 'expressions' | 'guide' | null>(null);
+  const [open, setOpen] = useState<
+    'pause' | 'voice' | 'volume' | 'expressions' | 'guide' | null
+  >(null);
   const [customSeconds, setCustomSeconds] = useState('1.5');
+  const [customVolume, setCustomVolume] = useState('-6');
+  const gainText = useVoiceGainText();
   const [voiceQuery, setVoiceQuery] = useState('');
   const [newCharacter, setNewCharacter] = useState('');
   const toggle = (name: NonNullable<typeof open>) => (next: boolean) => {
@@ -217,6 +227,13 @@ export function MarkupToolbar({
     apply((value, start, end) => insertToken(value, start, end, pauseToken(ms)));
   const customMs = Math.round(Number(customSeconds) * 1000);
   const customValid = Number.isFinite(customMs) && customMs > 0 && customMs <= PAUSE_MAX_MS;
+
+  // A [volume] around the selection; with none, an empty pair to type into.
+  const wrapVolume = (db: number) =>
+    apply((value, start, end) => wrapSelection(value, start, end, volumeToken(db), VOLUME_CLOSE));
+  const customDb = customVolume.trim() === '' ? NaN : Number(customVolume);
+  const customDbValid =
+    Number.isFinite(customDb) && customDb !== 0 && Math.abs(customDb) <= MAX_PASSAGE_GAIN_DB;
 
   const voice = (name: string) => apply((value, start, end) => applyVoice(value, start, end, name));
   const voiceProfile = (profile: Profile) =>
@@ -440,6 +457,60 @@ export function MarkupToolbar({
           {t(label)}
         </Button>
       ))}
+      <Popover open={open === 'volume'} onOpenChange={toggle('volume')}>
+        <PopoverTrigger
+          disabled={disabled}
+          className={triggerClass}
+          title={t('markup.volume_hint')}
+        >
+          <Volume2Icon />
+          {t('markup.volume')}
+          <ChevronDownIcon className="opacity-60" />
+        </PopoverTrigger>
+        <PopoverContent finalFocus={finalFocus} className="w-64 space-y-2 p-2">
+          <Section title={t('markup.volume_hint')}>
+            {VOLUME_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                onClick={() => wrapVolume(preset.db)}
+              >
+                <span>{t(preset.label)}</span>
+                <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                  {gainText(preset.db)}
+                </span>
+              </button>
+            ))}
+          </Section>
+          <form
+            className="flex items-center gap-1.5 border-t border-border/50 px-1 pt-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (customDbValid) wrapVolume(customDb);
+            }}
+          >
+            <label className="flex flex-1 items-center gap-1.5 text-xs text-muted-foreground">
+              {t('markup.pause_custom')}
+              <Input
+                type="number"
+                min={-MAX_PASSAGE_GAIN_DB}
+                max={MAX_PASSAGE_GAIN_DB}
+                step="0.1"
+                value={customVolume}
+                aria-invalid={!customDbValid}
+                aria-label={t('markup.volume_custom_db')}
+                className="h-7 w-16 px-2 text-xs"
+                onChange={(event) => setCustomVolume(event.target.value)}
+              />
+              <span aria-hidden="true">dB</span>
+            </label>
+            <Button type="submit" size="xs" variant="secondary" disabled={!customDbValid}>
+              {t('markup.insert')}
+            </Button>
+          </form>
+        </PopoverContent>
+      </Popover>
       <Button
         size="xs"
         variant="ghost"
@@ -542,6 +613,10 @@ export function MarkupToolbar({
               <Swatch kind="delivery">[spell]…[/spell]</Swatch>
             </dt>
             <dd className="text-muted-foreground">{t('markup.spell_hint')}</dd>
+            <dt>
+              <Swatch kind="volume">[volume -6dB]…[/volume]</Swatch>
+            </dt>
+            <dd className="text-muted-foreground">{t('markup.guide_volume')}</dd>
             <dt>
               <Swatch kind="pronunciation">[[gif|jiff]]</Swatch>
             </dt>

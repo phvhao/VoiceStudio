@@ -57,4 +57,27 @@ describe('parseSsmlLite (client port — parity with ssml_lite.py)', () => {
     parseSsmlLite(big);
     expect(Date.now() - t0).toBeLessThan(1000);
   });
+
+  it('[volume] gives the wrapped words a gain in dB, nested ones added and clamped', () => {
+    expect(parseSsmlLite('a [volume -6dB]b[/volume] c')).toEqual([
+      { text: 'a ', speed: null, spell: false, emphasis: false },
+      { text: 'b', speed: null, spell: false, emphasis: false, gain_db: -6 },
+      { text: ' c', speed: null, spell: false, emphasis: false },
+    ]);
+    for (const tag of ['[volume -3dB]', '[VOLUME -3DB]', '[volume -3 dB]', '[volume -3]'])
+      expect(parseSsmlLite(`${tag}x[/volume]`)[0].gain_db).toBe(-3);
+    const gains = Object.fromEntries(
+      parseSsmlLite('[volume 3]a[volume 4]b[volume 20]c[/volume][/volume][/volume][volume -30]d').map(
+        (s) => [s.text, s.gain_db],
+      ),
+    );
+    expect(gains).toEqual({ a: 3, b: 7, c: 12, d: -12 });
+  });
+
+  it('[volume] without a readable gain stays in the text', () => {
+    for (const text of ['[volume]x', '[volume loud]x', 'x[/volume 3]', '[volume 12345]x'])
+      expect(parseSsmlLite(text)).toEqual([
+        { text, speed: null, spell: false, emphasis: false },
+      ]);
+  });
 });

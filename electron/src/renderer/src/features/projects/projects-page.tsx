@@ -5,13 +5,21 @@ import { PipelineFailure } from '@/components/pipeline-failure';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { getBridge } from '@/components/bridge';
 import {
-  blankLongformDraft,
-  editLongform,
-  longformSession,
+  createLongformProject,
+  deleteLongformProject,
+  listLongformProjects,
+  openLongformProject,
+  renameLongformProject,
   useLongformSession,
   type Mode,
 } from '../longform/longform-session';
-import { projectLibrary } from '../longform/project-library';
+import type { LongformProjectMeta } from '../longform/project-library';
+import {
+  canRecoverRender,
+  draftFromRender,
+  renderMode,
+  type RenderTimeline,
+} from '../longform/render-recovery';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,6 +27,7 @@ import { useTranslation } from 'react-i18next';
 import {
   AudioLinesIcon,
   BookOpenIcon,
+  ChevronRightIcon,
   ClockIcon,
   DownloadIcon,
   FileTextIcon,
@@ -45,6 +54,7 @@ import {
 import { useDeleteProfile } from '@/hooks/use-profiles';
 import { deleteHistoryItem } from '@/lib/api/history';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { apiJson, apiPath, describeError } from '@/lib/api/client';
 import { runRendererTask } from '@/lib/global-error-recovery';
 import { isImeComposing } from '@/lib/ime';
@@ -99,7 +109,26 @@ interface LibraryRow {
   transcript?: TranscriptEntry;
   take?: HistoryItem;
   export?: ExportRecord;
+  /** The render ▶ plays and "How it was made" describes: the latest of `renders`. */
   render?: RenderRecord;
+  /** A library book or story. */
+  project?: LongformProjectMeta;
+  /** Renders grouped under this entry, newest first (a book's, or older ones of one title). */
+  renders?: RenderRecord[];
+}
+
+const renderTime = (render: RenderRecord) => timestamp(render.created_at);
+
+/** The book a render belongs to: the project it names, else the one that showed its file. */
+function ownerOf(
+  render: RenderRecord,
+  projects: LongformProjectMeta[],
+): LongformProjectMeta | undefined {
+  const named = projects.find((project) => project.id === render.project_id);
+  if (named) return named;
+  return projects
+    .filter((p) => p.mode === renderMode(render) && p.outputs.includes(render.output))
+    .sort((a, b) => a.createdAt - b.createdAt)[0];
 }
 
 function timestamp(value: number | string | undefined): number {
@@ -154,8 +183,9 @@ export function ProjectsPage() {
   });
   const books = useQuery({
     queryKey: ['longform-projects'],
-    queryFn: projectLibrary.list,
+    queryFn: listLongformProjects,
   });
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const exports = useQuery({
     queryKey: ['export-history'],
     queryFn: ({ signal }) => apiJson<ExportRecord[]>('/export/history', { signal }),
@@ -209,22 +239,7 @@ export function ProjectsPage() {
     act(async () => {
       if (!confirm) return;
       if (confirm.kind !== 'dub') {
-        if (longformSession.state.active) throw new Error('Longform work is active');
-        if (confirm.action === 'rename') await projectLibrary.rename(confirm.id, rename);
-        else {
-          const project = (await projectLibrary.list()).find(
-            (project) => project.id === confirm.id,
-          );
-          if (!project || longformSession.state.active) throw new Error('Project unavailable');
-          editLongform(project.mode, {
-            ...blankLongformDraft(),
-            ...structuredClone(project.draft),
-            projectId: project.id,
-          });
-          await navigate({
-            to: project.mode === 'stories' ? '/stories' : '/audiobook',
-          });
-        }
+        if (confirm.action === 'rename') await renameLongformProject(confirm.id, rename);
       } else {
         const path = '/projects/' + encodeURIComponent(confirm.id);
         if (confirm.action === 'rename') {
@@ -248,6 +263,45 @@ export function ProjectsPage() {
       setConfirm(null);
     });
 
+  // Opening a book saves the open one first, so it needs no confirmation; the
+  // session refuses (with the reason) while that editor renders.
+  const opening = useRef(false);
+  const openInEditor = async (work: () => Promise<Mode>) => {
+    if (opening.current || pending.current) return;
+    opening.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const mode = await work();
+      await navigate({ to: mode === 'stories' ? '/stories' : '/audiobook' });
+    } catch (error) {
+      setError(describeError(error));
+    } finally {
+      opening.current = false;
+      setBusy(false);
+    }
+  };
+  const openRender = (render: RenderRecord) =>
+    openInEditor(async () => {
+      const owner = ownerOf(render, books.data || []);
+      if (owner)
+        return openLongformProject(owner.id, {
+          output: render.output,
+          chapters: (render.summary?.chapter_titles || []).map((title) => ({
+            title,
+            status: 'done',
+          })),
+        });
+      // Made before the library: a new project from what the render kept.
+      if (!canRecoverRender(render)) throw new Error(t('library.cannot_open_render'));
+      const timeline = await apiJson<RenderTimeline>(
+        '/audiobook/timeline/' + encodeURIComponent(render.output),
+      );
+      const draft = draftFromRender(render, timeline);
+      if (!draft) throw new Error(t('library.cannot_open_render'));
+      return createLongformProject(renderMode(render), draft, render.title || '');
+    });
+
   const requestDelete = (targets: LibraryRow[]) => {
     if (locked || !targets.length) return;
     setConfirm(null);
@@ -269,12 +323,14 @@ export function ProjectsPage() {
           if (row.projectKind === 'dub') {
             await apiJson('/projects/' + id, { method: 'DELETE' });
             detachDubProject(row.id);
-          } else if (row.projectKind) {
-            await projectLibrary.remove(row.id);
-            for (const mode of ['stories', 'audiobook'] as const) {
-              if (longformSession.state.drafts[mode].projectId === row.id)
-                editLongform(mode, { projectId: null });
-            }
+          } else if (row.project) {
+            // The book's renders (and their audio) stay in the library.
+            await deleteLongformProject(row.id);
+          } else if (row.renders) {
+            for (const render of row.renders)
+              await apiJson('/longform/jobs/' + encodeURIComponent(render.job_id), {
+                method: 'DELETE',
+              });
           } else if (row.profile) await deleteProfile.mutateAsync(row.id);
           else if (row.take) await deleteHistoryItem(row.id);
           else if (row.transcript) removeTranscription(row.transcript.id);
@@ -319,15 +375,51 @@ export function ProjectsPage() {
         updatedAt: timestamp(project.updated_at),
       });
     }
-    for (const project of books.data || []) {
+    // Renders group under the book they were made from; older renders, made
+    // before the library, under one entry per title.
+    const projects = books.data || [];
+    const byProject = new Map<string, RenderRecord[]>();
+    const older = new Map<string, RenderRecord[]>();
+    for (const render of [...(renders.data?.jobs || [])].sort(
+      (a, b) => renderTime(b) - renderTime(a),
+    )) {
+      const owner = ownerOf(render, projects);
+      const group = owner ? byProject : older;
+      const key = owner ? owner.id : (render.type || '') + ':' + (render.title || render.output);
+      group.set(key, [...(group.get(key) || []), render]);
+    }
+    for (const project of projects) {
+      const own = byProject.get(project.id) || [];
       result.push({
         key: project.mode + ':' + project.id,
         id: project.id,
         name: project.name,
         kind: project.mode === 'stories' ? 'stories' : 'audiobooks',
         projectKind: project.mode,
-        subtitle: t(project.mode === 'stories' ? 'nav.stories' : 'audiobook.title'),
-        updatedAt: timestamp(project.updatedAt),
+        subtitle: [
+          t('library.words', { count: project.words }),
+          t('library.chapters', { count: project.chapters }),
+        ].join(' · '),
+        updatedAt: Math.max(timestamp(project.updatedAt), own[0] ? renderTime(own[0]) : 0),
+        project,
+        render: own[0],
+        renders: own,
+      });
+    }
+    for (const [key, group] of older) {
+      const [render] = group;
+      result.push({
+        key: 'renders:' + key,
+        id: render.job_id,
+        name: render.title || render.output,
+        kind: render.type === 'story' ? 'stories' : 'audiobooks',
+        // Voice · speed · engine · length: what tells two renders of a book apart.
+        subtitle:
+          renderRecipe(render) ||
+          t(render.type === 'story' ? 'projects.story' : 'projects.audiobook'),
+        updatedAt: renderTime(render),
+        render,
+        renders: group,
       });
     }
     for (const profile of profiles.data || []) {
@@ -375,20 +467,6 @@ export function ProjectsPage() {
         subtitle: record.mode || '',
         updatedAt: timestamp(record.created_at),
         export: record,
-      });
-    }
-    for (const render of renders.data?.jobs || []) {
-      result.push({
-        key: 'render:' + render.job_id,
-        id: render.job_id,
-        name: render.title || render.output,
-        kind: render.type === 'story' ? 'stories' : 'audiobooks',
-        // Voice · speed · engine · length: what tells two renders of a book apart.
-        subtitle:
-          renderRecipe(render) ||
-          t(render.type === 'story' ? 'projects.story' : 'projects.audiobook'),
-        updatedAt: timestamp(render.created_at),
-        render,
       });
     }
     return result.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -686,6 +764,18 @@ export function ProjectsPage() {
                               ? 'projects.history'
                               : 'projects.exports',
                 );
+                // Books open straight into their editor (the open one is saved
+                // first); a render made before the library rebuilds its book.
+                const older = row.render && !row.project ? row.render : null;
+                const openRow = row.project
+                  ? () => void openInEditor(() => openLongformProject(row.id))
+                  : row.projectKind === 'dub'
+                    ? () => setConfirm({ id: row.id, kind: 'dub', action: 'open' })
+                    : older && canRecoverRender(older)
+                      ? () => void openRender(older)
+                      : undefined;
+                const showRenders = !!row.renders && row.renders.length > (row.project ? 0 : 1);
+                const preview = row.render?.output || row.project?.output;
                 return (
                   <article
                     key={row.key}
@@ -714,6 +804,20 @@ export function ProjectsPage() {
                       />
                       {row.profile ? (
                         <ProfileAvatar name={row.profile.name} imageUrl={row.profile.image_url} />
+                      ) : (row.project || older) && openRow ? (
+                        <button
+                          type="button"
+                          className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                          aria-label={t('library.open_in_editor', { name: row.name })}
+                          disabled={busy}
+                          onClick={openRow}
+                        >
+                          {row.kind === 'audiobooks' ? (
+                            <BookOpenIcon className="size-4" />
+                          ) : (
+                            <AudioLinesIcon className="size-4" />
+                          )}
+                        </button>
                       ) : (
                         <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
                           {row.kind === 'dub' ? (
@@ -732,18 +836,13 @@ export function ProjectsPage() {
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        {row.projectKind ? (
+                        {openRow ? (
                           <Button
                             className="h-auto max-w-full justify-start p-0 text-left font-medium whitespace-normal hover:bg-transparent"
                             variant="ghost"
-                            disabled={locked}
-                            onClick={() =>
-                              setConfirm({
-                                id: row.id,
-                                kind: row.projectKind!,
-                                action: 'open',
-                              })
-                            }
+                            disabled={row.projectKind === 'dub' ? locked : busy}
+                            title={older ? t('library.recovered_hint') : undefined}
+                            onClick={openRow}
                           >
                             <span className="line-clamp-2">{row.name}</span>
                           </Button>
@@ -760,15 +859,44 @@ export function ProjectsPage() {
                             </span>
                           )}
                         </p>
-                        {row.render && (
+                        {older && !openRow && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t('library.cannot_open_render')}
+                          </p>
+                        )}
+                        {older && (
                           <details className="mt-1.5">
                             <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
                               {t('projects.render_details')}
                             </summary>
                             <div className="mt-2">
-                              <RenderDetails render={row.render} />
+                              <RenderDetails render={older} />
                             </div>
                           </details>
+                        )}
+                        {showRenders && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            className="mt-1 -ms-1.5 text-muted-foreground"
+                            aria-expanded={expanded.has(row.key)}
+                            aria-label={t('library.show_renders', { name: row.name })}
+                            onClick={() =>
+                              setExpanded((current) => {
+                                const next = new Set(current);
+                                if (!next.delete(row.key)) next.add(row.key);
+                                return next;
+                              })
+                            }
+                          >
+                            <ChevronRightIcon
+                              className={cn(
+                                'transition-transform rtl:-scale-x-100',
+                                expanded.has(row.key) && 'rotate-90 rtl:scale-x-100',
+                              )}
+                            />
+                            {t('library.renders', { count: row.renders!.length })}
+                          </Button>
                         )}
                       </div>
                     </div>
@@ -828,10 +956,10 @@ export function ProjectsPage() {
                           {t('clone.reveal')}
                         </Button>
                       )}
-                      {row.render && (
+                      {preview && (
                         <AudioPreviewButton
-                          src={apiPath('/audio/' + encodeURIComponent(row.render.output))}
-                          source={'projects-render-' + row.render.job_id}
+                          src={apiPath('/audio/' + encodeURIComponent(preview))}
+                          source={'projects-render-' + (row.render?.job_id ?? row.id)}
                         />
                       )}
                       {row.projectKind && (
@@ -903,6 +1031,74 @@ export function ProjectsPage() {
                           </Button>
                         </div>
                       )}
+                    {showRenders && expanded.has(row.key) && (
+                      <ul className="ms-11 w-full space-y-1 border-s border-border/50 ps-3">
+                        {row.renders!.map((render) => {
+                          const label = when(renderTime(render)) || render.output;
+                          const sub: LibraryRow = {
+                            key: 'render:' + render.job_id,
+                            id: render.job_id,
+                            kind: row.kind,
+                            name: row.name + ' — ' + label,
+                            subtitle: '',
+                            updatedAt: renderTime(render),
+                            render,
+                            renders: [render],
+                          };
+                          const openable = !!row.project || canRecoverRender(render);
+                          return (
+                            <li
+                              key={render.job_id}
+                              className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+                            >
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                className="-ms-1.5 font-medium"
+                                disabled={busy || !openable}
+                                title={
+                                  row.project
+                                    ? undefined
+                                    : t(
+                                        openable
+                                          ? 'library.recovered_hint'
+                                          : 'library.cannot_open_render',
+                                      )
+                                }
+                                aria-label={t('library.open_in_editor', { name: sub.name })}
+                                onClick={() => void openRender(render)}
+                              >
+                                {label}
+                              </Button>
+                              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                                {renderRecipe(render)}
+                              </span>
+                              <AudioPreviewButton
+                                src={apiPath('/audio/' + encodeURIComponent(render.output))}
+                                source={'projects-render-' + render.job_id}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label={t('common.delete') + ' ' + sub.name}
+                                disabled={locked}
+                                onClick={() => requestDelete([sub])}
+                              >
+                                <TrashIcon />
+                              </Button>
+                              <details className="w-full">
+                                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                                  {t('projects.render_details')}
+                                </summary>
+                                <div className="mt-2">
+                                  <RenderDetails render={render} />
+                                </div>
+                              </details>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </article>
                 );
               })}

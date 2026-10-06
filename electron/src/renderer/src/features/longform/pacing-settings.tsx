@@ -9,6 +9,7 @@ import {
 import { useReadingSettings } from '@/lib/reading-settings';
 import type { Overrides } from '@shared/utils/longformOverrides';
 import type { AudiobookRenderChapter } from './longform-session';
+import { chapterName } from './chapter-name';
 
 /**
  * A book's reading settings: Settings → Reading by default (summarised, with
@@ -81,7 +82,7 @@ export function SpeechCheckReport({
   const groups = chapters
     ? chapters
         .map((chapter, index) => ({
-          title: chapter.title || t('audiobook.chapter_n', { n: index + 1 }),
+          title: chapterName(t, chapters, index),
           texts: chapter.suspects ?? [],
         }))
         .filter((group) => group.texts.length > 0)

@@ -10,5 +10,7 @@ export function storyToSpans(
     pause_ms_after: number;
     speed?: number | null;
     join?: 'continue' | 'paragraph';
+    /** A `[volume]` passage's gain in dB. */
+    gain_db?: number;
   }[];
 }[];

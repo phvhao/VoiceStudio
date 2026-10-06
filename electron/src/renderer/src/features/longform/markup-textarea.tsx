@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { MarkupEditorContext, type MarkupEditorHandle } from './markup-editor-context';
 import {
   formatPauseSeconds,
+  formatSignedDb,
   normalizeNewlines,
   pauseMs,
   respellingRange,
@@ -25,6 +26,7 @@ import {
   tokenizeMarkup,
   voiceName,
   voiceSwitches,
+  volumeDb,
   type MarkupKind,
   type MarkupSegment,
   type MarkupToken,
@@ -57,6 +59,8 @@ export const MARKUP_STYLES: Record<Exclude<MarkupKind, 'text'>, string> = {
     'rounded-sm bg-amber-500/18 ring-1 ring-amber-500/40 data-hover:bg-amber-500/30 data-hover:ring-amber-500/70 data-current:ring-2',
   delivery:
     'rounded-sm bg-violet-500/18 ring-1 ring-violet-500/40 data-hover:bg-violet-500/30 data-hover:ring-violet-500/70 data-current:ring-2',
+  volume:
+    'rounded-sm bg-fuchsia-500/16 ring-1 ring-fuchsia-500/40 data-hover:bg-fuchsia-500/28 data-hover:ring-fuchsia-500/70 data-current:ring-2',
   expression:
     'rounded-sm bg-emerald-500/18 ring-1 ring-emerald-500/40 data-hover:bg-emerald-500/30 data-hover:ring-emerald-500/70 data-current:ring-2',
   pronunciation:
@@ -84,6 +88,7 @@ const TOKEN_KINDS = new Set<string>([
   'voiceReset',
   'pause',
   'delivery',
+  'volume',
   'expression',
   'pronunciation',
   'unknown',
@@ -94,18 +99,29 @@ const EMPTY_LINE = String.fromCharCode(0x200b);
 
 // Shared by the textarea and its overlay so both wrap identically.
 const LAYER = 'm-0 block w-full border-0 whitespace-pre-wrap [overflow-wrap:break-word]';
-// Room for the line numbers and the voice lane, on both layers.
-const GUTTER = 'ps-16';
+// Room for the line numbers and the voice lane, on both layers. Every size
+// in the gutter is in `em` of the text, so it grows with the editor's zoom as
+// the label inside it does: 4.5em = a 3.25em label box from 0.25em, a gap,
+// the voice lane at 3.75em, and its gap to the text.
+const GUTTER = 'ps-[4.5em]';
 // The number is painted from `data-line`, so it is not part of the overlay's
 // text. It inherits the text's line height and sits on the line's first row.
+// A chapter heading shows its chapter ("C2"), a section a lighter mark, and
+// the untitled intro a faint label instead of the number. The label's font
+// is 0.6875em of the text, so its own `em` is that much smaller: its box is
+// set in text `em` divided by 0.6875. It never wraps — a second row would
+// paint over the next line's number — and a label too long for the box ends
+// in an ellipsis (see LABEL_BOX_EM).
 const NUMBERED_LINE =
-  'relative before:absolute before:top-0 before:-start-15 before:w-10 before:text-end before:text-[11px] before:text-muted-foreground/55 before:tabular-nums before:content-[attr(data-line)] data-active:before:text-foreground data-chapter:before:text-primary data-section:before:text-primary/70';
+  'relative before:absolute before:top-0 before:start-[calc(-4.25em/0.6875)] before:w-[calc(3.25em/0.6875)] before:overflow-hidden before:text-end before:text-ellipsis before:whitespace-nowrap before:text-[0.6875em] before:text-muted-foreground/55 before:tabular-nums before:content-[attr(data-line)] data-active:before:text-foreground data-chapter:before:font-medium data-chapter:before:text-primary data-section:before:text-primary/60 data-intro:before:text-muted-foreground/40 data-intro:before:italic';
+/** The gutter label's box, in the label's own `em` (3.25em of the text). */
+export const LABEL_BOX_EM = 3.25 / 0.6875;
 const ACTIVE_BAND = 'absolute inset-0 -z-10 bg-current text-foreground/[0.04]';
 const CHAPTER_BAND = 'absolute inset-0 -z-10 bg-current text-primary/[0.07]';
-const CHAPTER_ACCENT = 'absolute inset-y-0 -start-16 w-0.5 bg-primary/60';
+const CHAPTER_ACCENT = 'absolute inset-y-0 -start-[4.5em] w-0.5 bg-primary/60';
 // A section heading: the chapter's band and accent, lighter.
 const SECTION_BAND = 'absolute inset-0 -z-10 bg-current text-primary/[0.035]';
-const SECTION_ACCENT = 'absolute inset-y-0 -start-16 w-0.5 bg-primary/30';
+const SECTION_ACCENT = 'absolute inset-y-0 -start-[4.5em] w-0.5 bg-primary/30';
 // A band is as tall as its line and as wide as the editor: the spread shadow
 // paints it across the gutter and the padding (ink overflow, so the overlay
 // gains nothing to scroll) and the clip keeps it to the line's height.
@@ -113,7 +129,9 @@ const FULL_WIDTH: CSSProperties = {
   boxShadow: '0 0 0 100vmax currentcolor',
   clipPath: 'inset(0 -100vmax)',
 };
-const LANE = 'absolute start-13 w-[3px] rounded-full';
+const LANE = 'absolute start-[3.75em] w-[3px] rounded-full';
+// The gutter's mark on a `## Section` / `### Section` line.
+const SECTION_MARK = '§';
 
 // A press that moves further than this is a drag that selects text.
 const CLICK_SLOP = 4;
@@ -142,6 +160,18 @@ interface LaneSegment {
   top: number;
   height: number;
   voice: string | null;
+}
+
+/** Where the lane changes: the voice reading from `y`; `undefined` leaves a gap. */
+interface LaneStop {
+  y: number;
+  voice: string | null | undefined;
+}
+
+/** What the gutter shows on one line: its number, or a heading's mark. */
+interface GutterLabel {
+  text: string;
+  kind: 'line' | 'chapter' | 'section' | 'intro';
 }
 
 const NO_LANE: LaneSegment[] = [];
@@ -195,6 +225,36 @@ function lineStarts(text: string): number[] {
   for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1))
     starts.push(index + 1);
   return starts;
+}
+
+/**
+ * What the gutter shows on each line. In a manuscript with chapters, a
+ * chapter heading shows its chapter's number among the headings, a section
+ * heading a lighter mark, and the first written line of the untitled intro
+ * (the text before the first heading, which the render reads as a chapter of
+ * its own) a faint label; every other line shows its number.
+ */
+export function gutterLabels(
+  lines: readonly (readonly { text: string; kind: MarkupKind }[])[],
+  headings: boolean,
+  names: { chapter(n: number): string; section: string; intro: string },
+): GutterLabel[] {
+  const labels: GutterLabel[] = lines.map((_, index) => ({
+    text: String(index + 1),
+    kind: 'line',
+  }));
+  if (!headings) return labels;
+  let chapters = 0;
+  lines.forEach((segments, index) => {
+    const kind = segments[0]?.kind;
+    if (kind === 'heading') labels[index] = { text: names.chapter(++chapters), kind: 'chapter' };
+    else if (kind === 'section') labels[index] = { text: names.section, kind: 'section' };
+  });
+  const first = labels.findIndex((label) => label.kind === 'chapter');
+  const intro = lines.findIndex((segments) => segments.some((segment) => segment.text.trim()));
+  if (first > 0 && intro >= 0 && intro < first && labels[intro].kind === 'line')
+    labels[intro] = { text: names.intro, kind: 'intro' };
+  return labels;
 }
 
 /** The line holding `offset`. */
@@ -397,6 +457,14 @@ function tokenHint(t: TFunction, token: MarkupToken, locale: string): string {
       });
     case 'delivery':
       return t('editor.hint_delivery', { tag: token.text });
+    case 'volume': {
+      const db = volumeDb(token.text);
+      return db === null
+        ? t('editor.hint_volume_end')
+        : t('editor.hint_volume', {
+            gain: t('leveling.db', { value: formatSignedDb(db, locale) }),
+          });
+    }
     case 'expression':
       return t('editor.hint_expression', { tag: token.text });
     case 'pronunciation': {
@@ -413,18 +481,20 @@ function tokenHint(t: TFunction, token: MarkupToken, locale: string): string {
 /**
  * The voice lane from where each switch lands (content coordinates, in text
  * order): one segment per stretch read by one voice, from `top` to `bottom`.
- * Switches on the same row leave the row to the last of them.
+ * Switches on the same row leave the row to the last of them. A stop without
+ * a voice (`undefined`) leaves a gap up to the next one: a chapter heading,
+ * where the voice starts over.
  */
 export function laneSegments(
-  stops: readonly { y: number; voice: string | null }[],
+  stops: readonly LaneStop[],
   top: number,
   bottom: number,
 ): LaneSegment[] {
   const segments: LaneSegment[] = [];
   let from = top;
-  let voice: string | null = null;
+  let voice: string | null | undefined = null;
   const close = (to: number) => {
-    if (to <= from) return;
+    if (to <= from || voice === undefined) return;
     const last = segments[segments.length - 1];
     if (last && last.voice === voice && last.top + last.height === from)
       last.height = to - last.top;
@@ -448,16 +518,21 @@ function measureLane(overlay: HTMLElement, rows: HTMLElement, model: Model): Lan
   if (!bounds.width && !bounds.height) return null;
   const lineHeight = parseFloat(getComputedStyle(rows).lineHeight);
   const origin = bounds.top - overlay.scrollTop;
-  const stops: { y: number; voice: string | null }[] = [];
+  const stops: LaneStop[] = [];
   for (const change of model.switches) {
     const line = lineOf(model.starts, change.offset);
     const row = rows.children[line] as HTMLElement | undefined;
     if (!row) continue;
     let y = row.offsetTop;
-    // A heading, or a tag opening its line, starts on the line's first row;
-    // only a tag further along needs measuring.
+    if (change.kind === 'chapter') {
+      // The lane breaks at a chapter heading: the voice starts over below it.
+      stops.push({ y, voice: undefined }, { y: y + row.offsetHeight, voice: null });
+      continue;
+    }
+    // A tag opening its line starts on the line's first row; only a tag
+    // further along needs measuring.
     const rect =
-      change.kind === 'chapter' || change.offset === model.starts[line]
+      change.offset === model.starts[line]
         ? null
         : rangeRect(rows, model, change.offset, change.end);
     // A tag's box sits half a leading below the top of its visual row; the
@@ -483,10 +558,10 @@ const sameLane = (a: readonly LaneSegment[], b: readonly LaneSegment[]) =>
   );
 
 /**
- * The lane's segments, measured after layout: whenever the text changes, the
- * editor's width changes (wrapping moves the switches) and once the web fonts
- * have loaded. Measuring waits for the next frame, so a burst of keystrokes
- * measures once.
+ * The lane's segments, measured after layout: whenever the text or its type
+ * size (`layout`) changes, the editor's width changes (wrapping moves the
+ * switches) and once the web fonts have loaded. Measuring waits for the next
+ * frame, so a burst of keystrokes measures once.
  */
 function useVoiceLane(
   enabled: boolean,
@@ -494,6 +569,7 @@ function useVoiceLane(
   rows: RefObject<HTMLDivElement | null>,
   model: RefObject<Model>,
   text: string,
+  layout: string,
 ): LaneSegment[] {
   const [lane, setLane] = useState(NO_LANE);
   const request = useRef(() => {});
@@ -527,7 +603,7 @@ function useVoiceLane(
       request.current = () => {};
     };
   }, [enabled, overlay, rows, model]);
-  useLayoutEffect(() => request.current(), [text]);
+  useLayoutEffect(() => request.current(), [text, layout]);
   return lane;
 }
 
@@ -603,10 +679,9 @@ export function revealOffset(element: HTMLTextAreaElement, offset: number) {
 }
 
 interface LineProps {
-  index: number;
   segments: LineSegment[];
-  /** Paint the line number in the gutter. */
-  numbered: boolean;
+  /** What the gutter shows on the line; `null` without a gutter. */
+  label: GutterLabel | null;
   /** The caret's line, while the editor has focus. */
   active: boolean;
   /** Show the active line as a band. */
@@ -635,29 +710,21 @@ const sameSegments = (a: readonly LineSegment[], b: readonly LineSegment[]) =>
  * without touching this one.
  */
 const MarkupLine = memo(
-  function MarkupLine({
-    index,
-    segments,
-    numbered,
-    active,
-    band,
-    chapter,
-    section,
-    current,
-  }: LineProps) {
+  function MarkupLine({ segments, label, active, band, chapter, section, current }: LineProps) {
     let offset = 0;
     return (
       <div
-        data-line={numbered ? index + 1 : undefined}
+        data-line={label?.text}
         data-active={active ? '' : undefined}
-        data-chapter={chapter ? '' : undefined}
-        data-section={section ? '' : undefined}
-        className={numbered ? NUMBERED_LINE : 'relative'}
+        data-chapter={chapter || label?.kind === 'chapter' ? '' : undefined}
+        data-section={section || label?.kind === 'section' ? '' : undefined}
+        data-intro={label?.kind === 'intro' ? '' : undefined}
+        className={label ? NUMBERED_LINE : 'relative'}
       >
         {chapter && <span className={CHAPTER_BAND} style={FULL_WIDTH} />}
-        {chapter && numbered && <span className={CHAPTER_ACCENT} />}
+        {chapter && label && <span className={CHAPTER_ACCENT} />}
         {section && <span className={SECTION_BAND} style={FULL_WIDTH} />}
-        {section && numbered && <span className={SECTION_ACCENT} />}
+        {section && label && <span className={SECTION_ACCENT} />}
         {band && active && <span className={ACTIVE_BAND} style={FULL_WIDTH} />}
         {segments.length
           ? segments.map((segment, position) => {
@@ -683,8 +750,8 @@ const MarkupLine = memo(
     );
   },
   (a, b) =>
-    a.index === b.index &&
-    a.numbered === b.numbered &&
+    a.label?.text === b.label?.text &&
+    a.label?.kind === b.label?.kind &&
     a.active === b.active &&
     a.band === b.band &&
     a.chapter === b.chapter &&
@@ -716,6 +783,7 @@ export function MarkupTextarea({
   gutter = false,
   activeLine = false,
   onCaretChange,
+  textStyle,
   className,
   textClassName,
   title,
@@ -750,6 +818,11 @@ export function MarkupTextarea({
   activeLine?: boolean;
   /** The caret moved while the editor has focus (typing, clicks, arrow keys). */
   onCaretChange?(offset: number): void;
+  /**
+   * Type size and leading of both layers (the editor's zoom). A change keeps
+   * the same text in view and measures the lane again.
+   */
+  textStyle?: CSSProperties;
 }) {
   const { t, i18n } = useTranslation();
   const tools = useContext(MarkupEditorContext);
@@ -917,15 +990,33 @@ export function MarkupTextarea({
     node.style.height = 'auto';
     node.style.height = `${node.scrollHeight}px`;
   }, [autoGrow]);
+  // Where the editor was scrolled to, as a share of its height: a zoom keeps it.
+  const scrolled = useRef(0);
+  const keepScroll = () => {
+    const node = input.current;
+    if (node) scrolled.current = node.scrollHeight ? node.scrollTop / node.scrollHeight : 0;
+  };
   const rendered = useRef(text);
   useLayoutEffect(() => {
     fit();
     syncScroll();
+    keepScroll();
     if (rendered.current === text) return;
     rendered.current = text;
     latest.current.track('input');
     latest.current.scheduleHover();
   }, [text, fit, syncScroll]);
+  const layout = textStyle ? `${textStyle.fontSize}/${textStyle.lineHeight}` : '';
+  const laidOut = useRef(layout);
+  useLayoutEffect(() => {
+    if (laidOut.current === layout) return;
+    laidOut.current = layout;
+    fit();
+    const node = input.current;
+    if (node && !autoGrow) node.scrollTop = scrolled.current * node.scrollHeight;
+    syncScroll();
+    latest.current.scheduleHover();
+  }, [layout, fit, syncScroll, autoGrow]);
   useLayoutEffect(() => {
     const node = input.current;
     if (!autoGrow || !node || typeof ResizeObserver === 'undefined') return;
@@ -939,7 +1030,18 @@ export function MarkupTextarea({
     observer.observe(node);
     return () => observer.disconnect();
   }, [autoGrow, fit]);
-  const lane = useVoiceLane(gutter && highlight, overlay, rows, model, text);
+  const lane = useVoiceLane(gutter && highlight, overlay, rows, model, text, layout);
+  const labels = useMemo(
+    () =>
+      gutter
+        ? gutterLabels(lines, headings, {
+            chapter: (n) => t('editor.gutter_chapter', { n }),
+            section: SECTION_MARK,
+            intro: t('editor.gutter_intro'),
+          })
+        : null,
+    [gutter, lines, headings, t],
+  );
 
   const scrollbarGutter = autoGrow ? '' : '[scrollbar-gutter:stable]';
   return (
@@ -948,6 +1050,7 @@ export function MarkupTextarea({
         <div
           ref={overlay}
           aria-hidden="true"
+          style={textStyle}
           className={cn(
             LAYER,
             textClassName,
@@ -962,9 +1065,8 @@ export function MarkupTextarea({
             {lines.map((segments, index) => (
               <MarkupLine
                 key={index}
-                index={index}
                 segments={segments}
-                numbered={gutter}
+                label={labels?.[index] ?? null}
                 active={editing?.line === index}
                 band={activeLine}
                 chapter={activeLine && headings && segments[0]?.kind === 'heading'}
@@ -989,6 +1091,7 @@ export function MarkupTextarea({
         onChange={(event) => onValueChange(event.target.value)}
         onScroll={(event) => {
           syncScroll();
+          keepScroll();
           onScroll?.(event);
           scheduleHover();
           tools?.onEditorChange?.(handle, 'scroll');
@@ -1096,6 +1199,10 @@ export function MarkupTextarea({
           // and scroll inside; the overlay follows that scroll.
           autoGrow ? 'relative overflow-hidden' : 'absolute inset-0 h-full overflow-y-auto',
         )}
+        style={textStyle}
+        // Chromium checks every word against the system's (often English)
+        // dictionary: a Vietnamese script would be underlined end to end.
+        spellCheck={false}
         {...props}
         {...tools?.textareaAria}
       />

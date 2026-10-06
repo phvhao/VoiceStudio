@@ -92,9 +92,13 @@ def test_untimed_chapter_is_split_by_section_and_character_share():
         ("abcd", 0.0, 4.0), ("Ef", 4.0, 6.0), ("ghij", 6.0, 10.0)]
     # The title as a listener reads it: tags stripped.
     assert ch["sections"] == [{"title": "Ef", "level": 2, "start": 4.0, "phrase": 1}]
-    # Without sections the whole chapter is one entry, as before.
+    # Without sections: one entry per line or paragraph, the break kept.
     plain = ab.parse_audiobook_script("# One\nabcd\nefgh").chapters[0]
     assert ab.book_timeline("x", [(plain, 2.0, None)])["chapters"][0]["phrases"] == [
+        {"text": "abcd", "start": 0.0, "end": 1.0, "voice": None},
+        {"text": "efgh", "start": 1.0, "end": 2.0, "voice": None, "break": "line"}]
+    flat = ab.parse_audiobook_script("# One\nabcd efgh").chapters[0]
+    assert ab.book_timeline("x", [(flat, 2.0, None)])["chapters"][0]["phrases"] == [
         {"text": "abcd efgh", "start": 0.0, "end": 2.0, "voice": None}]
 
 
@@ -207,6 +211,71 @@ def test_outline_reads_the_remote_cache_when_the_job_runs_remotely(local_engine,
               for c in plan.chapters]
     assert [cached for _key, cached in states] == [True, False]
     assert states[0][0] == router._cache_name(path)
+
+
+def test_outline_and_preview_flag_the_untitled_intro(local_engine, outputs, monkeypatch):
+    """The parser names the untitled intro "Chapter 1" in English; every reply
+    that carries that title says it is a stand-in, so the app names it."""
+    router = local_engine
+    text = "An opening line.\n# Chương 1\nBody."
+    got = _outline(router, text=text)["chapters"]
+    assert [(c["title"], c.get("untitled")) for c in got] == [
+        ("Chapter 1", True), ("Chương 1", None)]
+
+    async def run_chapter(chapter, **_kw):
+        return str(outputs / "longform_cache" / "x.wav"), 1.0, True, None
+
+    monkeypatch.setattr(router, "_run_chapter", run_chapter)
+
+    def preview(index):
+        req = router.AudiobookPreviewRequest(text=text, chapter_index=index)
+        return asyncio.run(router.audiobook_preview(req))
+
+    assert preview(0)["untitled"] is True
+    assert "untitled" not in preview(1)
+
+
+def test_summary_keeps_no_english_stand_in_title():
+    ab = _mod("services.audiobook")
+    plan = ab.parse_audiobook_script("Opening.\n# Real\nBody.")
+    summary = _mod("services.longform_render").render_summary(plan.chapters, voices=[])
+    assert summary["chapter_titles"] == ["", "Real"]
+
+
+@pytest.mark.skipif(_mod("services.ffmpeg_utils").find_ffmpeg() is None,
+                    reason="ffmpeg required for a full render")
+def test_a_fresh_full_render_leaves_every_chapter_rendered(local_engine, outputs, monkeypatch):
+    """The outline's status is read under the key the real render records in
+    the book's timeline: right after a full render through the /audiobook front
+    door, no chapter may read as changed. Leveling is on, as the app sends it."""
+    router = local_engine
+
+    def build_synth(default_voice=None, language=None, opts=None, voice_map=None, lease=None):
+        return {"mode": "generic", "engine_id": "eng", "sample_rate": SR,
+                "resolve": router._voice_resolver(default_voice, voice_map, lease),
+                "synth": lambda text, voice_id, speed=None, attempt=0: torch.full((2400,), 0.1)}
+
+    monkeypatch.setattr(router, "_build_synth", build_synth)
+    fields = {"text": "An opening line.\n# One\nFirst. [slow]Hi.[/slow]\n## Part\nMore.\n"
+                      "# Two\nSecond chapter.",
+              "level_voices": True, "line_gap_ms": 120, "lexicon": {"First": "Furst"}}
+
+    async def render():
+        response = await router.audiobook_synthesize(router.AudiobookRequest(**fields))
+        return [json.loads(frame[len("data:"):]) async for frame in response.body_iterator]
+
+    events = asyncio.run(asyncio.wait_for(render(), timeout=120))
+    done = events[-1]
+    assert done["type"] == "done", events
+    chapters = [e for e in events if e["type"] == "chapter"]
+    assert [(e["title"], e.get("untitled")) for e in chapters] == [
+        ("Chapter 1", True), ("One", None), ("Two", None)]
+    # No book title, and the intro's stand-in is none either.
+    assert not done.get("title")
+
+    got = _outline(router, **fields, output=done["output"])
+    assert got["book"] is True
+    assert [(c["status"], c["in_book"]) for c in got["chapters"]] == [("rendered", True)] * 3
 
 
 def test_local_sample_rate_needs_no_model(monkeypatch):
@@ -379,9 +448,20 @@ def test_html_export_names_an_untitled_chapter_in_the_app_language(outputs, expo
                   labels={"chapter_n": "Chương {n}"})
     with _zip(exports, got) as archive:
         page = archive.read("index.html").decode("utf-8")
-    assert [c["title"] for c in _page_data(page)["chapters"]] == ["Chương 1", "Two"]
-    # The page's title falls back to the first chapter's, as the page names it.
-    assert "<title>Chương 1</title>" in page
+    # The text before the first heading is the book's opening: named in the
+    # app's words, not numbered, so "Two" is chapter 1.
+    chapters = _page_data(page)["chapters"]
+    assert [(c["title"], c["number"], c.get("intro")) for c in chapters] == [
+        ("Opening", None, True), ("Two", 1, None)]
+    # The page's title falls back to the first chapter the script titled.
+    assert "<title>Two</title>" in page
+    # Every chapter untitled (a Stories-like plan): numbered in the app's words.
+    html_mod = _mod("services.audiobook_html")
+    data = html_mod.page_timeline({"chapters": [
+        {"title": "Chapter 1", "untitled": True}, {"title": "Chapter 2", "untitled": True}]},
+        {"chapter_n": "Chương {n}"})
+    assert [(c["title"], c["number"], c.get("intro")) for c in data["chapters"]] == [
+        ("Chương 1", 1, None), ("Chương 2", 2, None)]
 
 
 def test_page_seek_bar_reads_as_a_time():

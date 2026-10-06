@@ -7,9 +7,11 @@ const mocks = vi.hoisted(() => ({
   api: vi.fn(),
   remove: vi.fn(),
   detach: vi.fn(),
-  edit: vi.fn(),
+  open: vi.fn(),
+  create: vi.fn(),
+  navigate: vi.fn(),
   active: false,
-  drafts: { stories: { projectId: 'book' }, audiobook: { projectId: null } },
+  books: [] as object[],
 }));
 vi.mock('@/components/workspace-sidebar', () => ({
   SecondarySidebar: ({ children }: any) => <aside>{children}</aside>,
@@ -22,7 +24,7 @@ vi.mock('@/components/pipeline-failure', () => ({
   PipelineFailure: ({ fallback }: any) => <p role="alert">{fallback}</p>,
 }));
 vi.mock('@/components/profile-avatar', () => ({ ProfileAvatar: () => null }));
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mocks.navigate }));
 vi.mock('@/hooks/use-profiles', () => ({
   useProfiles: () => ({ data: [] }),
   useDeleteProfile: () => ({ mutateAsync: vi.fn() }),
@@ -41,26 +43,36 @@ vi.mock('../dub/dub-session', () => ({
 }));
 vi.mock('../longform/longform-session', () => ({
   useLongformSession: () => ({ active: mocks.active }),
-  longformSession: { state: { active: false, drafts: mocks.drafts } },
-  blankLongformDraft: () => ({}),
-  editLongform: mocks.edit,
+  listLongformProjects: async () => mocks.books,
+  openLongformProject: mocks.open,
+  createLongformProject: mocks.create,
+  deleteLongformProject: mocks.remove,
+  renameLongformProject: vi.fn(),
 }));
-vi.mock('../longform/project-library', () => ({
-  projectLibrary: {
-    list: async () => [{ id: 'book', mode: 'stories', name: 'Saved story', updatedAt: 1 }],
-    remove: mocks.remove,
-    rename: vi.fn(),
-  },
-}));
+const book = (fields: object) => ({
+  autoName: false,
+  createdAt: 1,
+  updatedAt: 1,
+  words: 0,
+  chapters: 0,
+  output: '',
+  outputs: [],
+  ...fields,
+});
 import { ProjectsPage } from './projects-page';
 
 let exports: { id: string; filename: string; destination_path: string }[];
 let dubs: { id: string; name: string }[];
+let renders: object[];
 let clients: QueryClient[] = [];
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   mocks.active = false;
+  mocks.books = [book({ id: 'book', mode: 'stories', name: 'Saved story' })];
+  mocks.open.mockImplementation(async () => 'audiobook');
+  mocks.create.mockImplementation(async () => 'audiobook');
+  renders = [];
   exports = [{ id: 'same', filename: 'Exported audio', destination_path: '/kept/audio.wav' }];
   dubs = [{ id: 'same', name: 'Dub project' }];
   mocks.api.mockImplementation(async (path: string, options?: { method?: string }) => {
@@ -71,7 +83,9 @@ beforeEach(() => {
     }
     if (path === '/projects') return dubs;
     if (path === '/export/history') return exports;
-    if (path === '/longform/jobs') return { jobs: [] };
+    if (path === '/longform/jobs') return { jobs: renders };
+    if (path.startsWith('/audiobook/timeline/'))
+      return { chapters: [{ title: 'One', phrases: [{ text: 'Recovered text.', voice: '' }] }] };
     return {};
   });
 });
@@ -154,12 +168,11 @@ it('clears hidden selections when searching and selects only visible rows', asyn
   expect(deletions().map(([path]) => path)).toEqual(['/export/history/same']);
 });
 
-it('detaches deleted longform drafts and blocks deletion during generation', async () => {
+it('deletes library books through the session and blocks deletion during generation', async () => {
   await mount();
   fireEvent.click(screen.getByRole('button', { name: 'Delete Saved story' }));
   fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
-  await waitFor(() => expect(mocks.edit).toHaveBeenCalledWith('stories', { projectId: null }));
-  expect(mocks.remove).toHaveBeenCalledWith('book');
+  await waitFor(() => expect(mocks.remove).toHaveBeenCalledWith('book'));
   cleanup();
   mocks.active = true;
   await mount();
@@ -219,4 +232,102 @@ it('prevents duplicate submissions and cancellation while deletion is pending', 
   expect(deletions()).toHaveLength(1);
   finish();
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+it('groups renders under their book and opens the book with the render asked for', async () => {
+  mocks.books = [
+    book({ id: 'b1', mode: 'audiobook', name: 'My book', words: 1200, chapters: 7 }),
+    // Linked by the file it showed: the draft the library adopted.
+    book({ id: 'b2', mode: 'audiobook', name: 'Adopted', outputs: ['adopted.m4b'] }),
+  ];
+  renders = [
+    {
+      job_id: 'r1',
+      type: 'audiobook',
+      title: 'test',
+      output: 'new.m4b',
+      project_id: 'b1',
+      created_at: 30,
+    },
+    {
+      job_id: 'r2',
+      type: 'audiobook',
+      title: 'test',
+      output: 'old.m4b',
+      project_id: 'b1',
+      created_at: 20,
+      summary: { chapter_titles: ['One'] },
+    },
+    { job_id: 'r3', type: 'audiobook', title: 'test', output: 'adopted.m4b', created_at: 10 },
+  ];
+  await mount();
+  expect(screen.getByText('1200 words · 7 chapters')).toBeTruthy();
+  // One entry per book, not one per render.
+  expect(screen.queryByRole('checkbox', { name: 'Select test' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'My book' }));
+  await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: '/audiobook' }));
+  expect(mocks.open).toHaveBeenCalledWith('b1');
+
+  const toggle = screen.getByRole('button', { name: 'Show renders of My book' });
+  expect(toggle.textContent).toContain('2 renders');
+  expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(toggle);
+  const older = screen.getAllByRole('button', { name: /^Open My book \u2014 .* in the editor$/ });
+  expect(older).toHaveLength(2);
+  fireEvent.click(older[1]);
+  await waitFor(() =>
+    expect(mocks.open).toHaveBeenLastCalledWith('b1', {
+      output: 'old.m4b',
+      chapters: [{ title: 'One', status: 'done' }],
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Show renders of Adopted' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Open Adopted \u2014 .* in the editor$/ }));
+  await waitFor(() =>
+    expect(mocks.open).toHaveBeenLastCalledWith('b2', { output: 'adopted.m4b', chapters: [] }),
+  );
+});
+
+it('rebuilds the book of an older render, or says why it cannot', async () => {
+  mocks.books = [];
+  renders = [
+    {
+      job_id: 'n1',
+      type: 'audiobook',
+      title: 'test',
+      output: 'kept.m4b',
+      timeline: true,
+      created_at: 30,
+    },
+    { job_id: 'n2', type: 'audiobook', title: 'test', output: 'bare.m4b', created_at: 20 },
+    { job_id: 'n3', type: 'story', title: 'Old story', output: 'story.mp3', created_at: 10 },
+  ];
+  await mount();
+  // Renders of one title group under one entry; the latest is the one played and opened.
+  expect(screen.getByRole('button', { name: 'Show renders of test' }).textContent).toContain(
+    '2 renders',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'test' }));
+  await waitFor(() =>
+    expect(mocks.create).toHaveBeenCalledWith(
+      'audiobook',
+      expect.objectContaining({ script: '# One\n\nRecovered text.', output: 'kept.m4b' }),
+      'test',
+    ),
+  );
+  expect(mocks.api).toHaveBeenCalledWith('/audiobook/timeline/kept.m4b');
+  expect(mocks.navigate).toHaveBeenCalledWith({ to: '/audiobook' });
+  // Kept no text: no open action, and the reason instead.
+  expect(screen.queryByRole('button', { name: 'Old story' })).toBeNull();
+  expect(screen.getByText(/kept no text to rebuild the book/)).toBeTruthy();
+});
+
+it('shows why a book cannot be opened while its editor renders', async () => {
+  mocks.open.mockRejectedValue(
+    new Error('This is rendering. Stop it or wait for it to finish before you switch.'),
+  );
+  await mount();
+  fireEvent.click(screen.getByRole('button', { name: 'Saved story' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('This is rendering');
+  expect(mocks.navigate).not.toHaveBeenCalled();
 });

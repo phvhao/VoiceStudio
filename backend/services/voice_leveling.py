@@ -147,7 +147,8 @@ def apply_gain(audio, gain_db: float):
 
 
 def voice_gains_db(takes: Iterable, sample_rate: int, *, level: bool = True,
-                   offsets: Optional[Mapping] = None) -> dict:
+                   offsets: Optional[Mapping] = None,
+                   report: Optional[dict] = None) -> dict:
     """The gain in dB for each voice of ``takes`` — ``(voice, audio)`` pairs.
 
     ``level`` moves each voice's speech level (all its takes measured
@@ -156,13 +157,20 @@ def voice_gains_db(takes: Iterable, sample_rate: int, *, level: bool = True,
     on top. Each part is capped at ±:data:`MAX_LEVEL_GAIN_DB`, and a boost stops
     before the voice's loudest sample passes :data:`PEAK_CEILING`. One gain per
     voice, so its takes keep their loudness relative to each other.
+
+    ``report`` (a dict the caller owns) receives, for every voice leveling
+    measured, ``{"level_db": its speech level, "auto_db": what leveling
+    added}`` — the applied gain less the user's own volume, so a boost the
+    peak guard held back counts against the leveling.
     """
     by_voice: dict = {}
     for voice, audio in takes:
         by_voice.setdefault(voice, []).append(audio)
     gains = {}
     for voice, voice_takes in by_voice.items():
-        gain = clamp_gain_db((offsets or {}).get(voice, 0.0))
+        offset = clamp_gain_db((offsets or {}).get(voice, 0.0))
+        gain = offset
+        measured = None
         if level:
             measured = speech_level_db(voice_takes, sample_rate)
             if measured is not None:
@@ -170,4 +178,17 @@ def voice_gains_db(takes: Iterable, sample_rate: int, *, level: bool = True,
         if gain > 0.0:
             gain = peak_safe_gain_db(gain, max(_peak(take) for take in voice_takes))
         gains[voice] = gain
+        if report is not None and measured is not None:
+            report[voice] = {"level_db": round(measured, 2), "auto_db": round(gain - offset, 2)}
     return gains
+
+
+def apply_passage_gain(audio, gain_db):
+    """``audio`` of one ``[volume]`` passage moved by ``gain_db`` (capped at
+    ±:data:`MAX_LEVEL_GAIN_DB`); a boost stops before its loudest sample passes
+    :data:`PEAK_CEILING`, like leveling's. Applied after the voice's gain, and
+    never measured by leveling: a whispered passage does not raise its voice."""
+    gain = clamp_gain_db(gain_db)
+    if gain > 0.0:
+        gain = peak_safe_gain_db(gain, _peak(audio))
+    return apply_gain(audio, gain)

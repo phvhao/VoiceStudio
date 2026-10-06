@@ -29,18 +29,29 @@ metadata and the backend fallback mirror it.
 - Clicking a tag, or Alt+Enter on it, opens a card to recast a voice, set its volume, listen to or select its part, change a pause or delivery, or respell a word; right-click offers the same
 - Typing [ in a script suggests voices, profiles, pauses, delivery and reactions
 - Audiobook and Stories even out voice volume per chapter (on by default), and Cast sets a −12 to +12 dB volume per voice; local renders reassemble chapters from takes already made
+- `[volume -6dB]…[/volume]` reads one passage quieter or louder, set from the toolbar, a tag card, the right-click menu or `[` suggestions; Cast shows what leveling added to each voice in the last render
 - The finished audiobook plays from a compact card with chapter marks, chapter skips and speed; Open reader shows the whole text, follows the voice word by word, and plays from any word you click
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen
 - Speech no longer misreads a word glued to a typographic quotation mark (“đừng was heard as “dừng”); quotation marks are not spoken
 - Shouted words with accents such as MÙA THU are spoken as words instead of letters; acronyms and lone ASCII capitals stay as written; lines either change affects re-render once in existing books
 - Audiobook `## Section` and `### Section` lines open sections inside a chapter: the title is read aloud without the marks and never resets the voice; chapters containing such lines re-render once
-- A Contents panel beside the Audiobook editor lists chapters and sections, jumps to a heading, renames, adds or removes headings, shows whether each chapter is rendered or changed since the last book, and renders one chapter on its own
+- A Contents rail in the Audiobook editor lists chapters and sections, jumps to a heading, renames, adds or removes headings, shows whether each chapter is rendered or changed since the last book (with the reason on hover), and renders one chapter on its own; it folds away, and text before the first heading shows as the intro with an Add title action
+- Untitled chapters are named in the app's language everywhere, never as an English "Chapter 1"
+- The Audiobook editor zooms its text from 80 to 160 % (status bar, Ctrl/⌘ + − 0 or Ctrl+wheel), marks chapter and section headings and the intro in its gutter, and turns off the spelling check that underlined every Vietnamese word
+- A voice tag's card picks the reading voice for every passage of that name, with switching the one tag to another role a step away; the status bar names a voice once when its profile has the same name
 - Export HTML saves a finished audiobook as an offline web page with its audio: contents, the full text following the voice, speed and keyboard controls; no second copy of the book stays in the outputs folder
+- The exported book reads like an e-book: the script's paragraphs, justified text in a serif font, chapter openers, a contents sidebar or phone drawer, text size, light/sepia/dark themes, a player bar with chapter marks, Back to current, and clean printing
+- The reader in the app justifies its text and keeps the script's paragraphs even after the script is edited
+- Playing an audiobook with the reader open no longer redraws the page on every frame, so long books play smoothly
+- Stories and Audiobook keep a library of books: the header names the open book, saves it as you type, and opens search, new, rename, duplicate and delete; the old Projects card is gone
+- Projects groups each book's renders under it and opens the book in the editor with the chosen render's audio; older renders open as a book rebuilt from their text
 - The reader moves to each sentence exactly when the voice reaches it in newly rendered books and follows the words as rendered; older books keep estimated timing and say so
 - The Audiobook default voice and every Cast name are picked from the searchable voice picker, and a Cast name can go back to the default voice
 - Render details name every reading setting: per-voice volume, per-mark pauses, comma splitting and the speech check
 - [voice:default] reads in the book's default voice in any case: Cast no longer lists it, its volume is the default voice's, and the editor colors it as the default voice; a [voice:Default] a saved draft already cast keeps its voice
 - Plain-text and EPUB imports with CRLF or CR line endings no longer leave stray carriage returns in chapter text
+- Clone and Voice Design color pauses and expressions in the script, and Insert (Alt+/) adds the Audiobook pause lengths or a custom one above the expressions
+- Script and transcript boxes across the app (Clone, Voice Design, voice previews, Compare voices, phone greetings, workflow scripts) no longer underline every Vietnamese word as a spelling mistake
 
 ## [0.5.7] — 2026-10-05
 

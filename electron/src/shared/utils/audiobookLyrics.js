@@ -141,6 +141,7 @@ function pushChapter(outChapters, words, parsedChapter, streamTitle, start, end)
 }
 
 const PRECISIONS = new Set(['phrase', 'span', 'chapter']);
+const BREAKS = new Set(['line', 'paragraph']);
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 
 /**
@@ -164,12 +165,15 @@ export function readTimeline(timeline) {
       if (!finite(phrase.start) || !finite(phrase.end)) continue;
       const phraseStart = Math.min(end, Math.max(from, phrase.start));
       const phraseEnd = Math.min(end, Math.max(phraseStart, phrase.end));
-      phrases.push({
+      const entry = {
         text: phrase.text,
         start: phraseStart,
         end: phraseEnd,
         voice: typeof phrase.voice === 'string' ? phrase.voice : null,
-      });
+      };
+      // Where the script started a new line or paragraph (newer renders).
+      if (BREAKS.has(phrase.break)) entry.break = phrase.break;
+      phrases.push(entry);
       from = phraseEnd;
     }
     // Its `## Section` headings, where each is heard.
@@ -229,10 +233,10 @@ function sidecarLyrics({ chapters }) {
     const chapterIndex = outChapters.length;
     const wordStart = words.length;
     // Nothing inside the chapter is known: today's even split over it.
-    const units =
-      precision === 'chapter'
-        ? [{ text: timed.map((p) => p.text).join(' '), start, end, voice: null, even: true }]
-        : timed;
+    const even = precision === 'chapter';
+    const units = even
+      ? [{ text: timed.map((p) => p.text).join(' '), start, end, voice: null, even: true }]
+      : timed;
     for (const unit of units) {
       const phrase = phrases.length;
       const split = unit.even
@@ -247,7 +251,19 @@ function sidecarLyrics({ chapters }) {
         chapterIndex,
         voice: unit.voice,
       });
-      for (const w of split) words.push({ ...w, chapterIndex, phrase });
+      split.forEach((w, k) => {
+        const word = { ...w, chapterIndex, phrase };
+        if (k === 0 && unit.break) word.break = unit.break;
+        words.push(word);
+      });
+    }
+    if (even) {
+      // The entries' breaks land on their first words of the even split.
+      let at = wordStart;
+      for (const entry of timed) {
+        if (entry.break && at < words.length) words[at].break = entry.break;
+        at += entry.text.split(WS).filter(Boolean).length;
+      }
     }
     const wordCount = words.length - wordStart;
     // Each section from the first word heard at or after its heading.

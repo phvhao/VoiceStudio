@@ -146,3 +146,43 @@ def test_redos_safe_on_adversarial_input():
     # All 5000 opens unclosed -> the single 'x' run is slow.
     assert segs[-1]["text"] == "x"
     assert segs[-1]["speed"] == SLOW_SPEED
+
+
+# ── [volume ±N dB]…[/volume] ─────────────────────────────────────────────────
+
+def test_volume_sets_a_gain_only_on_the_wrapped_words():
+    segs = parse_ssml_lite("a [volume -6dB]b[/volume] c")
+    assert segs == [
+        {"text": "a ", "speed": None, "spell": False, "emphasis": False},
+        {"text": "b", "speed": None, "spell": False, "emphasis": False, "gain_db": -6.0},
+        {"text": " c", "speed": None, "spell": False, "emphasis": False},
+    ]
+
+
+def test_volume_accepts_db_spellings_a_space_and_a_bare_number():
+    for tag in ("[volume -3dB]", "[volume -3db]", "[VOLUME -3DB]", "[volume -3 dB]",
+                "[volume -3]", "[volume\t-3.0]"):
+        assert parse_ssml_lite(f"{tag}x[/volume]")[0]["gain_db"] == -3.0, tag
+    assert parse_ssml_lite("[volume +2]x")[0]["gain_db"] == 2.0  # unclosed: to the end
+
+
+def test_volume_nesting_adds_and_clamps_to_twelve_db():
+    by_text = {s["text"]: s.get("gain_db") for s in parse_ssml_lite(
+        "[volume 3]a[volume 4]b[volume 20]c[/volume][/volume][/volume][volume -30]d")}
+    assert by_text == {"a": 3.0, "b": 7.0, "c": 12.0, "d": -12.0}
+
+
+def test_volume_without_a_readable_gain_is_literal_text():
+    for text in ("[volume]x", "[volume loud]x", "x[/volume 3]", "[volume 12345]x",
+                 "[slow 3]x", "[volume 1e3]x"):
+        segs = parse_ssml_lite(text)
+        assert [s["text"] for s in segs] == [text] and "gain_db" not in segs[0], text
+
+
+def test_volume_open_tags_write_the_gain_back():
+    from services.ssml_lite import open_tags
+
+    assert open_tags("[slow]a [volume -6dB]b") == ["slow", "volume -6"]
+    assert open_tags("[volume -6dB]b[/volume]") == []
+    # Written back, the open tag reads the same gain.
+    assert parse_ssml_lite("[volume -6]x")[0]["gain_db"] == -6.0

@@ -349,6 +349,37 @@ describe('buildLyricsTimeline — timeline sidecar', () => {
     expect(chapters[0].precision).toBe('chapter');
   });
 
+  it("puts each entry's line or paragraph break on its first word", () => {
+    const phrases = [
+      { text: 'One two.', start: 0, end: 1 },
+      { text: 'Three.', start: 1, end: 2, break: 'line' },
+      { text: 'Four five.', start: 2, end: 3, break: 'paragraph' },
+      { text: 'Six.', start: 3, end: 4, break: 'bogus' },
+    ];
+    const chapter = { title: 'C', start: 0, end: 4, phrases };
+    const read = readTimeline({ version: 1, chapters: [{ ...chapter, precision: 'phrase' }] });
+    expect(read.chapters[0].phrases.map((p) => p.break)).toEqual([
+      undefined,
+      'line',
+      'paragraph',
+      undefined,
+    ]);
+    // Timed phrases, and a chapter only known as a whole (one even split).
+    for (const precision of ['phrase', 'chapter']) {
+      const { words } = buildLyricsTimeline('', {
+        timeline: { version: 1, chapters: [{ ...chapter, precision }] },
+      });
+      expect(words.map((w) => [w.text, w.break])).toEqual([
+        ['One', undefined],
+        ['two.', undefined],
+        ['Three.', 'line'],
+        ['Four', 'paragraph'],
+        ['five.', undefined],
+        ['Six.', undefined],
+      ]);
+    }
+  });
+
   it('reads where each section is heard, from its first word', () => {
     const { chapters } = buildLyricsTimeline('', {
       timeline: {

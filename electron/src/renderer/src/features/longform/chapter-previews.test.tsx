@@ -25,14 +25,14 @@ const draft: Draft = {
 
 let state: ChapterPreviewState;
 const rendered = vi.fn();
-function Harness({ value }: { value: Draft }) {
+function Harness({ value, label }: { value: Draft; label?: string }) {
   state = useChapterPreview(value, {
     disabled: false,
     canPreview: true,
     onBusy: () => {},
     onRendered: rendered,
   });
-  return <ChapterPreview preview={state} />;
+  return <ChapterPreview preview={state} label={label} />;
 }
 
 it('renders one chapter through the preview endpoint and reports it', async () => {
@@ -67,4 +67,23 @@ it('clears the preview when a volume the script uses changes', async () => {
 
   view.rerender(<Harness value={{ ...draft, voiceGains: { Mara: 3 } }} />);
   expect(screen.queryByText('One')).toBeNull();
+});
+
+it("names an untitled chapter in the app's language, never the render's English", async () => {
+  mock.api.mockResolvedValue({ output: 'c.wav', title: 'Chapter 1', untitled: true });
+  render(<Harness value={draft} />);
+  await act(() => state.render(0));
+  expect(screen.queryByText('Chapter 1')).toBeNull();
+  // The test's `t` returns the key: the localized "Chapter N".
+  expect(screen.getByText('audiobook.chapter_n')).toBeVisible();
+  expect(state.output).toEqual({ output: 'c.wav', index: 0, title: '' });
+});
+
+it("takes the outline's name for the chapter, and closes", async () => {
+  mock.api.mockResolvedValue({ output: 'c.wav', title: 'Chapter 1', untitled: true });
+  render(<Harness value={draft} label="Intro (untitled)" />);
+  await act(() => state.render(0));
+  expect(screen.getByText('Intro (untitled)')).toBeVisible();
+  act(() => screen.getByRole('button', { name: 'common.close' }).click());
+  expect(screen.queryByTestId('preview')).toBeNull();
 });

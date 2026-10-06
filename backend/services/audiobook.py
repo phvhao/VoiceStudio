@@ -311,15 +311,30 @@ class Span:
     #: synthesis, so no cache key sees it. Emitted only when set.
     section: Optional[str] = None
     section_level: Optional[int] = None
+    #: A ``[volume -6dB]…[/volume]`` passage: the dB its audio is moved by,
+    #: after voice leveling and the voice's own volume (``synthesize_chapter``).
+    #: ``None`` on every other span. Emitted only when set, so every plan,
+    #: manifest and cache key of a script without the tag is byte-identical.
+    gain_db: Optional[float] = None
+    #: ``"line"`` / ``"paragraph"`` when this span starts a new line or
+    #: paragraph of the script (``parse_script_to_spans(layout=True)``); ``None``
+    #: when it runs on in the same line or opens the chapter. Read by the
+    #: rendered timeline only, for the reader's paragraphs — never by
+    #: synthesis or a cache key. Emitted only when set.
+    break_before: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = {"voice_id": self.voice_id, "text": self.text,
              "pause_ms_after": self.pause_ms_after, "speed": self.speed}
+        if self.gain_db:
+            d["gain_db"] = self.gain_db
         if self.join:
             d["join"] = self.join
         if self.section is not None:
             d["section"] = self.section
             d["section_level"] = self.section_level
+        if self.break_before:
+            d["break_before"] = self.break_before
         return d
 
 
@@ -376,7 +391,7 @@ def parse_audiobook_script(text: str, *, default_voice: Optional[str] = None) ->
     chapters = [
         Chapter(title=c["title"], spans=[Span(**s) for s in c["spans"]],
                 untitled=c.get("untitled", False))
-        for c in parse_script_to_spans(text, default_voice=default_voice)
+        for c in parse_script_to_spans(text, default_voice=default_voice, layout=True)
     ]
     return AudiobookPlan(chapters=chapters)
 
@@ -556,7 +571,9 @@ def synthesize_chapter(
     one speech level, plus its own volume from ``voice_gains`` (dB by name).
     It runs after the segment cache, which keeps the takes as rendered, so
     turning it on or changing a volume re-assembles a chapter without
-    synthesizing again. Silence is untouched.
+    synthesizing again. Silence is untouched. A span's own ``gain_db`` (a
+    ``[volume]`` passage) moves it after that, with the same peak guard, and
+    leveling never measures it — so a whispered line does not raise its voice.
 
     ``timing`` (a list the caller owns) receives the chapter's timing
     document: where every take sits in the returned audio, measured after
@@ -704,16 +721,28 @@ def synthesize_chapter(
             timing.append(chapter_timing_doc([], sample_rate, 0,
                                              phrases=punctuation_pauses is not None))
         return torch.zeros(0, dtype=torch.float32), 0.0
+    # What leveling measured per voice, for the timing document.
+    levels: dict = {}
     if level_voices or voice_gains:
         from services.voice_leveling import apply_gain, voice_gains_db
 
         gains = voice_gains_db([(voice, audio) for kind, audio, voice in items if kind == "a"],
-                               sample_rate, level=level_voices, offsets=voice_gains)
+                               sample_rate, level=level_voices, offsets=voice_gains,
+                               report=levels)
         # Replaced one span at a time: leveling never holds a second copy of
         # the chapter.
         for i, (kind, audio, voice) in enumerate(items):
             if kind == "a":
                 items[i] = (kind, apply_gain(audio, gains[voice]), voice)
+    # A [volume] passage moves after its voice is leveled, so leveling measured
+    # the voice as written and a whisper never raises the whole voice.
+    for i, (index, _units) in span_timing.items():
+        passage_db = getattr(spans[index], "gain_db", None)
+        if passage_db:
+            from services.voice_leveling import apply_passage_gain
+
+            kind, audio, voice = items[i]
+            items[i] = (kind, apply_passage_gain(audio, passage_db), voice)
     # Engines return (1, samples) per the TTSBackend contract while a bare
     # zeros(n) is 1-D — mixing the two crashed the final concat (#897). So
     # materialize inter-span silence AFTER the loop, matching the rendered
@@ -742,7 +771,8 @@ def synthesize_chapter(
             cursor += part.shape[-1]
         if cursor == audio.shape[-1]:
             timing.append(chapter_timing_doc(entries, sample_rate, cursor,
-                                             phrases=punctuation_pauses is not None))
+                                             phrases=punctuation_pauses is not None,
+                                             levels=levels))
     return audio, audio.shape[-1] / float(sample_rate)
 
 
@@ -762,7 +792,8 @@ def _cached_take_ranges(segment_cache, span, nonce: int, samples: int) -> Option
         {"version": TIMELINE_VERSION, "samples": samples, "units": units}, samples)
 
 
-def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: bool) -> dict:
+def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: bool,
+                       levels: Optional[dict] = None) -> dict:
     """The timing document of one rendered chapter (version 1).
 
     ``spans`` lists every span that put audio in the chapter: ``{"span":
@@ -773,9 +804,19 @@ def chapter_timing_doc(spans: list, sample_rate: int, samples: int, *, phrases: 
     ``phrases`` says the takes are sentences and clauses (phrase-by-phrase
     reading) rather than <=800-character chunks; ``units`` is ``None`` for a
     span only known as a whole.
+
+    ``levels`` (written only when voice leveling measured a voice) maps each
+    voice name (``''`` = the default voice) to ``{"level_db", "auto_db"}``
+    (:func:`services.voice_leveling.voice_gains_db`). It travels with the
+    chapter's audio — the cache sidecar, a remote worker's embedded chunk — so
+    a chapter replayed from the cache still reports its leveling. Readers
+    ignore keys they do not know.
     """
-    return {"version": TIMELINE_VERSION, "sample_rate": int(sample_rate),
-            "samples": int(samples), "phrases": bool(phrases), "spans": spans}
+    doc = {"version": TIMELINE_VERSION, "sample_rate": int(sample_rate),
+           "samples": int(samples), "phrases": bool(phrases), "spans": spans}
+    if levels:
+        doc["levels"] = levels
+    return doc
 
 
 # ── Rendered timeline (what the reader highlights) ──────────────────────────
@@ -800,6 +841,106 @@ def _written_overrides(text: str) -> str:
 def _display_text(text: str) -> str:
     """Take text as the listener reads it: tags removed, whitespace collapsed."""
     return _SPACE_RE.sub(" ", _TAG_RE.sub(" ", text or "")).strip()
+
+
+#: How strongly a break parts two texts: a paragraph outranks a line.
+_BREAK_RANK = {None: 0, "line": 1, "paragraph": 2}
+
+
+def _stronger(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    return a if _BREAK_RANK.get(a, 0) >= _BREAK_RANK.get(b, 0) else b
+
+
+def _shown_marks(text: str) -> tuple[str, list]:
+    """What ``text`` shows, character by character: its characters without
+    whitespace or tags (:func:`_display_text` without its spaces), and the
+    break before each — ``"line"`` / ``"paragraph"`` on the first character
+    after a line break / blank line (a line holding only a tag is not blank,
+    as in :func:`services.longform_parser.layout_break`), else ``None``."""
+    from services.longform_parser import LAYOUT_MARK, layout_break
+
+    text = text or ""
+    keys: list = []
+    breaks: list = []
+    gap = ""
+
+    def walk(chunk: str) -> None:
+        nonlocal gap
+        for char in chunk:
+            if char.isspace():
+                gap += char
+                continue
+            breaks.append(layout_break(gap) if keys and "\n" in gap else None)
+            keys.append(char)
+            gap = ""
+
+    last = 0
+    for m in _TAG_RE.finditer(text):
+        walk(text[last:m.start()])
+        gap += LAYOUT_MARK
+        last = m.end()
+    walk(text[last:])
+    return "".join(keys), breaks
+
+
+def _cut_at_breaks(shown: str, keys: str, breaks: list, at: int) -> Optional[tuple]:
+    """``shown`` (a text as :func:`_display_text` gives it) read against
+    :func:`_shown_marks` from its character ``at``: ``([[text, break before],
+    …], the character after it)`` — one piece, plus one for each line or
+    paragraph that starts inside it. ``None`` when ``shown`` is not the text
+    found there (normalization respelled it, say)."""
+    own = "".join(shown.split())
+    if keys[at:at + len(own)] != own:
+        return None
+    if not own:
+        return [[shown.strip(), None]], at
+    pieces, begin, brk, k = [], 0, breaks[at], 0
+    for pos, char in enumerate(shown):
+        if char.isspace():
+            continue
+        if k and breaks[at + k]:
+            pieces.append([shown[begin:pos].strip(), brk])
+            begin, brk = pos, breaks[at + k]
+        k += 1
+    pieces.append([shown[begin:].strip(), brk])
+    return pieces, at + len(own)
+
+
+def _take_layouts(takes: list, keys: str, breaks: list) -> list:
+    """Each take's pieces (:func:`_cut_at_breaks`), read in order through its
+    span's marks; once a take does not line up, it and those after it are one
+    piece with no break."""
+    layouts, at = [], 0
+    for take in takes:
+        cut = _cut_at_breaks(take, keys, breaks, at) if at is not None else None
+        if cut is None:
+            layouts.append([[take, None]])
+            at = None
+        else:
+            layouts.append(cut[0])
+            at = cut[1]
+    return layouts
+
+
+def _timed_pieces(pieces: list, start: float, end: float) -> list:
+    """``pieces`` over ``[start, end]``, each by its share of the characters:
+    ``[(text, start, end, break), …]``."""
+    if len(pieces) == 1:
+        return [(pieces[0][0], start, end, pieces[0][1])]
+    total = sum(len(text) for text, _ in pieces) or 1
+    out, at = [], 0
+    for text, brk in pieces:
+        begin = start + (end - start) * at / total
+        at += len(text)
+        out.append((text, begin, start + (end - start) * at / total, brk))
+    return out
+
+
+def _strongest_break(layout: list) -> Optional[str]:
+    strongest = None
+    for _, brk in layout:
+        strongest = _stronger(strongest, brk)
+    return strongest
 
 
 def _take_texts(text: str, **split) -> list:
@@ -849,6 +990,12 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
     ``sections`` lists the chapter's ``##``/``###`` headings in order:
     ``{"title", "level", "start", "phrase"}`` — the title as the listener reads
     it, where it is heard, and the index of its first entry in ``phrases``.
+
+    A phrase that starts a new line or paragraph of the script carries
+    ``"break": "line" | "paragraph"`` (never the first of a chapter), from the
+    plan's ``break_before`` and the line breaks inside its spans; an entry is
+    cut where one starts inside it, its time shared by characters. Readers
+    that do not know the key show the text as before.
     """
     from services.text_normalization import normalize_for_tts
     from services.voice_leveling import span_voice_name
@@ -874,50 +1021,93 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
             timing = None  # describes another plan — never trust it
         # Each entry in ``phrases`` and the span it was read from.
         phrases, owners, precision = [], [], "chapter"
+        # A break whose text put no entry here yet: the next entry takes it.
+        pending: Optional[str] = None
+
+        def add(text, a, b, voice, owner, brk) -> None:
+            nonlocal pending
+            item = entry(text, a, b, voice)
+            brk = _stronger(pending, brk)
+            pending = None
+            if brk and phrases:
+                item["break"] = brk
+            phrases.append(item)
+            owners.append(owner)
+
         if timing is not None:
             rate = float(timing["sample_rate"])
             precision = "phrase" if timing["phrases"] else "span"
+            heard = -1
             for item in timing["spans"]:
-                span = spans[item["span"]]
+                index = item["span"]
+                span = spans[index]
+                for quiet in spans[heard + 1:index]:  # put no audio in the chapter
+                    pending = _stronger(pending, getattr(quiet, "break_before", None))
+                heard = max(heard, index)
                 voice = voice_of(span)
+                written = _written_overrides(span.text)
+                marks = _shown_marks(written)
                 if item["units"] is None:
                     precision = "span"
-                    ranges = [(_display_text(_written_overrides(span.text)),
-                               item["start"], item["end"])]
+                    shown = _display_text(written)
+                    layouts = [(_cut_at_breaks(shown, *marks, 0) or ([[shown, None]],))[0]]
+                    ranges = [(0, item["start"], item["end"])]
                 else:
                     takes = span_display_takes(span.text, normalize_for_tts(span.text, language),
                                                lexicon=lexicon, **split)
-                    ranges = [(takes[k] if k < len(takes) else "", a, b)
-                              for k, a, b in item["units"]]
-                for text, a, b in ranges:
-                    if text:
-                        phrases.append(entry(text, min(end, start + a / rate),
-                                             min(end, start + b / rate), voice))
-                        owners.append(item["span"])
+                    layouts = _take_layouts(takes, *marks)
+                    ranges = item["units"]
+                if layouts:
+                    layouts[0][0][1] = _stronger(getattr(span, "break_before", None),
+                                                 layouts[0][0][1])
+                following = 0
+                for k, a, b in ranges:
+                    for missing in layouts[following:k]:  # takes that came back empty
+                        pending = _stronger(pending, _strongest_break(missing))
+                    following = max(following, k + 1)
+                    if k >= len(layouts):
+                        continue
+                    for text, s, e, brk in _timed_pieces(layouts[k], min(end, start + a / rate),
+                                                         min(end, start + b / rate)):
+                        if text:
+                            add(text, s, e, voice, index, brk)
+                        else:
+                            pending = _stronger(pending, brk)
+                for missing in layouts[following:]:
+                    pending = _stronger(pending, _strongest_break(missing))
         else:
-            # The whole chapter as one entry — or, with sections, each heading
-            # and the text after it as entries of their own — timed by their
-            # share of the chapter's characters.
-            blocks: list = []
+            # The whole chapter as one entry per paragraph or line — and with
+            # sections, each heading and the text after it as entries of their
+            # own — timed by their share of the chapter's characters.
+            blocks: list = []  # [first span, texts, break before, voices]
             heading = False
             for index, span in enumerate(spans):
                 opens = getattr(span, "section", None) is not None
                 if not blocks or opens or heading:
-                    blocks.append((index, []))
+                    blocks.append([index, [], None, set()])
                 heading = opens
-                if span.text:
-                    blocks[-1][1].append(span)
-            texts = [_display_text(" ".join(_written_overrides(s.text) for s in block))
-                     for _, block in blocks]
+                if not span.text:
+                    continue
+                written = _written_overrides(span.text)
+                shown = _display_text(written)
+                pieces = (_cut_at_breaks(shown, *_shown_marks(written), 0) or ([[shown, None]],))[0]
+                pieces[0][1] = _stronger(getattr(span, "break_before", None), pieces[0][1])
+                for text, brk in pieces:
+                    if brk and blocks[-1][1]:
+                        blocks.append([index, [], None, set()])
+                    blocks[-1][2] = _stronger(blocks[-1][2], brk)
+                    blocks[-1][1].append(text)
+                    blocks[-1][3].add(voice_of(span))
+            texts = [_display_text(" ".join(parts)) for _, parts, _, _ in blocks]
             total = sum(len(t) for t in texts)
             at = 0
-            for (first, block), text in zip(blocks, texts):
-                voices = {voice_of(s) for s in block}
+            for (first, _, brk, voices), text in zip(blocks, texts):
                 if text:
-                    phrases.append(entry(text, start + (end - start) * at / total,
-                                         start + (end - start) * (at + len(text)) / total,
-                                         voices.pop() if len(voices) == 1 else None))
-                    owners.append(first)
+                    add(text, start + (end - start) * at / total,
+                        start + (end - start) * (at + len(text)) / total,
+                        voices.pop() if len(voices) == 1 else None, first, brk)
+                else:
+                    pending = _stronger(pending, brk)
                 at += len(text)
         sections = []
         for index, span in enumerate(spans):
@@ -939,6 +1129,69 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
         out.append(doc)
     return {"version": TIMELINE_VERSION, "output": output, "duration": round(offset, 3),
             "chapters": out}
+
+
+def timeline_with_layout(timeline: dict, script: str) -> dict:
+    """A timeline written before phrases carried ``break`` (see
+    :func:`book_timeline`), given the lines and paragraphs of the script it
+    was rendered from: each chapter whose text is exactly the next chapter of
+    the script gets its breaks — an entry cut where one starts inside it, its
+    time shared by characters, its sections' entry indices moved along. A
+    timeline that has breaks already, and a chapter whose text the script no
+    longer holds, come back as they are. Never changes ``timeline``."""
+    found = timeline.get("chapters") if isinstance(timeline, dict) else None
+    if not script or not isinstance(found, list):
+        return timeline
+    listed = [c.get("phrases") for c in found if isinstance(c, dict)]
+    if any(isinstance(p, dict) and "break" in p
+           for phrases in listed if isinstance(phrases, list) for p in phrases):
+        return timeline
+    marks = []
+    for chapter in parse_audiobook_script(script).chapters:
+        keys, breaks = [], []
+        for span in chapter.spans:
+            own, brks = _shown_marks(_written_overrides(span.text))
+            if own and keys:
+                brks[0] = _stronger(span.break_before, brks[0])
+            if own:
+                keys.append(own)
+                breaks.extend(brks)
+        marks.append(("".join(keys), breaks))
+    out, after = [], 0
+    for chapter in found:
+        phrases = chapter.get("phrases") if isinstance(chapter, dict) else None
+        if not isinstance(phrases, list) or not all(
+                isinstance(p, dict) and isinstance(p.get("text"), str)
+                and isinstance(p.get("start"), (int, float))
+                and isinstance(p.get("end"), (int, float)) for p in phrases):
+            out.append(chapter)
+            continue
+        own = "".join("".join(p["text"].split()) for p in phrases)
+        match = next((j for j in range(after, len(marks)) if own and marks[j][0] == own), None)
+        if match is None:
+            out.append(chapter)
+            continue
+        after = match + 1
+        keys, breaks = marks[match]
+        laid, moved, at = [], [], 0
+        for phrase in phrases:
+            pieces, at = (_cut_at_breaks(phrase["text"], keys, breaks, at)
+                          or ([[phrase["text"], None]], at))
+            moved.append(len(laid))
+            for text, s, e, brk in _timed_pieces(pieces, phrase["start"], phrase["end"]):
+                item = {**phrase, "text": text, "start": round(s, 3), "end": round(e, 3)}
+                if brk and laid:
+                    item["break"] = brk
+                laid.append(item)
+        doc = {**chapter, "phrases": laid}
+        if isinstance(chapter.get("sections"), list):
+            doc["sections"] = [
+                {**s, "phrase": moved[s["phrase"]]}
+                if isinstance(s, dict) and type(s.get("phrase")) is int
+                and 0 <= s["phrase"] < len(moved) else s
+                for s in chapter["sections"]]
+        out.append(doc)
+    return {**timeline, "chapters": out}
 
 
 # ── ffmpeg / metadata builders ──────────────────────────────────────────────

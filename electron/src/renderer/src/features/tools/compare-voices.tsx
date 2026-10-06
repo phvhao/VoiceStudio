@@ -118,6 +118,7 @@ export function CompareVoices() {
         disabled={busy}
         onChange={(event) => setText(event.target.value)}
         rows={4}
+        spellCheck={false}
         className="w-full resize-y rounded-lg border border-input bg-transparent p-3 text-sm leading-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <div className="grid grid-cols-2 gap-5 max-md:grid-cols-1">

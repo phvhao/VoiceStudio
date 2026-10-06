@@ -9,8 +9,10 @@ import {
 } from './markup-editor-context';
 import {
   HIGHLIGHT_LIMIT,
+  LABEL_BOX_EM,
   MARKUP_STYLES,
   MarkupTextarea,
+  gutterLabels,
   laneSegments,
   revealOffset,
 } from './markup-textarea';
@@ -77,6 +79,110 @@ describe('overlay', () => {
     const { container } = render(<Editor initial={'one\n\nthree\n'} gutter />);
     expect(lines(container).map((line) => line.dataset.line)).toEqual(['1', '2', '3', '4']);
     expect(overlayText(container)).toBe('one\n\nthree\n');
+  });
+
+  it('marks chapters, sections and the untitled intro in the gutter', () => {
+    const text = '\nAn opening.\nMore.\n# One\nText.\n## Part\nx\n### Deep\n# Two\ny';
+    const { container } = render(<Editor initial={text} headings gutter />);
+    const gutter = lines(container).map((line) => line.dataset.line);
+    expect(gutter).toEqual(['1', 'Intro', '3', 'C1', '5', '§', '7', '§', 'C2', '10']);
+    const intro = lines(container)[1];
+    expect(intro).toHaveAttribute('data-intro');
+    expect(lines(container)[3]).toHaveAttribute('data-chapter');
+    expect(lines(container)[5]).toHaveAttribute('data-section');
+    // The marks are painted from the attribute: the mirrored text is unchanged.
+    expect(overlayText(container)).toBe(text);
+  });
+
+  it('keeps each gutter label on one row of a box that grows with the zoom', () => {
+    const { container } = render(<Editor initial={'Intro.\n# One\nx'} headings gutter />);
+    const label = lines(container)[0];
+    // A second row would paint over the next line's number.
+    for (const name of ['whitespace-nowrap', 'overflow-hidden', 'text-ellipsis'])
+      expect(label.className).toContain('before:' + name);
+    // Box, lane and gutter are sized in the text's em, as the label's font is.
+    expect(label.className).toContain('before:w-[calc(3.25em/0.6875)]');
+    expect(label.className).not.toMatch(/before:w-\d/);
+    expect(screen.getByRole('textbox', { name: 'Script' }).className).toContain('ps-[4.5em]');
+  });
+
+  it("fits every locale's gutter labels in the label box", () => {
+    // Inter's advances, rounded up: tabular digits 0.648em, a CJK glyph 1em.
+    const advance = (char: string) =>
+      /\d/.test(char)
+        ? 0.648
+        : /\s/.test(char)
+          ? 0.28
+          : /[.,·]/.test(char)
+            ? 0.3
+            : /[\u2e80-\u9fff\uac00-\ud7af]/.test(char)
+              ? 1
+              : char === char.toUpperCase() && char !== char.toLowerCase()
+                ? 0.72
+                : 0.6;
+    const width = (label: string) => [...label].reduce((sum, char) => sum + advance(char), 0);
+    const locales = import.meta.glob<{ editor: Record<string, string> }>(
+      '../../i18n/locales/*.json',
+      { eager: true, import: 'default' },
+    );
+    expect(Object.keys(locales).length).toBeGreaterThanOrEqual(21);
+    for (const [file, catalog] of Object.entries(locales)) {
+      const labels = [
+        catalog.editor.gutter_intro,
+        catalog.editor.gutter_chapter.replace('{{n}}', '99'),
+        '99999',
+      ];
+      for (const label of labels)
+        expect(width(label), `${file}: ${label}`).toBeLessThanOrEqual(LABEL_BOX_EM);
+    }
+  });
+
+  it('labels no intro without chapters, nor without text before the first one', () => {
+    const plain = (text: string) =>
+      gutterLabels(
+        text
+          .split('\n')
+          .map((line) => [
+            { text: line, kind: line.startsWith('# ') ? ('heading' as const) : ('text' as const) },
+          ]),
+        true,
+        { chapter: (n) => `C${n}`, section: '§', intro: 'Intro' },
+      ).map((label) => label.text);
+    expect(plain('Just text.\nMore.')).toEqual(['1', '2']);
+    expect(plain('\n# One\nx')).toEqual(['1', 'C1', '3']);
+    expect(plain('# One\nx')).toEqual(['C1', '2']);
+  });
+
+  it('turns the spelling check off, which flags every word of a Vietnamese script', () => {
+    render(<Editor initial="Xin chào" />);
+    expect(script()).toHaveAttribute('spellcheck', 'false');
+  });
+
+  it('sizes both layers alike, so the overlay follows a zoom', () => {
+    const style = { fontSize: '1.2rem', lineHeight: '2.1rem' };
+    const { container, rerender } = render(
+      <MarkupTextarea
+        aria-label="Script"
+        value="Hello"
+        onValueChange={() => {}}
+        textStyle={style}
+      />,
+    );
+    const overlay = container.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+    for (const layer of [overlay, script()]) {
+      expect(layer.style.fontSize).toBe('1.2rem');
+      expect(layer.style.lineHeight).toBe('2.1rem');
+    }
+    rerender(
+      <MarkupTextarea
+        aria-label="Script"
+        value="Hello"
+        onValueChange={() => {}}
+        textStyle={{ fontSize: '0.8rem', lineHeight: '1.4rem' }}
+      />,
+    );
+    expect(overlay.style.fontSize).toBe('0.8rem');
+    expect(script().style.lineHeight).toBe('1.4rem');
   });
 
   it('keeps tags broken across lines highlighted on both lines', () => {
@@ -344,6 +450,23 @@ describe('pointer', () => {
     expect(script()).not.toHaveAttribute('title');
   });
 
+  it('says how loud a [volume] passage reads, and where it ends', async () => {
+    for (const [initial, hint] of [
+      ['Hi [volume -6dB]there', 'Volume -6 dB — click to edit, right-click for more'],
+      ['Hi [/volume] there', 'End of a volume change — click to edit, right-click for more'],
+    ]) {
+      const { container, unmount } = render(
+        <Editor initial={initial} events={{ onTokenActivate: vi.fn() }} />,
+      );
+      const mark = layOut(container);
+      expect(mark.dataset.kind).toBe('volume');
+      fireEvent.pointerMove(script(), { clientX: 50, clientY: 20 });
+      await nextFrame();
+      expect(script().title).toBe(hint);
+      unmount();
+    }
+  });
+
   it('opens the tag under the pointer on a click, but not after a drag', () => {
     const onTokenActivate = vi.fn();
     const { container } = render(
@@ -441,6 +564,41 @@ describe('laneSegments', () => {
       { top: 12, height: 28, voice: null },
       { top: 40, height: 56, voice: 'Mara' },
       { top: 96, height: 56, voice: null },
+    ]);
+  });
+
+  it('breaks the lane at a chapter heading, where the voice starts over', () => {
+    expect(
+      laneSegments(
+        [
+          { y: 12, voice: 'Mara' },
+          { y: 40, voice: undefined },
+          { y: 68, voice: null },
+          { y: 96, voice: 'Mara' },
+        ],
+        0,
+        124,
+      ),
+    ).toEqual([
+      { top: 0, height: 12, voice: null },
+      { top: 12, height: 28, voice: 'Mara' },
+      // 40–68: the heading's row, no lane.
+      { top: 68, height: 28, voice: null },
+      { top: 96, height: 28, voice: 'Mara' },
+    ]);
+    // A default voice on both sides still shows the break.
+    expect(
+      laneSegments(
+        [
+          { y: 40, voice: undefined },
+          { y: 68, voice: null },
+        ],
+        0,
+        100,
+      ),
+    ).toEqual([
+      { top: 0, height: 40, voice: null },
+      { top: 68, height: 32, voice: null },
     ]);
   });
 

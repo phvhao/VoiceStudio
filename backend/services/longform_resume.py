@@ -76,12 +76,15 @@ def build_manifest(
     plan_chapters: list[dict],
     params: dict,
     title: str = "",
+    project_id: Optional[str] = None,
 ) -> dict:
     """Assemble the manifest dict. ``plan_chapters`` is the canonical span-plan
     (``[{title, spans:[{voice_id,text,pause_ms_after,speed}]}]``); ``params`` is
     the render kwargs (default_voice / fmt / bitrate / loudness / cover_path /
-    metadata / lexicon). Pure — no I/O."""
-    return {
+    metadata / lexicon). ``project_id`` is the editor's library project the
+    render belongs to, so a resumed render finishes into that book; older
+    manifests have none. Pure — no I/O."""
+    manifest = {
         "version": MANIFEST_VERSION,
         "job_id": job_id,
         "job_type": job_type,
@@ -90,6 +93,9 @@ def build_manifest(
         "params": params,
         "plan": plan_chapters,
     }
+    if project_id:
+        manifest["project_id"] = project_id
+    return manifest
 
 
 def write_manifest(manifest: dict) -> Optional[str]:

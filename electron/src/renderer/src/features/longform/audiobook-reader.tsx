@@ -29,7 +29,8 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { useMediaState, type MediaPlayerInstance } from '@/components/media-player';
+import { chapterName } from './chapter-name';
+import { useMediaState, useMediaTime, type MediaPlayerInstance } from '@/components/media-player';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
@@ -103,6 +104,7 @@ const UNSPOKEN: ReadonlySet<MarkupKind> = new Set([
   'voiceReset',
   'pause',
   'delivery',
+  'volume',
 ]);
 // The parser splits tokens on JS whitespace; the walk below must agree.
 const WHITESPACE = /\s/;
@@ -350,6 +352,8 @@ function sameTokens(tokens: readonly string[], words: readonly AudiobookLyricsWo
  * phrase take, those phrases are the sentences, so the highlight moves
  * exactly with the voice; elsewhere sentences split after sentence-final
  * punctuation, as the renderer phrases them. Every line break starts one.
+ * Breaks come from the script when it still holds the text, else from the
+ * timeline sidecar's own `break` marks.
  */
 export function buildReaderBook(script: string, timeline: AudiobookLyricsTimeline): ReaderBook {
   const text = scriptText(script);
@@ -387,9 +391,11 @@ export function buildReaderBook(script: string, timeline: AudiobookLyricsTimelin
     // Last shown text of the open sentence: hidden fragments never end one.
     let tail = '';
     spoken.forEach((word, k) => {
+      // The script no longer holds this text (edited since, or never kept):
+      // the render's own timeline still says where lines and paragraphs began.
       const shape: WordShape = shapes[k] ?? {
         display: word.text,
-        gap: 'space',
+        gap: word.break ?? 'space',
         tag: !estimate && isTag(word.text),
       };
       const gap = k === 0 ? 'paragraph' : shape.gap;
@@ -526,8 +532,9 @@ export function playbackClock(seconds: number, hours = false): string {
   return hours ? `${Math.floor(total / 3600)}:${mm}:${ss}` : `${Math.floor(total / 60)}:${ss}`;
 }
 
+/** A chapter's name in the reader: as the lists name it (see `chapterName`). */
 export function chapterTitle(t: TFunction, book: ReaderBook, index: number): string {
-  return book.chapters[index]?.title || t('audiobook.chapter_n', { n: index + 1 });
+  return chapterName(t, book.chapters, index);
 }
 
 export interface SentencePiece {
@@ -550,18 +557,25 @@ export function sentencePieces(book: ReaderBook, index: number): SentencePiece[]
   return pieces;
 }
 
-/**
- * Word, sentence and chapter under the playhead. The caller re-renders on
- * every clock tick, so keep it small and pass indices to memoized children.
- */
+// The media clock ticks every animation frame while the book plays. Each
+// control below subscribes to what it shows of it (a word, a chapter, the
+// clock text), so it re-renders only when that changes.
+
+/** Index of the word under the playhead, -1 before the first. */
+export function usePlayingWord(book: ReaderBook): number {
+  return useMediaTime((time) => activeWordIndex(book.words, time));
+}
+
+/** Index of the chapter under the playhead, -1 before the first. */
+export function usePlayingChapter(book: ReaderBook): number {
+  return useMediaTime((time) => chapterAt(book.chapters, time));
+}
+
+/** Word, sentence and chapter under the playhead. */
 export function usePlayhead(book: ReaderBook) {
-  const time = useMediaState('currentTime');
-  const word = activeWordIndex(book.words, time);
-  return {
-    word,
-    sentence: word < 0 ? -1 : lastStartingBy(book.sentences, word),
-    chapter: chapterAt(book.chapters, time),
-  };
+  const word = usePlayingWord(book);
+  const chapter = usePlayingChapter(book);
+  return { word, sentence: word < 0 ? -1 : lastStartingBy(book.sentences, word), chapter };
 }
 
 /** Move the playhead, clamped to the file. */
@@ -615,6 +629,22 @@ const THUMB_PX = 12;
 const along = (fraction: number) =>
   `calc(${THUMB_PX / 2}px + (100% - ${THUMB_PX}px) * ${fraction})`;
 
+/**
+ * The playhead as a seek bar `travel` pixels long shows it: it moves on only
+ * when the thumb would move a whole pixel or the clock a whole second, so
+ * the bar redraws about once a second through a long book instead of every
+ * frame. Whole seconds while the bar's length is unknown.
+ */
+export function seekBarTime(time: number, total: number, travel: number): number {
+  if (!(total > 0) || !Number.isFinite(time)) return 0;
+  const now = Math.max(0, Math.min(time, total));
+  if (now === total) return total;
+  const second = Math.floor(now);
+  if (!(travel > 0)) return second;
+  const pixel = total / travel;
+  return Math.max(second, Math.floor(now / pixel) * pixel);
+}
+
 /** Seek bar with a mark at every chapter start after the first. */
 export function SeekBar({
   player,
@@ -628,16 +658,28 @@ export function SeekBar({
   className?: string;
 }) {
   const { t } = useTranslation();
-  const time = useMediaState('currentTime');
   const duration = useMediaState('duration');
   const error = useMediaState('error');
   const total = Number.isFinite(duration) && duration > 0 ? duration : 0;
-  const now = Number.isFinite(time) ? Math.max(0, Math.min(time, total)) : 0;
+  const bar = useRef<HTMLDivElement>(null);
+  // How far the thumb's centre travels; observed, never read from layout.
+  const [travel, setTravel] = useState(0);
+  useEffect(() => {
+    const element = bar.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      setTravel(Math.max(0, Math.round(entry.contentRect.width) - THUMB_PX));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const now = useMediaTime((time) => seekBarTime(time, total, travel));
   const hours = total >= 3600;
   return (
     // A timeline runs left to right in every language: the thumb, the fill and
     // the chapter marks all measure from the left.
     <div
+      ref={bar}
       dir="ltr"
       className={cn(
         'relative flex h-5 min-w-0 items-center rounded-full has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40',
@@ -691,10 +733,9 @@ export function PlaybackTime({
   part?: 'elapsed' | 'total' | 'both';
   className?: string;
 }) {
-  const time = useMediaState('currentTime');
   const duration = useMediaState('duration');
   const hours = Number.isFinite(duration) && duration >= 3600;
-  const elapsed = playbackClock(time, hours);
+  const elapsed = useMediaTime((time) => playbackClock(time, hours));
   const total = playbackClock(duration, hours);
   return (
     <span
@@ -772,9 +813,9 @@ export function ChapterStepButton({
   onSeek?(): void;
 }) {
   const { t } = useTranslation();
-  const time = useMediaState('currentTime');
-  const target =
-    direction === 'next' ? nextChapterStart(chapters, time) : previousChapterStart(chapters, time);
+  const target = useMediaTime((time) =>
+    direction === 'next' ? nextChapterStart(chapters, time) : previousChapterStart(chapters, time),
+  );
   const label = t(direction === 'next' ? 'reader.next_chapter' : 'reader.previous_chapter');
   return (
     <Button
@@ -823,8 +864,6 @@ function SkipButton({
   );
 }
 
-// Memoized: its header re-renders on every clock tick, the menu only when the
-// chapter changes.
 const ChapterMenu = memo(function ChapterMenu({
   book,
   player,
@@ -889,7 +928,7 @@ function ReaderHeader({
   onSeek(): void;
 }) {
   const { t } = useTranslation();
-  const { chapter } = usePlayhead(book);
+  const chapter = usePlayingChapter(book);
   return (
     <div className="flex items-center gap-3 border-b border-border/50 py-3 pe-3 ps-5">
       <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -1004,6 +1043,61 @@ const ReaderSentenceText = memo(function ReaderSentenceText({
   );
 });
 
+/**
+ * `active` as one part of the book sees it, where `from`–`to` is that part's
+ * range: the real index inside it, +Infinity once read past it, -1 before it.
+ * Parts the reading is not in keep the same props word after word, so their
+ * memoized components skip rendering.
+ */
+function relativeTo(active: number, from: number, to: number): number {
+  return active < from ? -1 : active >= to ? Number.POSITIVE_INFINITY : active;
+}
+
+const ReaderParagraph = memo(function ReaderParagraph({
+  book,
+  from,
+  to,
+  activeSentence,
+  activeWord,
+  activeRef,
+}: {
+  book: ReaderBook;
+  /** Sentences `from` (inclusive) to `to` (exclusive). */
+  from: number;
+  to: number;
+  /** The sentence being read, as `relativeTo` this paragraph. */
+  activeSentence: number;
+  activeWord: number;
+  activeRef: RefObject<HTMLSpanElement | null>;
+}) {
+  return (
+    <p>
+      {Array.from({ length: to - from }, (_, k) => {
+        const sentence = from + k;
+        const gap = book.words[book.sentences[sentence].start].gap;
+        return (
+          <Fragment key={sentence}>
+            {k > 0 && (gap === 'line' ? <br /> : gap === 'joined' ? null : ' ')}
+            <ReaderSentenceText
+              book={book}
+              index={sentence}
+              state={
+                sentence < activeSentence
+                  ? 'past'
+                  : sentence === activeSentence
+                    ? 'current'
+                    : 'future'
+              }
+              activeWord={sentence === activeSentence ? activeWord : -1}
+              activeRef={activeRef}
+            />
+          </Fragment>
+        );
+      })}
+    </p>
+  );
+});
+
 const ReaderChapterSection = memo(function ReaderChapterSection({
   book,
   index,
@@ -1024,7 +1118,7 @@ const ReaderChapterSection = memo(function ReaderChapterSection({
   const chapter = book.chapters[index];
   return (
     <section>
-      <h3 className="mb-3">
+      <h3 className="mb-3 text-start">
         <button
           type="button"
           className="rounded-md text-start font-heading text-lg font-semibold outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/40"
@@ -1034,32 +1128,20 @@ const ReaderChapterSection = memo(function ReaderChapterSection({
         </button>
       </h3>
       <div className="space-y-4">
-        {chapter.paragraphs.map(([from, to]) => (
-          <p key={from}>
-            {Array.from({ length: to - from }, (_, k) => {
-              const sentence = from + k;
-              const gap = book.words[book.sentences[sentence].start].gap;
-              return (
-                <Fragment key={sentence}>
-                  {k > 0 && (gap === 'line' ? <br /> : gap === 'joined' ? null : ' ')}
-                  <ReaderSentenceText
-                    book={book}
-                    index={sentence}
-                    state={
-                      sentence < activeSentence
-                        ? 'past'
-                        : sentence === activeSentence
-                          ? 'current'
-                          : 'future'
-                    }
-                    activeWord={sentence === activeSentence ? activeWord : -1}
-                    activeRef={activeRef}
-                  />
-                </Fragment>
-              );
-            })}
-          </p>
-        ))}
+        {chapter.paragraphs.map(([from, to]) => {
+          const active = relativeTo(activeSentence, from, to);
+          return (
+            <ReaderParagraph
+              key={from}
+              book={book}
+              from={from}
+              to={to}
+              activeSentence={active}
+              activeWord={active >= from && active < to ? activeWord : -1}
+              activeRef={activeRef}
+            />
+          );
+        })}
       </div>
     </section>
   );
@@ -1126,7 +1208,9 @@ const Transcript = memo(function Transcript({
   };
   return (
     <div
-      className="mx-auto max-w-[68ch] space-y-10 text-[15px] leading-8 text-foreground"
+      // Body text set justified like a book, without automatic hyphenation
+      // (it breaks Vietnamese words); each paragraph's last line stays at the start.
+      className="mx-auto max-w-[68ch] space-y-10 text-justify text-[15px] leading-8 text-foreground hyphens-manual [text-align-last:start] [text-justify:inter-word]"
       onClick={onClick}
     >
       {book.chapters.map((_, index) => (
@@ -1167,10 +1251,14 @@ function ReaderTranscript({
   onFollowingChange(following: boolean): void;
 }) {
   const { t } = useTranslation();
-  const { word: activeWord } = usePlayhead(book);
+  const activeWord = usePlayingWord(book);
   const activeRef = useRef<HTMLSpanElement>(null);
   const pointerDown = useRef(false);
   const settled = useRef(false);
+  // Where the glide this started is heading, until it ends. Following
+  // measures against it rather than the offset mid-glide, which is stale by
+  // the next frame and would re-aim (restart) the glide word after word.
+  const gliding = useRef<number | null>(null);
 
   useEffect(() => {
     const release = () => {
@@ -1186,23 +1274,29 @@ function ReaderTranscript({
 
   // Follow the reading inside the pane only: offsets are layout positions
   // (the dialog's open animation scales client rects), and the page under
-  // the dialog never scrolls.
+  // the dialog never scrolls. Runs when the word being read changes, a few
+  // times a second, never per clock tick.
   useLayoutEffect(() => {
     const pane = paneRef.current;
     const word = activeRef.current;
+    if (!following) gliding.current = null;
     if (!following || !pane || !word) return;
+    const scroll = gliding.current ?? pane.scrollTop;
+    const size = pane.clientHeight;
+    const start = word.offsetTop;
     const top = followScroll(
-      word.offsetTop,
-      word.offsetTop + word.offsetHeight,
-      pane.scrollTop,
-      pane.clientHeight,
-      pane.scrollHeight - pane.clientHeight,
+      start,
+      start + word.offsetHeight,
+      scroll,
+      size,
+      pane.scrollHeight - size,
     );
     // The first position after opening and long jumps land at once; reading glides.
-    const jump =
-      !settled.current || (top !== null && Math.abs(top - pane.scrollTop) > pane.clientHeight * 2);
+    const jump = !settled.current || (top !== null && Math.abs(top - scroll) > size * 2);
     settled.current = true;
-    if (top !== null) pane.scrollTo({ top, behavior: jump ? 'instant' : 'auto' });
+    if (top === null) return;
+    pane.scrollTo({ top, behavior: jump ? 'instant' : 'auto' });
+    gliding.current = jump ? null : top;
   }, [activeWord, following, paneRef]);
 
   const playFrom = useCallback(
@@ -1246,6 +1340,9 @@ function ReaderTranscript({
         onScroll={() => {
           // Scrollbar drags, and selections dragged past the edge.
           if (pointerDown.current) stop();
+        }}
+        onScrollEnd={() => {
+          gliding.current = null;
         }}
       >
         {book.words.length ? (
@@ -1333,8 +1430,8 @@ function ReaderFooter({
 /** Says the highlight is estimated, while the chapter playing was not timed phrase by phrase. */
 function TimingNote({ book }: { book: ReaderBook }) {
   const { t } = useTranslation();
-  const time = useMediaState('currentTime');
-  const chapter = book.chapters[Math.max(0, chapterAt(book.chapters, time))];
+  const playing = usePlayingChapter(book);
+  const chapter = book.chapters[Math.max(0, playing)];
   if (!chapter || chapter.precision === 'phrase') return null;
   return (
     <DialogDescription className="text-center text-[11px] text-muted-foreground">

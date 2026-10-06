@@ -25,13 +25,16 @@ import { previewPassage } from './script-markup';
 import { usePassagePreview } from './passage-preview';
 import { storyVoicesReady } from './story-inputs';
 import { StorySpeed } from './story-speed';
-import { ProjectSettings } from './project-settings';
+import { ProjectSwitcher } from './project-settings';
 import { ProductionSettings } from './production-settings';
 import { PacingSettings, SpeechCheckReport } from './pacing-settings';
 import { BookOutline } from './book-outline';
+import { ContentsRail } from './contents-rail';
+import { useEditorZoom, useEditorZoomInput, zoomedText } from './editor-zoom';
 import { ExportHtmlButton } from './html-export';
 import { castVoice } from './cast-map';
 import { CastSettings, showsCastPanel } from './cast-settings';
+import { bookAutoLevels } from './auto-levels';
 import { ProfilesFailure, VoicePicker, profileListState } from './voice-picker';
 import {
   parseCastNames,
@@ -66,6 +69,7 @@ import {
   editLongform,
   dismissLongformError,
   renderLongform,
+  resumeLongform,
   stopLongform,
   useLongformSession,
   storiesImportEpoch,
@@ -75,10 +79,13 @@ import { SAMPLE_AUDIOBOOK_SCRIPT } from '@shared/data/sampleAudiobook';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
 interface Recovery {
   job_id: string;
+  /** `audiobook` or `story`. */
   type: string;
   title: string;
   chapters_done: number;
   total_chapters: number;
+  /** The library project it renders (newer backends; none before the library). */
+  project_id?: string | null;
 }
 export function LongformPage({ mode }: { mode: Mode }) {
   const { t } = useTranslation();
@@ -106,6 +113,10 @@ export function LongformPage({ mode }: { mode: Mode }) {
   const [clearOpen, setClearOpen] = useState(false);
   const audiobookInput = useRef<HTMLTextAreaElement>(null);
   const [caret] = useState(() => createCaretSource());
+  // Ctrl/⌘ +, −, 0 and Ctrl+wheel size the script's text while in its frame.
+  const editorFrame = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useEditorZoom();
+  useEditorZoomInput(editorFrame);
   const locked = !!session.active || importing;
   const scriptLines = scriptSize(mode, draft);
   const query = useQuery({
@@ -251,6 +262,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
         <h1 className="text-sm font-medium">
           {t(mode === 'stories' ? 'nav.stories' : 'audiobook.title')}
         </h1>
+        <ProjectSwitcher mode={mode} />
         <Link
           to={mode === 'stories' ? '/audiobook' : '/stories'}
           className={buttonVariants({ variant: 'ghost', size: 'sm' })}
@@ -276,6 +288,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               </span>
               <Input
                 value={draft.title}
+                spellCheck={false}
                 disabled={locked}
                 placeholder={t(mode === 'stories' ? 'stories.untitled' : 'audiobook.untitled')}
                 onChange={(e) => set({ title: e.target.value })}
@@ -368,29 +381,13 @@ export function LongformPage({ mode }: { mode: Mode }) {
               voiceGains={draft.voiceGains}
               onVoiceGains={(voiceGains) => set({ voiceGains })}
               defaultVoiceName={defaultVoice?.name}
-            />
-          )}
-          {mode === 'audiobook' && (
-            <BookOutline
-              draft={draft}
-              disabled={locked}
-              canPreview={canPreview}
-              onBusy={setImporting}
-              getTarget={() =>
-                audiobookInput.current && {
-                  element: audiobookInput.current,
-                  setText: (script) => set({ script }),
-                }
+              autoLevels={
+                draft.overrides.levelVoices !== false
+                  ? bookAutoLevels(draft.outputChapters)
+                  : undefined
               }
             />
           )}
-          <ProjectSettings
-            mode={mode}
-            draft={draft}
-            disabled={locked}
-            onChange={set}
-            onBusy={setImporting}
-          />
           <PacingSettings
             value={draft.overrides}
             disabled={locked}
@@ -409,7 +406,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
             onBusy={setImporting}
           />
           {(query.data?.jobs || [])
-            .filter((job) => job.type === (mode === 'stories' ? 'longform' : 'audiobook'))
+            .filter((job) => job.type === (mode === 'stories' ? 'story' : 'audiobook'))
             .map((job) => (
               <div key={job.job_id} className="space-y-2 border-t border-border/50 pt-4 text-xs">
                 <h2 className="font-medium">{t('audiobook.recovery_title')}</h2>
@@ -424,7 +421,8 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   size="sm"
                   variant="outline"
                   disabled={locked || ttsBlocker !== null}
-                  onClick={() => void renderLongform(mode, job.job_id)}
+                  // Into the book it belongs to, never the one that happens to be open.
+                  onClick={() => void resumeLongform(mode, job)}
                 >
                   {t('common.resume')}
                 </Button>
@@ -502,6 +500,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               // player. `overflow-clip`, not `overflow-hidden`: a scroll
               // container would lose that content-size minimum.
               <div
+                ref={editorFrame}
                 data-slot="audiobook-editor"
                 className="flex flex-1 flex-col overflow-clip rounded-xl border border-border/50 bg-background/30 focus-within:border-border"
               >
@@ -574,46 +573,65 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     )}
                   </div>
                 )}
-                <MarkupEditorTools
-                  className="flex min-h-96 flex-1 flex-col"
-                  getTarget={() =>
-                    audiobookInput.current && {
-                      element: audiobookInput.current,
-                      setText: (script) => set({ script }),
-                    }
-                  }
-                  disabled={locked}
-                  headings
-                  profiles={profiles}
-                  loading={profilesLoading}
-                  scriptNames={names}
-                  voiceCast={draft.voiceCast}
-                  onVoiceCast={(voiceCast) => set({ voiceCast })}
-                  voiceGains={draft.voiceGains}
-                  onVoiceGains={(voiceGains) => set({ voiceGains })}
-                  defaultVoiceName={defaultVoice?.name}
-                  onListen={canPreview ? previewSelection : undefined}
-                  onListenRange={canPreview ? previewRange : undefined}
+                <ContentsRail
+                  outline={(rail) => (
+                    <BookOutline
+                      {...rail}
+                      draft={draft}
+                      disabled={locked}
+                      canPreview={canPreview}
+                      onBusy={setImporting}
+                      getTarget={() =>
+                        audiobookInput.current && {
+                          element: audiobookInput.current,
+                          setText: (script) => set({ script }),
+                        }
+                      }
+                    />
+                  )}
                 >
-                  <MarkupTextarea
-                    textareaRef={audiobookInput}
-                    headings
-                    gutter
-                    activeLine
-                    voices={names}
-                    aria-label={t('clone.script')}
-                    className="min-h-96 flex-1"
-                    textClassName="px-4 py-3 text-base leading-7"
-                    value={draft.script}
-                    placeholder={t('audiobook.script_placeholder')}
+                  <MarkupEditorTools
+                    className="flex min-h-96 min-w-0 flex-1 flex-col"
+                    getTarget={() =>
+                      audiobookInput.current && {
+                        element: audiobookInput.current,
+                        setText: (script) => set({ script }),
+                      }
+                    }
                     disabled={locked}
-                    onCaretChange={caret.set}
-                    onValueChange={(script) => {
-                      set({ script });
-                      if (warningsDismissed) setWarningsDismissed(false);
-                    }}
-                  />
-                </MarkupEditorTools>
+                    headings
+                    profiles={profiles}
+                    loading={profilesLoading}
+                    scriptNames={names}
+                    voiceCast={draft.voiceCast}
+                    onVoiceCast={(voiceCast) => set({ voiceCast })}
+                    voiceGains={draft.voiceGains}
+                    onVoiceGains={(voiceGains) => set({ voiceGains })}
+                    defaultVoiceName={defaultVoice?.name}
+                    onListen={canPreview ? previewSelection : undefined}
+                    onListenRange={canPreview ? previewRange : undefined}
+                  >
+                    <MarkupTextarea
+                      textareaRef={audiobookInput}
+                      headings
+                      gutter
+                      activeLine
+                      voices={names}
+                      aria-label={t('clone.script')}
+                      className="min-h-96 flex-1"
+                      textClassName="px-4 py-3"
+                      textStyle={zoomedText(zoom, 1, 1.75)}
+                      value={draft.script}
+                      placeholder={t('audiobook.script_placeholder')}
+                      disabled={locked}
+                      onCaretChange={caret.set}
+                      onValueChange={(script) => {
+                        set({ script });
+                        if (warningsDismissed) setWarningsDismissed(false);
+                      }}
+                    />
+                  </MarkupEditorTools>
+                </ContentsRail>
                 <EditorStatusBar
                   className="shrink-0"
                   text={draft.script}
@@ -625,6 +643,8 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   loading={profilesLoading}
                   defaultVoiceName={defaultVoice?.name}
                   stats={statsLine}
+                  zoom={zoom}
+                  onZoomChange={setZoom}
                 />
               </div>
             ) : (

@@ -262,6 +262,7 @@ export function EditProfile({ profile, onDone }: { profile: Profile; onDone: () 
             value={draft[field]}
             disabled={unavailable}
             className="resize-y"
+            spellCheck={field !== 'ref_text'}
             onChange={(event) =>
               setDraft((previous) => ({ ...previous, [field]: event.target.value }))
             }

@@ -24,6 +24,7 @@ import {
   TextSelectIcon,
   Trash2Icon,
   TurtleIcon,
+  Volume2Icon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
@@ -37,14 +38,17 @@ import {
   type VoiceGains,
 } from '@shared/utils/longformOverrides';
 import { castVoice } from './cast-map';
-import { VoiceGainControl } from './cast-settings';
+import { VoiceGainControl, useVoiceGainText } from './cast-settings';
 import type { MarkupEditorHandle } from './markup-editor-context';
 import { applyMarkupEdit, castProfileVoice, type MarkupTarget } from './markup-toolbar';
 import {
   DELIVERY_TAGS,
+  MAX_PASSAGE_GAIN_DB,
   PAUSE_MAX_MS,
   PAUSE_PRESETS,
   VOICE_RESET_TOKEN,
+  VOLUME_CLOSE,
+  VOLUME_PRESETS,
   changeDeliveryKind,
   cleanRespelling,
   deliveryKind,
@@ -60,14 +64,18 @@ import {
   respellingRange,
   secondsUnit,
   setRespelling,
+  setVolume,
   voiceName,
   voiceSection,
   voiceToken,
+  volumeDb,
+  volumeOpening,
   type DeliveryTag,
   type MarkupEdit,
   type MarkupToken,
 } from './script-markup';
 import { voiceAccent } from './voice-palette';
+import { VoicePicker } from './voice-picker';
 
 export type TagProfile = { id: string; name: string; image_url?: string | null };
 
@@ -211,6 +219,14 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
     selectSection: () => select(section(), 'backward'),
     setPause: (ms: number) => replace(pauseToken(ms)),
     setDelivery: (kind: DeliveryTag) => edit((value) => changeDeliveryKind(value, token, kind)),
+    /** The gain a `[volume]` passage reads at, from its opening tag; `null` when it has none. */
+    volume(): number | null {
+      const element = getTarget()?.element;
+      const open = element ? volumeOpening(element.value, token) : null;
+      return open && volumeDb(open.text);
+    },
+    /** Read the `[volume]` passage at `db`: its opening tag changes, the words stay. */
+    setVolume: (db: number) => edit((value) => setVolume(value, token, db)),
     respell: (respelling: string) => edit((value) => setRespelling(value, token, respelling)),
     /** Select the respelling in the editor, to retype it there. */
     selectRespelling: () => select(respellingRange(token)),
@@ -313,17 +329,22 @@ function Header({
 }: {
   icon: ReactNode;
   title: string;
-  token: MarkupToken;
+  /** The tag as written, beside the title; left out where the title already says it. */
+  token?: MarkupToken;
   children: ReactNode;
 }) {
   return (
     <div className="space-y-1">
       <p className="flex min-w-0 items-center gap-2">
         {icon}
-        <span className="min-w-0 truncate font-medium">{title}</span>
-        <code className="ms-auto max-w-[55%] shrink-0 truncate font-mono text-[11px] text-muted-foreground">
-          {token.text}
-        </code>
+        <span className="min-w-0 truncate font-medium" title={token ? undefined : title}>
+          {title}
+        </span>
+        {token && (
+          <code className="ms-auto max-w-[55%] shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+            {token.text}
+          </code>
+        )}
       </p>
       <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>
     </div>
@@ -501,6 +522,8 @@ function TagCardBody({ token, tools, focusRef, onDone }: Omit<BodyProps, 'act'>)
       return <ExpressionBody {...props} remove={remove} />;
     case 'delivery':
       return <DeliveryBody {...props} />;
+    case 'volume':
+      return <VolumeBody {...props} />;
     case 'pronunciation':
       return <PronunciationBody {...props} />;
     case 'unknown':
@@ -541,115 +564,106 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
   };
   // A name that is a profile id reads in that profile without being cast.
   const direct = name !== null && !act.castTo && profileName(name) !== undefined;
-  const castValue = act.castTo || (direct ? name : DEFAULT_CHOICE);
-  // Until the profiles arrive, a cast voice is unknown, not missing.
-  const unknown = act.castTo !== '' && profileName(act.castTo) === undefined;
-  const missing = unknown && !loading;
+  // The profile reading the name: null while the default voice reads it.
+  const readingVoice = act.castTo || (direct ? name : null);
+  const missing = act.castTo !== '' && profileName(act.castTo) === undefined && !loading;
   const section = act.section();
   const reads = section !== null && section[0] < section[1];
+  // Another role for this one tag: only worth offering once the script has two.
+  const [switching, setSwitching] = useState(false);
+  const roleLabel = name === null ? t('audiobook.insert_voice') : t('editor.role');
+  const rolePicker = (
+    <VoiceChoicePicker
+      label={roleLabel}
+      value={name ?? DEFAULT_CHOICE}
+      onChange={switchTo}
+      groups={[
+        {
+          key: 'default',
+          items: [{ value: DEFAULT_CHOICE, label: t('markup.voice_reset'), icon: <ResetDot /> }],
+        },
+        {
+          key: 'script',
+          label: t('markup.voice_in_script'),
+          items: scriptNames.map((voice) => ({
+            value: voice,
+            label: label(voice),
+            icon: <VoiceDot className={voiceAccent(voice, voices).dot} />,
+          })),
+        },
+        {
+          key: 'profiles',
+          label: t('markup.voice_profiles'),
+          items: profiles.map((profile) => ({
+            value: PROFILE_CHOICE + profile.id,
+            label: profile.name,
+            icon: avatar(profile),
+          })),
+        },
+      ]}
+    />
+  );
+  const roleRow = (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 text-xs">
+      <span className="text-muted-foreground">{roleLabel}</span>
+      {rolePicker}
+    </div>
+  );
   return (
     <>
       {name === null ? (
-        <Header icon={<ResetDot />} title={t('markup.voice_reset')} token={token}>
-          {t(toLine ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
-        </Header>
+        <>
+          <Header icon={<ResetDot />} title={t('markup.voice_reset')} token={token}>
+            {t(toLine ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
+          </Header>
+          {roleRow}
+        </>
       ) : (
-        <Header
-          icon={<VoiceDot className={voiceAccent(name, voices).dot} />}
-          title={label(name)}
-          token={token}
-        >
-          {t('editor.card_voice')}
-        </Header>
-      )}
-      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 text-xs">
-        <span className="text-muted-foreground">{t('audiobook.insert_voice')}</span>
-        <VoiceChoicePicker
-          label={t('audiobook.insert_voice')}
-          value={name ?? DEFAULT_CHOICE}
-          onChange={switchTo}
-          groups={[
-            {
-              key: 'default',
-              items: [
-                { value: DEFAULT_CHOICE, label: t('markup.voice_reset'), icon: <ResetDot /> },
-              ],
-            },
-            {
-              key: 'script',
-              label: t('markup.voice_in_script'),
-              items: scriptNames.map((voice) => ({
-                value: voice,
-                label: label(voice),
-                icon: <VoiceDot className={voiceAccent(voice, voices).dot} />,
-              })),
-            },
-            {
-              key: 'profiles',
-              label: t('markup.voice_profiles'),
-              items: profiles.map((profile) => ({
-                value: PROFILE_CHOICE + profile.id,
-                label: profile.name,
-                icon: avatar(profile),
-              })),
-            },
-          ]}
-        />
-        {name !== null && (
-          <>
-            <span className="text-muted-foreground">{t('editor.read_by')}</span>
-            <VoiceChoicePicker
-              label={t('editor.read_by')}
-              value={castValue}
-              onChange={(value) => act.cast(value === DEFAULT_CHOICE ? '' : value)}
-              groups={[
-                {
-                  key: 'default',
-                  items: [
-                    {
-                      value: DEFAULT_CHOICE,
-                      label: defaultVoiceName
-                        ? t('editor.status_default', { name: defaultVoiceName })
-                        : t('editor.status_default_none'),
-                      icon: <ResetDot />,
-                    },
-                  ],
-                },
-                {
-                  key: 'profiles',
-                  label: t('markup.voice_profiles'),
-                  items: [
-                    ...profiles.map((profile) => ({
-                      value: profile.id,
-                      label: profile.name,
-                      icon: avatar(profile),
-                    })),
-                    ...(unknown
-                      ? [
-                          {
-                            value: act.castTo,
-                            label: t(loading ? 'common.loading' : 'modelSettings.unavailable'),
-                            icon: loading ? (
-                              <ResetDot />
-                            ) : (
-                              <CircleAlertIcon className="size-4 text-destructive" />
-                            ),
-                          },
-                        ]
-                      : []),
-                  ],
-                },
-              ]}
+        <>
+          {/* The name once, in its color: the tag as written says no more. */}
+          <Header icon={<VoiceDot className={voiceAccent(name, voices).dot} />} title={label(name)}>
+            {t('editor.card_voice')}
+          </Header>
+          <div className="space-y-1">
+            <p className="text-xs text-muted-foreground">{t('editor.reading_voice')}</p>
+            <VoicePicker
+              value={readingVoice}
+              onChange={(id) => act.cast(id ?? '')}
+              profiles={profiles}
+              loading={loading}
+              defaultOption={{
+                label: defaultVoiceName
+                  ? t('editor.status_default', { name: defaultVoiceName })
+                  : t('editor.status_default_none'),
+              }}
+              aria-label={t('editor.reading_voice')}
+              className="h-8 text-xs"
             />
-          </>
-        )}
-      </div>
-      {name !== null && (missing || castValue === DEFAULT_CHOICE) && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              {t('editor.reading_voice_hint', { name: label(name) })}
+            </p>
+          </div>
+        </>
+      )}
+      {name !== null && (missing || readingVoice === null) && (
         <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
           <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
           {missing ? t('editor.cast_missing') : t('editor.uncast', { name: label(name) })}
         </p>
       )}
+      {name !== null &&
+        scriptNames.length >= 2 &&
+        (switching ? (
+          roleRow
+        ) : (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
+            onClick={() => setSwitching(true)}
+          >
+            {t('editor.switch_role')}
+          </button>
+        ))}
       {/* In Stories `[voice:]` goes back to each line's own voice, not one shared default. */}
       {act.setGain && !toLine && (
         <div className="space-y-1">
@@ -659,9 +673,7 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
             onChange={act.setGain}
           />
           <p className="text-[11px] leading-snug text-muted-foreground">
-            {name === null
-              ? t('editor.volume_default')
-              : t('editor.volume_every', { tag: voiceToken(name) })}
+            {name === null ? t('editor.volume_default') : t('editor.voice_volume_hint')}
           </p>
         </div>
       )}
@@ -865,6 +877,91 @@ function DeliveryBody({ token, act, focusRef, onDone }: BodyProps) {
           );
         })}
       </div>
+      <Footer
+        end={
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => {
+              act.remove();
+              onDone();
+            }}
+          >
+            <RemoveFormattingIcon />
+            {t('context.remove_markup')}
+          </Button>
+        }
+      />
+    </>
+  );
+}
+
+/** `[volume …]` and `[/volume]`: how much quieter or louder the passage between them reads. */
+function VolumeBody({ token, act, focusRef, onDone }: BodyProps) {
+  const { t } = useTranslation();
+  const gainText = useVoiceGainText();
+  // A `[/volume]` without its opening tag has no gain to change.
+  const current = act.volume();
+  const [db, setDb] = useState(Math.round(current ?? 0));
+  const choose = (next: number) => {
+    if (next !== current) act.setVolume(next);
+    onDone();
+  };
+  return (
+    <>
+      <Header
+        icon={<Volume2Icon className="size-3.5 shrink-0 text-fuchsia-500" />}
+        title={t('markup.volume')}
+        token={token}
+      >
+        {current === null
+          ? t('editor.card_volume_unpaired')
+          : t('editor.card_volume', { gain: gainText(current), close: VOLUME_CLOSE })}
+      </Header>
+      {current !== null && (
+        <>
+          <div role="group" aria-label={t('markup.volume')} className="flex flex-wrap gap-1">
+            {VOLUME_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                aria-pressed={preset.db === current}
+                className={CHIP}
+                onClick={() => choose(preset.db)}
+              >
+                {t(preset.label)}
+                <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                  {gainText(preset.db)}
+                </span>
+              </button>
+            ))}
+          </div>
+          <form
+            className="flex items-center gap-2 text-xs"
+            onSubmit={(event) => {
+              event.preventDefault();
+              choose(db);
+            }}
+          >
+            <input
+              ref={(node) => void (focusRef.current = node)}
+              type="range"
+              aria-label={t('editor.volume_passage')}
+              aria-valuetext={gainText(db)}
+              className="min-w-0 flex-1 accent-primary"
+              min={-MAX_PASSAGE_GAIN_DB}
+              max={MAX_PASSAGE_GAIN_DB}
+              step={1}
+              value={db}
+              onChange={(event) => setDb(Number(event.target.value))}
+            />
+            <output className="w-12 shrink-0 text-end tabular-nums">{gainText(db)}</output>
+            <Button type="submit" size="xs" variant="secondary" disabled={db === current}>
+              {t('editor.apply')}
+            </Button>
+          </form>
+        </>
+      )}
       <Footer
         end={
           <Button

@@ -194,3 +194,32 @@ def test_partial_completed_resume_retains_original_when_checkpoint_save_fails(ch
     events = asyncio.run(run())
     assert any('"type": "done"' in event and '"failed_chapters": [1]' in event for event in events)
     assert longform_resume.load_manifest_file(str(path)) == manifest
+
+
+@pytest.mark.parametrize("stored", ["manifest", "job-row", "none"])
+def test_resume_keeps_the_book_it_renders(checkpoint, stored):
+    """The interrupted render names its library project, in the listing and in
+    the resumed job, so the app finishes it in that book and not whichever is
+    open. A manifest from before the project id was kept falls back to the job
+    row; neither → none (the app gives it a book of its own)."""
+    from api.routers import audiobook
+    from core import job_store
+    from services import longform_resume
+    path, manifest = checkpoint
+    if stored == "manifest":
+        manifest = {**manifest, "project_id": "book-a"}
+        longform_resume.write_manifest(manifest)
+    elif stored == "job-row":
+        job_store.create("old", type="story", project_id="book-a")
+    expected = None if stored == "none" else "book-a"
+    assert [j["project_id"] for j in audiobook.list_resumable_jobs()["jobs"]] == [expected]
+
+    async def run():
+        response = await audiobook.resume_longform("old")
+        assert "ffmpeg" in await anext(response.body_iterator)
+        await response.body_iterator.aclose()
+    asyncio.run(run())
+    replacement = next(e for e in longform_resume.scan_resumable() if e["job_id"] != "old")
+    assert longform_resume.load_manifest_file(replacement["manifest_path"]).get(
+        "project_id") == expected
+    assert job_store.get(replacement["job_id"])["project_id"] == expected

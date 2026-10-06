@@ -455,6 +455,7 @@ export function StoryEditor({
           <textarea
             aria-label={t('stories.autocast')}
             placeholder={t('stories.splitPlaceholder')}
+            spellCheck={false}
             className="min-h-32 w-full rounded-lg border border-border/60 bg-background/40 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={script}
             disabled={disabled}

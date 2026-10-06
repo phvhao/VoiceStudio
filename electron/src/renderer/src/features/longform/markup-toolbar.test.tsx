@@ -139,3 +139,35 @@ it('highlights markup behind the text', () => {
     ['[oops]', 'unknown'],
   ]);
 });
+
+it('wraps the selection in a [volume] preset or a custom gain', async () => {
+  render(<Editor initial="say hello now" />);
+  select(4, 10);
+  fireEvent.click(screen.getByRole('button', { name: /^Volume/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /A little quieter/ }));
+  expect(script().value).toBe('say [volume -3dB]hello[/volume] now');
+  await flush();
+  select('say [volume -3dB]hello[/volume] '.length, 'say [volume -3dB]hello[/volume] now'.length);
+  fireEvent.click(screen.getByRole('button', { name: /^Volume/ }));
+  const custom = await screen.findByRole('spinbutton', { name: 'Custom volume, in dB' });
+  fireEvent.change(custom, { target: { value: '20' } });
+  expect(screen.getByRole('button', { name: 'Insert' })).toBeDisabled();
+  fireEvent.change(custom, { target: { value: '4.5' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
+  expect(script().value).toBe('say [volume -3dB]hello[/volume] [volume +4.5dB]now[/volume]');
+});
+
+it('explains [volume] in the markup guide and highlights it as its own kind', async () => {
+  const { container } = render(<Editor initial="a [volume -6dB]b[/volume] [volume loud]" />);
+  expect(
+    [...container.querySelectorAll('mark')].map((mark) => [mark.textContent, mark.dataset.kind]),
+  ).toEqual([
+    ['[volume -6dB]', 'volume'],
+    ['[/volume]', 'volume'],
+    ['[volume loud]', 'unknown'],
+  ]);
+  fireEvent.click(screen.getByRole('button', { name: 'Markup reference' }));
+  expect(
+    await screen.findByText('Quieter or louder reading of the wrapped text only, up to ±12 dB'),
+  ).toBeVisible();
+});

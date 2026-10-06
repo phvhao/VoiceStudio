@@ -1,5 +1,5 @@
 import { TAGS } from '@shared/utils/constants';
-import { isDefaultVoiceName } from '@shared/utils/audiobookScript';
+import { VOLUME_TOKEN_RE, isDefaultVoiceName } from '@shared/utils/audiobookScript';
 
 /**
  * Script markup for Stories and Audiobook: the editing side of the longform
@@ -24,6 +24,17 @@ export const PAUSE_PRESETS = [
 export const DELIVERY_TAGS = ['slow', 'fast', 'emphasis', 'spell'] as const;
 export type DeliveryTag = (typeof DELIVERY_TAGS)[number];
 
+// Mirrors ssml_lite.MAX_PASSAGE_GAIN_DB: one `[volume]` passage moves ±12 dB at most.
+export const MAX_PASSAGE_GAIN_DB = 12;
+/** The `[volume]` steps offered in the toolbar, suggestions and menus, quietest first. */
+export const VOLUME_PRESETS = [
+  { id: 'quieter', db: -6, label: 'editor.quieter' },
+  { id: 'bit_quieter', db: -3, label: 'editor.volume_bit_quieter' },
+  { id: 'bit_louder', db: 3, label: 'editor.volume_bit_louder' },
+  { id: 'louder', db: 6, label: 'editor.louder' },
+] as const;
+export const VOLUME_CLOSE = '[/volume]';
+
 /** `[voice:]` returns to the line's (or book's) default voice in both modes. */
 export const VOICE_RESET_TOKEN = '[voice:]';
 
@@ -35,6 +46,7 @@ export type MarkupKind =
   | 'voiceReset'
   | 'pause'
   | 'delivery'
+  | 'volume'
   | 'expression'
   | 'pronunciation'
   | 'unknown';
@@ -70,6 +82,7 @@ export function classifyToken(token: string): MarkupKind {
   }
   if (PAUSE_RE.test(token)) return 'pause';
   if (DELIVERY_RE.test(token)) return 'delivery';
+  if (VOLUME_TOKEN_RE.test(token)) return 'volume';
   if (EXPRESSIONS.has(token.toLowerCase())) return 'expression';
   return 'unknown';
 }
@@ -606,39 +619,103 @@ export function deliveryKind(token: string): DeliveryTag | null {
   return token.replace(/[[\]/]/g, '').toLowerCase() as DeliveryTag;
 }
 
-/**
- * A delivery tag and its partner, opening half first: the next closing tag of
- * the same kind after an opening one, the last opening tag before a closing
- * one. `null` for a tag without its partner.
- */
-function deliveryPair(
-  text: string,
-  token: MarkupToken,
-): [Pick<MarkupToken, 'start' | 'end'>, Pick<MarkupToken, 'start' | 'end'>] | null {
-  const name = deliveryKind(token.text);
-  if (!name) return null;
-  const closing = token.text.startsWith('[/');
-  // `name` is one of the four delivery words, so it needs no escaping.
-  const partner = new RegExp(String.raw`\[` + (closing ? '' : '/') + name + String.raw`\]`, 'gi');
-  let match: RegExpExecArray | null = null;
-  if (closing) {
-    for (const m of text.slice(0, token.start).matchAll(partner)) match = m as RegExpExecArray;
-  } else {
-    partner.lastIndex = token.end;
-    match = partner.exec(text);
-  }
-  if (!match) return null;
-  const other = { start: match.index, end: match.index + match[0].length };
-  return closing ? [other, token] : [token, other];
+/** What a paired tag pairs by: its delivery kind, or `volume`; `null` for any other text. */
+function pairName(token: string): string | null {
+  return deliveryKind(token) ?? (VOLUME_TOKEN_RE.test(token) ? 'volume' : null);
 }
 
 /**
- * Remove a token. A delivery tag takes its partner with it and keeps the
- * words between them; a respelling keeps the word it respelled; any other tag
- * goes with one neighbouring space, so no double space is left behind.
+ * A paired tag (delivery, `[volume]`) and its partner, opening half first,
+ * nesting counted the way the parser reads it — a closing tag ends the
+ * nearest open one of its kind: `[slow]a[slow]b[/slow]c[/slow]` pairs the
+ * outer halves. `null` for a tag without its partner.
+ */
+function tagPair(
+  text: string,
+  token: Pick<MarkupToken, 'start' | 'end' | 'text'>,
+): [Pick<MarkupToken, 'start' | 'end'>, Pick<MarkupToken, 'start' | 'end'>] | null {
+  const name = pairName(token.text);
+  if (!name) return null;
+  const closing = token.text.startsWith('[/');
+  const same = [...text.matchAll(TOKEN_RE)].filter((match) => pairName(match[0]) === name);
+  const at = same.findIndex((match) => match.index === token.start);
+  if (at < 0) return null;
+  const step = closing ? -1 : 1;
+  let depth = 0;
+  for (let i = at + step; i >= 0 && i < same.length; i += step) {
+    if (same[i][0].startsWith('[/') === closing) depth++;
+    else if (depth) depth--;
+    else {
+      const other = { start: same[i].index, end: same[i].index + same[i][0].length };
+      return closing ? [other, token] : [token, other];
+    }
+  }
+  return null;
+}
+
+/** A `[volume …]` tag as the script writes it: `[volume -6dB]`, `[volume +3dB]`. */
+export function volumeToken(db: number): string {
+  const value = clampPassageGain(db);
+  return `[volume ${value > 0 ? '+' : ''}${value}dB]`;
+}
+
+/**
+ * `db` as one passage carries it: to 0.1 dB, ties to even, within
+ * ±MAX_PASSAGE_GAIN_DB — the number the parsers read (ssml_lite._gain_tenths).
+ */
+export function clampPassageGain(db: number): number {
+  if (!Number.isFinite(db)) return 0;
+  const scaled = db * 10;
+  const floor = Math.floor(scaled);
+  const rest = scaled - floor;
+  const tenths = rest < 0.5 || (rest === 0.5 && floor % 2 === 0) ? floor : floor + 1;
+  const bound = MAX_PASSAGE_GAIN_DB * 10;
+  return Math.max(-bound, Math.min(bound, tenths)) / 10 || 0;
+}
+
+/** A gain in dB as `locale` writes it, signed: "+3", "0", "-1,5". The unit is the caller's. */
+export function formatSignedDb(db: number, locale?: string): string {
+  return new Intl.NumberFormat(locale, {
+    signDisplay: 'exceptZero',
+    maximumFractionDigits: 1,
+  }).format(db);
+}
+
+/** The gain an opening `[volume …]` tag sets, in dB; `null` for `[/volume]` and any other text. */
+export function volumeDb(token: string): number | null {
+  const gain = VOLUME_TOKEN_RE.exec(token)?.[1];
+  return gain === undefined ? null : clampPassageGain(Number(gain));
+}
+
+/**
+ * The opening half of a `[volume]` passage: the tag itself, or the one a
+ * `[/volume]` closes. `null` for a closing tag without one.
+ */
+export function volumeOpening(text: string, token: MarkupToken): MarkupToken | null {
+  if (volumeDb(token.text) !== null) return token;
+  const pair = token.kind === 'volume' ? tagPair(text, token) : null;
+  if (!pair) return null;
+  const [open] = pair;
+  return { ...open, text: text.slice(open.start, open.end), kind: 'volume' };
+}
+
+/**
+ * Read a `[volume]` passage at `db`: its opening tag changes, the words and
+ * the `[/volume]` stay. The caret ends after the opening tag.
+ */
+export function setVolume(text: string, token: MarkupToken, db: number): MarkupEdit {
+  const open = volumeOpening(text, token) ?? token;
+  return replaceRange(text, open.start, open.end, volumeToken(db));
+}
+
+/**
+ * Remove a token. A paired tag (delivery, `[volume]`) takes its partner with
+ * it and keeps the words between them; a respelling keeps the word it
+ * respelled; any other tag goes with one neighbouring space, so no double
+ * space is left behind.
  */
 export function removeToken(text: string, token: MarkupToken): MarkupEdit {
-  const pair = token.kind === 'delivery' ? deliveryPair(text, token) : null;
+  const pair = token.kind === 'delivery' || token.kind === 'volume' ? tagPair(text, token) : null;
   if (pair) {
     const [open, close] = pair;
     return replaceRange(text, open.start, close.end, text.slice(open.end, close.start), {
@@ -666,7 +743,7 @@ export function changeDeliveryKind(
   kind: DeliveryTag,
 ): MarkupEdit {
   const closing = token.text.startsWith('[/');
-  const pair = deliveryPair(text, token);
+  const pair = tagPair(text, token);
   if (!pair)
     return replaceRange(text, token.start, token.end, closing ? `[/${kind}]` : `[${kind}]`);
   const [open, close] = pair;

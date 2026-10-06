@@ -11,7 +11,12 @@ export interface AudiobookTimelinePhrase {
   end: number;
   /** The script voice in effect; null is the book's default. */
   voice?: string | null;
+  /** It starts a new line or paragraph of the script (newer renders only). */
+  break?: AudiobookTimelineBreak;
 }
+
+/** How a timeline phrase starts in the script it was rendered from. */
+export type AudiobookTimelineBreak = 'line' | 'paragraph';
 
 /**
  * How much of a chapter the render could time: every phrase take, only span
@@ -65,6 +70,8 @@ export interface AudiobookLyricsWord {
   chapterIndex: number;
   /** Index into `AudiobookLyricsTimeline.phrases`; set only from a sidecar. */
   phrase?: number;
+  /** The sidecar says the word starts a new line or paragraph. */
+  break?: AudiobookTimelineBreak;
 }
 
 export interface AudiobookLyricsChapter {
@@ -114,7 +121,9 @@ export function readTimeline(timeline: unknown): {
     start: number;
     end: number;
     precision: AudiobookTimelinePrecision;
-    phrases: Array<Required<AudiobookTimelinePhrase>>;
+    phrases: Array<
+      Required<Omit<AudiobookTimelinePhrase, 'break'>> & Pick<AudiobookTimelinePhrase, 'break'>
+    >;
     sections: Array<Omit<AudiobookTimelineSection, 'phrase'>>;
   }>;
 } | null;

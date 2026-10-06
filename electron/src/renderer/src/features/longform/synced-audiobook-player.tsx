@@ -167,6 +167,7 @@ function NowPlayingCard({
   );
 }
 
+// Re-renders when the word being read changes, not on every clock tick.
 function NowPlayingText({ book }: { book: ReaderBook }) {
   const { t } = useTranslation();
   const { word, sentence, chapter } = usePlayhead(book);
@@ -191,7 +192,8 @@ function NowPlayingText({ book }: { book: ReaderBook }) {
 
 // One line of the sentence being read. It slides sideways to keep the
 // current word in sight; the word is tinted, never re-weighted, so the line
-// never reflows. Keyed by sentence, so each new one starts at its beginning.
+// never reflows. Keyed by sentence, so each new one starts at its beginning
+// and reads its direction once.
 const SentenceLine = memo(function SentenceLine({
   book,
   sentence,
@@ -203,17 +205,29 @@ const SentenceLine = memo(function SentenceLine({
 }) {
   const line = useRef<HTMLParagraphElement>(null);
   const current = useRef<HTMLSpanElement>(null);
+  const rtl = useRef<boolean | null>(null);
+  // Where the slide this started is heading, until it ends (see the reader's
+  // follow): measuring against an offset mid-slide re-aims it every word.
+  const sliding = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const element = line.current;
     const active = current.current;
     if (!element || !active) return;
+    rtl.current ??= getComputedStyle(element).direction === 'rtl';
     const { left, scrolled } = followLine(
       active,
-      element,
-      getComputedStyle(element).direction === 'rtl',
+      {
+        scrollLeft: sliding.current ?? element.scrollLeft,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      },
+      rtl.current,
     );
-    if (left !== null) element.scrollTo({ left });
+    if (left !== null) {
+      element.scrollTo({ left });
+      sliding.current = left;
+    }
     element.toggleAttribute('data-scrolled', scrolled);
   }, [word]);
 
@@ -224,6 +238,9 @@ const SentenceLine = memo(function SentenceLine({
       ref={line}
       dir="auto"
       lang={book.lang}
+      onScrollEnd={() => {
+        sliding.current = null;
+      }}
       className="relative h-5 overflow-hidden scroll-smooth text-[13px] leading-5 whitespace-nowrap text-muted-foreground [mask-image:linear-gradient(to_right,black_calc(100%_-_2rem),transparent)] motion-reduce:scroll-auto data-scrolled:[mask-image:linear-gradient(to_right,transparent,black_1.5rem,black_calc(100%_-_2rem),transparent)] rtl:[mask-image:linear-gradient(to_left,black_calc(100%_-_2rem),transparent)] rtl:data-scrolled:[mask-image:linear-gradient(to_left,transparent,black_1.5rem,black_calc(100%_-_2rem),transparent)]"
     >
       {sentence >= 0 &&
