@@ -1485,6 +1485,9 @@
     "review_mode_desc": "Wstrzymaj się między etapami potoku, aby móc przejrzeć wyniki ASR/tłumaczenia.",
     "review_mode_on": "Recenzja",
     "review_mode_off": "Szybkostrzelny",
+    "spellcheck": "Sprawdzanie pisowni podczas pisania",
+    "spellcheck_desc": "Podkreśla błędnie zapisane słowa, po wietnamsku i angielsku, w tekście czytanym na głos: skryptach, kwestiach, transkrypcjach i frazach testowych. Pozostałe pola są sprawdzane jak zwykle.",
+    "spellcheck_offline": "Sprawdzanie pisowni jest niedostępne offline w tym systemie: nie znaleziono lokalnego słownika, a VoiceStudio nigdy go nie pobiera.",
     "translate_agent": "Agent pasuje",
     "llmp_cli_help": "Używa zainstalowanego CLI i jego logowania przez ten sam mechanizm co naprawa z agentem. Puste pole Model oznacza domyślny model CLI. Odpowiedzi mogą być wolniejsze; koszty obciążają konto CLI.",
     "llmp_sdk_help": "Natywni dostawcy używają LiteLLM. Dla innych wpisz provider/model. Bedrock używa klucza API lub profilu AWS; Vertex używa identyfikatora konta jako projektu i danych logowania Google. Bazowy URL jest opcjonalny.",
@@ -1783,8 +1786,7 @@
   },
   "projectActions": {
     "delete": "Usunąć „{{name}}”? Tej czynności nie można cofnąć.",
-    "open": "Otworzyć „{{name}}” i zastąpić bieżący szkic? Najpierw zapisz swoją pracę.",
-    "save_copy": "Zapisz kopię"
+    "open": "Otworzyć „{{name}}” i zastąpić bieżący szkic? Najpierw zapisz swoją pracę."
   },
   "sidebar": {
     "save_project": "Zapisz projekt dubowy",
@@ -1834,7 +1836,6 @@
     "stemsDone": "Wyeksportowane rdzenie znaków {{count}}",
     "format": "Format eksportu",
     "mp3Fallback": "Kodowanie MP3 niedostępne — zamiast tego pobrano plik WAV.",
-    "projects": "Projekty",
     "newStory": "Nowa historia",
     "save": "Zapisz",
     "untitled": "Historia bez tytułu",
@@ -1881,7 +1882,6 @@
     "global_speed_hint": "Prędkość odczytu dla wszystkich linii bez własnego sterowania prędkością",
     "global_speed_overrides": "Wiersze z własną prędkością: {{count}}",
     "global_speed_apply": "Użyj dla wszystkich wierszy",
-    "deleteProjectConfirm": "Usunąć ten projekt na stałe?",
     "moveUp": "Przenieś w górę",
     "moveDown": "Przenieś w dół",
     "default_voice_hint": "Czyta wiersze, których postać nie ma własnego głosu.",
@@ -1900,6 +1900,8 @@
     "hint_expression": "Dźwięk {{tag}} — kliknij, aby zmienić, prawy przycisk – więcej",
     "hint_pronunciation": "Czytane jako „{{respelling}}” — kliknij, aby edytować, prawy przycisk – więcej",
     "hint_unknown": "Nierozpoznany tag, czytany na głos tak, jak go zapisano — kliknij, aby zobaczyć opcje",
+    "hint_unknown_static": "Nierozpoznany tag, czytany na głos tak, jak go zapisano",
+    "hint_unsupported": "Nieużywany na tej stronie: tagi głosu, sposobu czytania i głośności działają w Książce audio i Historiach. Tutaj tag jest czytany na głos tak, jak go zapisano.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Zmienia głos od tego miejsca do następnej zmiany głosu.",
     "card_voice_reset": "Od tego miejsca oddaje tekst głosowi domyślnemu.",

@@ -450,6 +450,39 @@ describe('pointer', () => {
     expect(script()).not.toHaveAttribute('title');
   });
 
+  it('warns about tags the page does not read, without tools and without a pointer', async () => {
+    for (const [initial, hint] of [
+      [
+        'Hi [voice:Mara] there',
+        'Not used on this page: voice, delivery and volume tags work in Audiobook and Stories. Here the tag is read aloud as written.',
+      ],
+      ['Hi [whisper] there', 'Unrecognized tag, read aloud as written'],
+    ]) {
+      const { container, unmount } = render(
+        <Editor initial={initial} unsupported={['voice', 'voiceReset', 'delivery', 'volume']} />,
+      );
+      const mark = layOut(container);
+      expect(mark.dataset.kind).toBe('unknown');
+      expect(mark.className).toContain('decoration-wavy');
+      fireEvent.pointerMove(script(), { clientX: 50, clientY: 20 });
+      await nextFrame();
+      expect(script().title).toBe(hint);
+      expect(script().style.cursor).toBe('');
+      unmount();
+    }
+  });
+
+  it('gives no hover hint over a tag the page reads when nothing opens it', async () => {
+    const { container } = render(
+      <Editor initial="Hi [pause 1s] there" unsupported={['voice', 'voiceReset']} />,
+    );
+    const mark = layOut(container);
+    expect(mark.dataset.kind).toBe('pause');
+    fireEvent.pointerMove(script(), { clientX: 50, clientY: 20 });
+    await nextFrame();
+    expect(script()).not.toHaveAttribute('title');
+  });
+
   it('says how loud a [volume] passage reads, and where it ends', async () => {
     for (const [initial, hint] of [
       ['Hi [volume -6dB]there', 'Volume -6 dB — click to edit, right-click for more'],

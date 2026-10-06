@@ -17,6 +17,7 @@ import { queryKeys } from '@/lib/query';
 import { beginAppActivity } from '@/lib/app-activity';
 import type { TtsReadinessBlocker } from '@/hooks/use-tts-readiness';
 import { announceDroppedSpeech } from '@/lib/dropped-speech';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export function ProfilePreview({
   profile,
@@ -26,6 +27,7 @@ export function ProfilePreview({
   ttsBlocker?: TtsReadinessBlocker;
 }) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const id = useId();
   const client = useQueryClient();
   const [text, setText] = useState(() => t('voice_profile.test_text'));
@@ -98,7 +100,7 @@ export function ProfilePreview({
         disabled={busy}
         onChange={(event) => setText(event.target.value)}
         placeholder={t('voice_profile.test_placeholder')}
-        spellCheck={false}
+        spellCheck={spellcheck}
         className="w-full resize-y rounded-md border border-input bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <Button

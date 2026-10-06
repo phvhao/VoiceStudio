@@ -14,6 +14,7 @@ import { startDevBackendProxy } from './dev-backend-proxy';
 import { DesktopUpdater, registerUpdateIpc } from './updater';
 import { registerRepairAgents } from './repair-agents';
 import { installRendererPermissions } from './media-permissions';
+import { preventDictionaryDownloads, registerSpellcheck } from './spellcheck';
 import { installBlankWindowGuard } from './blank-window-guard';
 import { shouldOpenDevTools } from './devtools-policy';
 import {
@@ -238,6 +239,10 @@ if (process.env.VOICESTUDIO_ALLOW_MULTIPLE_INSTANCES !== '1' && !app.requestSing
       electronApp.setAppUserModelId(APP_USER_MODEL_ID);
       if (process.platform === 'darwin') installMacApplicationMenu(app, Menu, __APP_VERSION__);
       installRendererPermissions(session.defaultSession, process.env.ELECTRON_RENDERER_URL);
+      preventDictionaryDownloads(session.defaultSession, app.getPath('userData'));
+      registerSpellcheck(session.defaultSession, () => mainWindow, {
+        userData: app.getPath('userData'),
+      });
       app.on('browser-window-created', (_event, window) => optimizer.watchWindowShortcuts(window));
 
       const backend = new BackendSupervisor();

@@ -1601,6 +1601,9 @@
     "review_mode_desc": "Pause between pipeline stages so you can review ASR / translation output.",
     "review_mode_on": "Pause for review",
     "review_mode_off": "Run straight through",
+    "spellcheck": "Spellcheck while writing",
+    "spellcheck_desc": "Underline misspelled words, in Vietnamese and English, in text that is read aloud: scripts, lines, transcripts and test phrases. Other fields keep the usual check.",
+    "spellcheck_offline": "Spellchecking is unavailable offline on this system: no local dictionary was found, and VoiceStudio never downloads one.",
     "translate_agent": "Agent fit",
     "llmp_cli_help": "Uses the installed CLI and its login, through the same runner as Repair with an agent. Leave Model blank for the CLI default. CLI responses may be slower; paid usage follows your CLI account.",
     "llmp_sdk_help": "Native providers use LiteLLM. For other providers, enter provider/model. Bedrock uses an API key or AWS profile; Vertex uses Account ID as project and Google application credentials. Base URL is optional.",
@@ -1893,8 +1896,7 @@
   },
   "projectActions": {
     "delete": "Delete “{{name}}”? This cannot be undone.",
-    "open": "Open “{{name}}” and replace the current draft? Save your current work first.",
-    "save_copy": "Save a copy"
+    "open": "Open “{{name}}” and replace the current draft? Save your current work first."
   },
   "sidebar": {
     "save_project": "Save Dubbing Project",
@@ -1932,7 +1934,6 @@
     "stemsDone": "Exported {{count}} character stem(s)",
     "format": "Export format",
     "mp3Fallback": "MP3 encode unavailable — downloaded WAV instead.",
-    "projects": "Projects",
     "newStory": "New story",
     "save": "Save",
     "untitled": "Untitled story",
@@ -1979,7 +1980,6 @@
     "chars": "{{count}} chars",
     "exportDone": "Audiobook downloaded",
     "exportFailed": "Export failed — check the backend is running.",
-    "deleteProjectConfirm": "Delete this project permanently?",
     "moveUp": "Move up",
     "moveDown": "Move down",
     "default_voice_hint": "Reads lines whose character has no voice of its own.",
@@ -1998,6 +1998,8 @@
     "hint_expression": "Sound {{tag}} — click to change, right-click for more",
     "hint_pronunciation": "Read as “{{respelling}}” — click to edit, right-click for more",
     "hint_unknown": "Unrecognized tag, read aloud as written — click for options",
+    "hint_unknown_static": "Unrecognized tag, read aloud as written",
+    "hint_unsupported": "Not used on this page: voice, delivery and volume tags work in Audiobook and Stories. Here the tag is read aloud as written.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Switches the voice from here up to the next change of voice.",
     "card_voice_reset": "Hands the text back to the default voice from here on.",

@@ -73,19 +73,24 @@ import { cn } from '@/lib/utils';
 import { SettingsContent, SettingsRow, SettingsSection } from './settings-layout';
 import i18n, { APP_LANGUAGE_ITEMS, APP_LANGUAGES, setAppLanguage, type AppLocale } from '@/i18n';
 import { setReviewMode, useReviewMode } from '@/hooks/use-review-mode';
+import {
+  setScriptSpellcheck,
+  useScriptSpellcheck,
+  useSpellcheckState,
+} from '@/hooks/use-script-spellcheck';
 import { rememberSettingsRoute } from '@/lib/settings-route';
 import { setWorkspace, useWorkspace } from '@/lib/store/workspace';
 
 const sections = ['general', 'appearance'] as const;
 const fields = {
-  general: ['language', 'review_mode'],
+  general: ['language', 'review_mode', 'spellcheck'],
   appearance: ['theme', 'font', 'ui_scale', 'glass', 'sidebar_expanded'],
 };
 
 const fieldKey = (key: string) =>
   key === 'glass'
     ? 'themeAppearance.glass'
-    : key === 'language' || key === 'review_mode'
+    : key === 'language' || key === 'review_mode' || key === 'spellcheck'
       ? `settings.${key}`
       : `preferences.${key}`;
 
@@ -273,6 +278,8 @@ export function SettingsPage() {
   const appearance = useAppearance();
   const workspace = useWorkspace();
   const reviewMode = useReviewMode();
+  const spellcheck = useScriptSpellcheck();
+  const spellchecker = useSpellcheckState();
   const targetIds: Record<string, string> = {
     theme: 'theme-label',
     font: 'font-label',
@@ -281,6 +288,7 @@ export function SettingsPage() {
     sidebar_expanded: 'sidebar-expanded-label',
     language: 'language-label',
     review_mode: 'review-mode-label',
+    spellcheck: 'spellcheck-label',
   };
   const extraMatches = extraSettings.filter((item) =>
     item.fields.some((key) =>
@@ -723,6 +731,26 @@ export function SettingsPage() {
                         </Button>
                       ))}
                     </div>
+                  </SettingsRow>
+                  <SettingsRow
+                    id="spellcheck-label"
+                    title={t('settings.spellcheck')}
+                    description={
+                      <>
+                        {t('settings.spellcheck_desc')}
+                        {spellcheck && spellchecker?.available === false && (
+                          <p role="status" className="mt-1 text-warning-foreground">
+                            {t('settings.spellcheck_offline')}
+                          </p>
+                        )}
+                      </>
+                    }
+                  >
+                    <Switch
+                      aria-labelledby="spellcheck-label"
+                      checked={spellcheck}
+                      onCheckedChange={setScriptSpellcheck}
+                    />
                   </SettingsRow>
                 </>
               )}

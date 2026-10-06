@@ -3,15 +3,27 @@ import { ChevronDownIcon, PlusIcon } from 'lucide-react';
 import {
   useEffect,
   useId,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  MarkupAutocomplete,
+  useMarkupAutocomplete,
+  type SuggestionGroup,
+} from '@/features/longform/markup-autocomplete';
+import {
+  MarkupEditorContext,
+  type MarkupEditorEvents,
+} from '@/features/longform/markup-editor-context';
 import { applyMarkupEdit } from '@/features/longform/markup-toolbar';
 import {
   PAUSE_MAX_MS,
@@ -20,6 +32,7 @@ import {
   insertToken,
   pauseToken,
   secondsUnit,
+  type MarkupKind,
 } from '@/features/longform/script-markup';
 import { TAGS } from '@/lib/languages';
 import { textareaCaret } from '@/lib/textarea-caret';
@@ -29,6 +42,23 @@ import { cn } from '@/lib/utils';
 const POPUP_WIDTH = 360;
 const POPUP_HEIGHT = 320;
 const NAVIGATION_KEYS = ['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'];
+
+/**
+ * The markup a single-voice script (Clone, Voice Design) does not read:
+ * `/generate` renders pauses, expressions and `[[word|respelling]]`, while
+ * voice switches, delivery and volume are Audiobook and Stories markup that
+ * reaches the engine as plain text. Pass to the editor's `unsupported`.
+ */
+export const SCRIPT_UNSUPPORTED_TAGS: readonly MarkupKind[] = [
+  'voice',
+  'voiceReset',
+  'delivery',
+  'volume',
+];
+
+// What typing `[` offers there: the Insert menu's pauses and expressions.
+const SCRIPT_SUGGESTIONS: readonly SuggestionGroup[] = ['pause', 'expression'];
+const NO_VOICES: readonly string[] = [];
 
 /**
  * The state of a script editor's Insert menu: the popup opens at the caret
@@ -281,5 +311,53 @@ export function ScriptInsertMenu({
           )
         : null}
     </div>
+  );
+}
+
+/**
+ * Tag suggestions for a single-voice script editor, opened by typing `[`:
+ * the pauses and expressions the Insert menu offers, with no voices. Wrap the
+ * editor's `MarkupTextarea` in it.
+ */
+export function ScriptTagSuggestions({
+  menu,
+  setText,
+  disabled = false,
+  children,
+}: {
+  menu: ScriptInsertMenuState;
+  /** Commits the text where the browser cannot insert natively. */
+  setText(value: string): void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const suggestions = useMarkupAutocomplete({
+    getTarget: () => {
+      const element = menu.textareaRef.current;
+      return element ? { element, setText } : null;
+    },
+    groups: SCRIPT_SUGGESTIONS,
+    disabled,
+    // One popup at a time: typing a tag puts the Insert menu away.
+    onOpen: menu.close,
+  });
+  // The editor calls these between renders: they read the latest state.
+  const latest = useRef(suggestions);
+  useLayoutEffect(() => {
+    latest.current = suggestions;
+  });
+  const events = useMemo<MarkupEditorEvents>(
+    () => ({
+      onEditorKeyDown: (event, handle) => latest.current.onKeyDown(event, handle),
+      onEditorChange: (handle, reason) => latest.current.onChange(handle, reason),
+      textareaAria: suggestions.aria,
+    }),
+    [suggestions.aria],
+  );
+  return (
+    <>
+      <MarkupEditorContext.Provider value={events}>{children}</MarkupEditorContext.Provider>
+      <MarkupAutocomplete suggestions={suggestions} voices={NO_VOICES} />
+    </>
   );
 }

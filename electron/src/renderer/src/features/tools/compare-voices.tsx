@@ -17,9 +17,11 @@ import { PRESETS } from '@shared/utils/constants';
 import { beginAppActivity } from '@/lib/app-activity';
 import { announceDroppedSpeech } from '@/lib/dropped-speech';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export function CompareVoices() {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const profiles = useProfiles();
   const ttsBlocker = useTtsReadiness();
   const client = useQueryClient();
@@ -118,7 +120,7 @@ export function CompareVoices() {
         disabled={busy}
         onChange={(event) => setText(event.target.value)}
         rows={4}
-        spellCheck={false}
+        spellCheck={spellcheck}
         className="w-full resize-y rounded-lg border border-input bg-transparent p-3 text-sm leading-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <div className="grid grid-cols-2 gap-5 max-md:grid-cols-1">

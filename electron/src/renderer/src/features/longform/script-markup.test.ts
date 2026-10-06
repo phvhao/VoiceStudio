@@ -74,6 +74,16 @@ describe('tokenizeMarkup', () => {
     ]);
   });
 
+  it('marks the kinds a page does not read as unknown, text unchanged', () => {
+    const segments = tokenizeMarkup(script, {
+      unsupported: ['voice', 'voiceReset', 'delivery', 'volume'],
+    });
+    expect(segments.map((segment) => segment.text).join('')).toBe(script);
+    expect(
+      segments.filter((segment) => segment.kind !== 'text').map((segment) => segment.kind),
+    ).toEqual(['unknown', 'pause', 'unknown', 'unknown', 'expression', 'unknown', 'unknown']);
+  });
+
   it('only treats headings as chapters where the editor asks for it', () => {
     expect(tokenizeMarkup('# Title', { headings: false })).toEqual([
       { text: '# Title', kind: 'text' },

@@ -45,6 +45,7 @@ import { MarkupToolbar, type MarkupTarget } from './markup-toolbar';
 import { MarkupEditorTools } from './markup-editor-tools';
 import { VOICE_ACCENTS } from './voice-palette';
 import type { Draft } from './longform-session';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 interface Props {
   draft: Draft;
   profiles: { id: string; name: string }[];
@@ -238,6 +239,7 @@ export function StoryEditor({
   onBusy,
 }: Props) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const controller = useRef<AbortController | null>(null);
   const lineInputs = useRef(new Map<string, HTMLTextAreaElement>());
   const chapterInputs = useRef(new Map<string, HTMLInputElement>());
@@ -455,7 +457,7 @@ export function StoryEditor({
           <textarea
             aria-label={t('stories.autocast')}
             placeholder={t('stories.splitPlaceholder')}
-            spellCheck={false}
+            spellCheck={spellcheck}
             className="min-h-32 w-full rounded-lg border border-border/60 bg-background/40 p-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
             value={script}
             disabled={disabled}
@@ -599,6 +601,7 @@ export function StoryEditor({
                   else chapterInputs.current.delete(line.id);
                 }}
                 aria-label={t('markup.chapter')}
+                spellCheck={spellcheck}
                 className="min-w-0 flex-1 bg-transparent text-base font-semibold outline-none placeholder:text-muted-foreground/60"
                 value={chapterTitleOf(line.text)}
                 placeholder={nextChapterTitle()}

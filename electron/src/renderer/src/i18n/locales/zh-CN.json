@@ -1481,6 +1481,9 @@
     "review_mode_desc": "在管道阶段之间暂停，以便您可以查看 ASR/翻译输出。",
     "review_mode_on": "审阅",
     "review_mode_off": "快速模式",
+    "spellcheck": "输入时检查拼写",
+    "spellcheck_desc": "在要朗读的文本（脚本、台词、参考文本和试听短语）中，为越南语和英语的拼写错误加下划线。其他输入框仍按常规检查。",
+    "spellcheck_offline": "此系统无法离线检查拼写：未找到本地词典，且 VoiceStudio 从不下载词典。",
     "translate_agent": "智能体适配",
     "llmp_cli_help": "通过与代理修复相同的运行器使用已安装的 CLI 及其登录。模型留空将使用 CLI 默认值。响应可能较慢，费用按 CLI 账户计收。",
     "llmp_sdk_help": "原生提供商使用 LiteLLM。其他提供商请输入 provider/model。Bedrock 使用 API 密钥或 AWS 配置；Vertex 将账户 ID 用作项目，并使用 Google 应用凭据。基础 URL 为可选项。",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "删除“{{name}}”？此操作无法撤销。",
-    "open": "打开“{{name}}”并替换当前草稿？请先保存当前工作。",
-    "save_copy": "保存副本"
+    "open": "打开“{{name}}”并替换当前草稿？请先保存当前工作。"
   },
   "sidebar": {
     "save_project": "保存配音项目",
@@ -1824,7 +1826,6 @@
     "stemsDone": "已导出 {{count}} 个角色分轨",
     "format": "导出格式",
     "mp3Fallback": "MP3 编码不可用 — 已改为下载 WAV。",
-    "projects": "项目",
     "newStory": "新建故事",
     "save": "保存",
     "untitled": "未命名故事",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "所有台词的朗读速度（未单独设置语速的台词）",
     "global_speed_overrides": "使用自有语速的行：{{count}}",
     "global_speed_apply": "应用到所有行",
-    "deleteProjectConfirm": "永久删除此项目？",
     "moveUp": "上移",
     "moveDown": "下移",
     "default_voice_hint": "朗读角色没有专属声音的行。",
@@ -1890,6 +1890,8 @@
     "hint_expression": "声效 {{tag}}——点击更换，右键查看更多",
     "hint_pronunciation": "读作“{{respelling}}”——点击编辑，右键查看更多",
     "hint_unknown": "无法识别的标签，将按原文读出——点击查看选项",
+    "hint_unknown_static": "无法识别的标签，将按原文读出",
+    "hint_unsupported": "此页面不使用：声音、朗读方式和音量标签仅在有声读物和故事中生效。此处该标签将按原文读出。",
     "card_label": "标签 {{tag}}",
     "card_voice": "从此处切换声音，直到下一次切换声音。",
     "card_voice_reset": "从此处起把文本交回默认声音。",

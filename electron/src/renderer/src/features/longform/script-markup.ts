@@ -90,10 +90,22 @@ export function classifyToken(token: string): MarkupKind {
 /**
  * Split text into plain runs and markup tokens for the editor highlight.
  * Concatenating every segment's text returns the input unchanged, which is
- * what keeps the overlay aligned with the textarea above it.
+ * what keeps the overlay aligned with the textarea above it. Tags of an
+ * `unsupported` kind — ones the page's renderer does not read, such as voice
+ * switches on Clone — come out as `unknown`.
  */
-export function tokenizeMarkup(text: string, { headings = false } = {}): MarkupSegment[] {
+export function tokenizeMarkup(
+  text: string,
+  {
+    headings = false,
+    unsupported,
+  }: { headings?: boolean; unsupported?: readonly MarkupKind[] } = {},
+): MarkupSegment[] {
   const segments: MarkupSegment[] = [];
+  const kindOf = (token: string): MarkupKind => {
+    const kind = classifyToken(token);
+    return unsupported?.includes(kind) ? 'unknown' : kind;
+  };
   const push = (value: string, kind: MarkupKind) => {
     if (!value) return;
     const last = segments[segments.length - 1];
@@ -104,7 +116,7 @@ export function tokenizeMarkup(text: string, { headings = false } = {}): MarkupS
     let cursor = 0;
     for (const match of chunk.matchAll(TOKEN_RE)) {
       push(chunk.slice(cursor, match.index), 'text');
-      push(match[0], classifyToken(match[0]));
+      push(match[0], kindOf(match[0]));
       cursor = match.index + match[0].length;
     }
     push(chunk.slice(cursor), 'text');

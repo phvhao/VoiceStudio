@@ -1481,6 +1481,9 @@
     "review_mode_desc": "ASR / çeviri çıktısını gözden geçirebilmek için ardışık düzen aşamaları arasında duraklayın.",
     "review_mode_on": "İncele",
     "review_mode_off": "Hızlı ateş",
+    "spellcheck": "Yazarken yazım denetimi",
+    "spellcheck_desc": "Sesli okunan metinlerde (betikler, satırlar, transkriptler ve deneme cümleleri) Vietnamca ve İngilizce yazım hatalarının altını çizer. Diğer alanlar her zamanki gibi denetlenir.",
+    "spellcheck_offline": "Bu sistemde yazım denetimi çevrimdışı kullanılamıyor: yerel sözlük bulunamadı ve VoiceStudio hiçbir zaman sözlük indirmez.",
     "translate_agent": "Ajanla uyarlama",
     "llmp_cli_help": "Yüklü CLI'yi ve oturumunu, aracıyla onarımla aynı çalıştırıcı üzerinden kullanır. CLI varsayılanı için Model'i boş bırakın. Yanıtlar yavaş olabilir; ücretler CLI hesabınıza yansır.",
     "llmp_sdk_help": "Yerel sağlayıcı bağdaştırıcıları LiteLLM kullanır. Diğerleri için provider/model girin. Bedrock API anahtarı veya AWS profili; Vertex ise proje olarak hesap kimliği ve Google kimlik bilgileri kullanır. Temel URL isteğe bağlıdır.",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "“{{name}}” silinsin mi? Bu işlem geri alınamaz.",
-    "open": "“{{name}}” açılıp mevcut taslak değiştirilsin mi? Önce çalışmanızı kaydedin.",
-    "save_copy": "Kopyasını kaydet"
+    "open": "“{{name}}” açılıp mevcut taslak değiştirilsin mi? Önce çalışmanızı kaydedin."
   },
   "sidebar": {
     "save_project": "Dub Projesini Kaydet",
@@ -1824,7 +1826,6 @@
     "stemsDone": "Dışa aktarılan {{count}} karakter kökü/kökleri",
     "format": "Dışa aktarma biçimi",
     "mp3Fallback": "MP3 kodlaması kullanılamıyor; onun yerine WAV indirildi.",
-    "projects": "Projeler",
     "newStory": "Yeni hikaye",
     "save": "Kaydet",
     "untitled": "Başlıksız hikaye",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "Kendi hız geçersiz kılma özelliği olmadan tüm satırlar için okuma hızı",
     "global_speed_overrides": "Kendi hızı olan satırlar: {{count}}",
     "global_speed_apply": "Tüm satırlarda kullan",
-    "deleteProjectConfirm": "Bu proje kalıcı olarak silinsin mi?",
     "moveUp": "Yukarı taşı",
     "moveDown": "Aşağı taşı",
     "default_voice_hint": "Karakterinin kendi sesi olmayan satırları okur.",
@@ -1890,6 +1890,8 @@
     "hint_expression": "Ses efekti {{tag}} — değiştirmek için tıklayın, daha fazlası için sağ tıklayın",
     "hint_pronunciation": "“{{respelling}}” olarak okunur — düzenlemek için tıklayın, daha fazlası için sağ tıklayın",
     "hint_unknown": "Tanınmayan etiket, yazıldığı gibi sesli okunur — seçenekler için tıklayın",
+    "hint_unknown_static": "Tanınmayan etiket, yazıldığı gibi sesli okunur",
+    "hint_unsupported": "Bu sayfada kullanılmaz: ses, okuma biçimi ve ses düzeyi etiketleri Sesli kitap ve Hikayeler bölümlerinde çalışır. Burada etiket yazıldığı gibi sesli okunur.",
     "card_label": "Etiket {{tag}}",
     "card_voice": "Sesi buradan bir sonraki ses değişikliğine kadar değiştirir.",
     "card_voice_reset": "Metni buradan itibaren varsayılan sese geri verir.",

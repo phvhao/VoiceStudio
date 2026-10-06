@@ -14,9 +14,11 @@ import {
 } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 import { cn } from '@/lib/utils';
 import { MarkupEditorContext, type MarkupEditorHandle } from './markup-editor-context';
 import {
+  classifyToken,
   formatPauseSeconds,
   formatSignedDb,
   normalizeNewlines,
@@ -93,6 +95,10 @@ const TOKEN_KINDS = new Set<string>([
   'pronunciation',
   'unknown',
 ]);
+
+// The tags an editor without tools still explains on hover: the ones it
+// does not read.
+const UNKNOWN_KINDS = new Set<string>(['unknown']);
 
 // Zero-width space: an empty line needs a glyph to take up its line.
 const EMPTY_LINE = String.fromCharCode(0x200b);
@@ -208,9 +214,10 @@ function splitLines(
   headings: boolean,
   voices: readonly string[] | undefined,
   chapterBands: boolean,
+  unsupported: readonly MarkupKind[] | undefined,
 ): LineSegment[][] {
   const lines: LineSegment[][] = [[]];
-  for (const segment of tokenizeMarkup(text, { headings })) {
+  for (const segment of tokenizeMarkup(text, { headings, unsupported })) {
     const className = markClass(segment, voices, chapterBands);
     segment.text.split('\n').forEach((part, index) => {
       if (index > 0) lines.push([]);
@@ -388,6 +395,7 @@ function hitTest(
   model: Model,
   x: number,
   y: number,
+  kinds: ReadonlySet<string> = TOKEN_KINDS,
 ): Hit | null | undefined {
   const bounds = overlay.getBoundingClientRect();
   if (!bounds.width || !bounds.height) return undefined;
@@ -405,7 +413,7 @@ function hitTest(
   if (!line || top < line.offsetTop || top >= line.offsetTop + line.offsetHeight) return null;
   const lineHeight = parseFloat(getComputedStyle(line).lineHeight) || 0;
   for (const mark of line.querySelectorAll<HTMLElement>('mark[data-from]')) {
-    if (!TOKEN_KINDS.has(mark.dataset.kind ?? '')) continue;
+    if (!kinds.has(mark.dataset.kind ?? '')) continue;
     for (const rect of mark.getClientRects()) {
       // The whole row counts, not only the glyphs' height.
       const lead = Math.max(0, (lineHeight - rect.height) / 2);
@@ -445,7 +453,12 @@ function clickedToken(
   return token && token.start < caret && caret < token.end ? token : null;
 }
 
-function tokenHint(t: TFunction, token: MarkupToken, locale: string): string {
+function tokenHint(
+  t: TFunction,
+  token: MarkupToken,
+  locale: string,
+  { clickable, unsupported }: { clickable: boolean; unsupported?: readonly MarkupKind[] },
+): string {
   switch (token.kind) {
     case 'voice':
       return t('editor.hint_voice', { name: voiceName(token.text) ?? '' });
@@ -474,7 +487,8 @@ function tokenHint(t: TFunction, token: MarkupToken, locale: string): string {
       });
     }
     case 'unknown':
-      return t('editor.hint_unknown');
+      if (unsupported?.includes(classifyToken(token.text))) return t('editor.hint_unsupported');
+      return t(clickable ? 'editor.hint_unknown' : 'editor.hint_unknown_static');
   }
 }
 
@@ -782,6 +796,7 @@ export function MarkupTextarea({
   voices,
   gutter = false,
   activeLine = false,
+  unsupported,
   onCaretChange,
   textStyle,
   className,
@@ -816,6 +831,11 @@ export function MarkupTextarea({
   gutter?: boolean;
   /** Band the caret's line while editing; chapter headings become full-width bands. */
   activeLine?: boolean;
+  /**
+   * Tags this page does not read (voice switches, delivery and volume on
+   * Clone and Voice Design): marked as unknown, with a hint saying so.
+   */
+  unsupported?: readonly MarkupKind[];
   /** The caret moved while the editor has focus (typing, clicks, arrow keys). */
   onCaretChange?(offset: number): void;
   /**
@@ -826,6 +846,7 @@ export function MarkupTextarea({
 }) {
   const { t, i18n } = useTranslation();
   const tools = useContext(MarkupEditorContext);
+  const spellcheck = useScriptSpellcheck();
   const input = useRef<HTMLTextAreaElement | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const rows = useRef<HTMLDivElement>(null);
@@ -834,9 +855,11 @@ export function MarkupTextarea({
   const highlight = text.length <= HIGHLIGHT_LIMIT;
   const editable = !props.disabled && !props.readOnly;
   const interactive = editable && Boolean(tools?.onTokenActivate);
+  // Without tools to open a tag, hovering still explains the ones not read.
+  const hints = interactive || (editable && Boolean(unsupported?.length));
   const lines = useMemo(
-    () => (highlight ? splitLines(text, headings, voices, activeLine) : []),
-    [text, headings, voices, activeLine, highlight],
+    () => (highlight ? splitLines(text, headings, voices, activeLine, unsupported) : []),
+    [text, headings, voices, activeLine, unsupported, highlight],
   );
   const starts = useMemo(() => lineStarts(text), [text]);
   const switches = useMemo(
@@ -943,8 +966,11 @@ export function MarkupTextarea({
     if (!element) return;
     if (hit) {
       hit.mark.setAttribute('data-hover', '');
-      element.style.cursor = 'pointer';
-      element.title = tokenHint(t, hit.token, i18n.resolvedLanguage || i18n.language);
+      if (interactive) element.style.cursor = 'pointer';
+      element.title = tokenHint(t, hit.token, i18n.resolvedLanguage || i18n.language, {
+        clickable: interactive,
+        unsupported,
+      });
     } else {
       element.style.cursor = '';
       if (title === undefined) element.removeAttribute('title');
@@ -959,8 +985,15 @@ export function MarkupTextarea({
       hoverFrame.current = 0;
       const at = pointer.current;
       showHover(
-        at && interactive && overlay.current && rows.current
-          ? (hitTest(overlay.current, rows.current, model.current, at.x, at.y) ?? null)
+        at && hints && overlay.current && rows.current
+          ? (hitTest(
+              overlay.current,
+              rows.current,
+              model.current,
+              at.x,
+              at.y,
+              interactive ? TOKEN_KINDS : UNKNOWN_KINDS,
+            ) ?? null)
           : null,
       );
     });
@@ -979,7 +1012,7 @@ export function MarkupTextarea({
     },
     [],
   );
-  useLayoutEffect(() => latest.current.scheduleHover(), [interactive]);
+  useLayoutEffect(() => latest.current.scheduleHover(), [hints]);
 
   const syncScroll = useCallback(() => {
     if (overlay.current && input.current) overlay.current.scrollTop = input.current.scrollTop;
@@ -1169,7 +1202,7 @@ export function MarkupTextarea({
         }}
         onPointerMove={(event) => {
           onPointerMove?.(event);
-          if (event.pointerType === 'touch' || (!interactive && !hovered.current)) return;
+          if (event.pointerType === 'touch' || (!hints && !hovered.current)) return;
           pointer.current = { x: event.clientX, y: event.clientY };
           scheduleHover();
         }}
@@ -1200,9 +1233,9 @@ export function MarkupTextarea({
           autoGrow ? 'relative overflow-hidden' : 'absolute inset-0 h-full overflow-y-auto',
         )}
         style={textStyle}
-        // Chromium checks every word against the system's (often English)
-        // dictionary: a Vietnamese script would be underlined end to end.
-        spellCheck={false}
+        // Settings → Spellcheck while writing (off by default): an English
+        // dictionary would underline a Vietnamese script end to end.
+        spellCheck={spellcheck}
         {...props}
         {...tools?.textareaAria}
       />

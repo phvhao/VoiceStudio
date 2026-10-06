@@ -1481,6 +1481,9 @@
     "review_mode_desc": "パイプライン ステージ間で一時停止して、ASR/翻訳出力を確認できるようにします。",
     "review_mode_on": "レビュー",
     "review_mode_off": "連射",
+    "spellcheck": "入力中にスペルチェック",
+    "spellcheck_desc": "読み上げるテキスト（台本、セリフ、書き起こし、テスト用フレーズ）で、ベトナム語と英語のつづりの誤りに下線を引きます。その他の欄は通常どおりチェックされます。",
+    "spellcheck_offline": "このシステムではオフラインでスペルチェックを使えません。ローカルの辞書が見つからず、VoiceStudio は辞書をダウンロードしません。",
     "translate_agent": "エージェント調整",
     "llmp_cli_help": "インストール済みCLIとそのログインを、エージェント修復と同じ実行機能で使用します。モデルを空欄にするとCLIの既定値を使います。応答が遅くなる場合があり、料金はCLIアカウントに従います。",
     "llmp_sdk_help": "ネイティブプロバイダーにはLiteLLMを使います。その他はprovider/modelを入力してください。BedrockはAPIキーまたはAWSプロファイル、VertexはアカウントIDをプロジェクトとしてGoogle認証情報を使用します。ベースURLは任意です。",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "「{{name}}」を削除しますか？この操作は元に戻せません。",
-    "open": "「{{name}}」を開いて現在の下書きを置き換えますか？先に作業を保存してください。",
-    "save_copy": "コピーを保存"
+    "open": "「{{name}}」を開いて現在の下書きを置き換えますか？先に作業を保存してください。"
   },
   "sidebar": {
     "save_project": "ダブプロジェクトの保存",
@@ -1824,7 +1826,6 @@
     "stemsDone": "エクスポートされた {{count}} 文字ステム",
     "format": "エクスポート形式",
     "mp3Fallback": "MP3 エンコードは利用できません。代わりに WAV をダウンロードしました。",
-    "projects": "プロジェクト",
     "newStory": "新しい物語",
     "save": "保存",
     "untitled": "題名のない物語",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "独自の速度オーバーライドを行わないすべての行の読み取り速度",
     "global_speed_overrides": "独自の速度を持つ行: {{count}}",
     "global_speed_apply": "すべての行に適用",
-    "deleteProjectConfirm": "このプロジェクトを完全に削除しますか？",
     "moveUp": "上に移動",
     "moveDown": "下に移動",
     "default_voice_hint": "キャラクターに専用の声がない行を読み上げます。",
@@ -1890,6 +1890,8 @@
     "hint_expression": "音 {{tag}} — クリックで変更、右クリックでその他",
     "hint_pronunciation": "「{{respelling}}」と読む — クリックで編集、右クリックでその他",
     "hint_unknown": "認識できないタグ（書かれたとおりに読み上げ） — クリックでオプション",
+    "hint_unknown_static": "認識できないタグ（書かれたとおりに読み上げ）",
+    "hint_unsupported": "このページでは使われません。声・読み方・音量のタグはオーディオブックとストーリーで機能します。ここではタグが書かれたとおりに読み上げられます。",
     "card_label": "タグ {{tag}}",
     "card_voice": "ここから次に声が切り替わるまで、声を切り替えます。",
     "card_voice_reset": "ここから先のテキストをデフォルトの声に戻します。",

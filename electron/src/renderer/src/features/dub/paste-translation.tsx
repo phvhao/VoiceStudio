@@ -12,6 +12,7 @@ import {
   type PasteTranslationRow,
 } from '@shared/utils/pasteTranslations';
 import type { DubSegment } from './dub-session';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 const PREVIEW_LIMIT = 120;
 
@@ -24,6 +25,7 @@ interface PasteTranslationProps {
 
 export function PasteTranslation({ segments, disabled, onApply, onClose }: PasteTranslationProps) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const fileInput = useRef<HTMLInputElement>(null);
   const [text, setText] = useState('');
   const [cues, setCues] = useState<PasteTranslationCue[] | null>(null);
@@ -100,6 +102,7 @@ export function PasteTranslation({ segments, disabled, onApply, onClose }: Paste
           autoFocus
           rows={6}
           value={text}
+          spellCheck={spellcheck}
           disabled={disabled}
           className="min-h-32 resize-y bg-background/50 leading-6"
           aria-label={t('dub.paste_translation_title')}

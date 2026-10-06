@@ -13,6 +13,7 @@ import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiJson, describeError } from '@/lib/api/client';
 import { LanguagePicker } from '@/features/clone/language-picker';
 import { LANG_CODES } from '@shared/utils/languages';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 const options = LANG_CODES.map((item) => item.label);
 const tools = [
   {
@@ -108,6 +109,7 @@ export function ToolsPage() {
 }
 function ToolForm({ tool }: { tool: Tool }) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const [text, setText] = useState('');
   const [slot, setSlot] = useState('2');
   const [language, setLanguage] = useState('English');
@@ -189,7 +191,7 @@ function ToolForm({ tool }: { tool: Tool }) {
             className="min-h-36 w-full resize-y rounded-lg border border-input bg-transparent p-3 leading-7 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             disabled={busy}
             value={text}
-            spellCheck={tool.id !== 'rate-fit'}
+            spellCheck={tool.id === 'rate-fit' ? spellcheck : undefined}
             onChange={(event) => {
               setText(event.target.value);
               setResult(null);

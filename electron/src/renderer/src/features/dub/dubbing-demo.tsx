@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { apiJson, apiPath } from '@/lib/api/client';
 import { runRendererTask } from '@/lib/global-error-recovery';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 interface DemoManifest {
   source: {
@@ -50,6 +51,7 @@ export function DubbingDemo({
   onEdit: (sample: EditableDemoVideo) => void | Promise<void>;
 }) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const [manifest, setManifest] = useState<DemoManifest | null>(null);
   const [failed, setFailed] = useState(false);
   const [language, setLanguage] = useState('es');
@@ -206,7 +208,7 @@ export function DubbingDemo({
           dir={direction}
           value={value}
           rows={3}
-          spellCheck
+          spellCheck={spellcheck}
           onChange={(event) => {
             const nextValue = event.currentTarget.value;
             setScripts((current) => ({ ...current, [code]: nextValue }));

@@ -32,9 +32,11 @@ import { ReferenceSourcePicker, ReferenceUsageNote } from './reference-input';
 import { ProfileImageEditor } from './profile-image-editor';
 import { formatRelative } from './format';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export function EditProfile({ profile, onDone }: { profile: Profile; onDone: () => void }) {
   const { t, i18n } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const prefix = useId();
   const client = useQueryClient();
   const deleteProfile = useDeleteProfile();
@@ -262,7 +264,7 @@ export function EditProfile({ profile, onDone }: { profile: Profile; onDone: () 
             value={draft[field]}
             disabled={unavailable}
             className="resize-y"
-            spellCheck={field !== 'ref_text'}
+            spellCheck={field === 'ref_text' ? spellcheck : undefined}
             onChange={(event) =>
               setDraft((previous) => ({ ...previous, [field]: event.target.value }))
             }

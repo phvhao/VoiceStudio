@@ -10,10 +10,13 @@ import './hooks/use-appearance';
 import { App } from './app';
 import { installPreloadRecovery } from './lib/preload-recovery';
 import { installGlobalErrorRecovery } from './lib/global-error-recovery';
+import { installScriptSpellcheck } from './hooks/use-script-spellcheck';
 
 installConsoleCapture();
 installGlobalErrorRecovery();
 installPreloadRecovery();
+// The dictation widget is a window of its own with no editors to check.
+if (window.location.hash !== '#/capture') installScriptSpellcheck();
 
 createRoot(document.getElementById('root')!).render(
   window.location.hash === '#/capture' ? (

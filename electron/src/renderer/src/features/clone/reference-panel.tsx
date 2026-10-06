@@ -30,6 +30,7 @@ import { selectCloneProfile, setReferenceFile, useReference } from '@/lib/store/
 import { setWorkspace } from '@/lib/store/workspace';
 import { cn } from '@/lib/utils';
 import { ReferenceSourcePicker, ReferenceUsageNote } from './reference-input';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 interface SaveProfileFormProps {
   metadata?: { refText: string; instruct: string; language: string; seed: number | null };
@@ -196,6 +197,7 @@ export function OptionalDetails({
   transcription?: ReturnType<typeof useReferenceTranscript>;
 }) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const refText = useCloneSetting('refText');
   const instruct = useCloneSetting('instruct');
   const [open, setOpen] = useState(() => Boolean(refText || instruct));
@@ -232,7 +234,7 @@ export function OptionalDetails({
               className="min-h-16 resize-y"
               onChange={(event) => setCloneSetting('refText', event.target.value)}
               placeholder={t('clone.optional')}
-              spellCheck={false}
+              spellCheck={spellcheck}
             />
             <p
               role="status"

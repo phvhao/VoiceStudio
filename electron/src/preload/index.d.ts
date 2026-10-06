@@ -212,6 +212,18 @@ export interface NativePermissions {
   accessibility?: 'granted' | 'denied';
 }
 
+/** What Settings → Spellcheck while writing checks scripts in. */
+export interface SpellcheckState {
+  /** The checker's language codes (Vietnamese and English, e.g. `vi`, `en-US`); empty while off. */
+  languages: string[];
+  /**
+   * False when this system has no local dictionary for them (Linux without
+   * Hunspell files in the profile): dictionaries are never downloaded, so
+   * nothing is underlined.
+   */
+  available: boolean;
+}
+
 export interface AuthorizedPathSelection {
   authorization: string;
   path: string;
@@ -311,6 +323,10 @@ export interface VoiceStudioBridge {
     stopTranslation(): Promise<void>;
     onTranslationEvent(callback: (event: { requestId: string; text: string }) => void): () => void;
     onEvent(callback: (event: RepairAgentEvent) => void): () => void;
+  };
+  spellcheck: {
+    /** Check script editors in Vietnamese and English, or go back to the default languages. */
+    setEnabled(enabled: boolean): Promise<SpellcheckState>;
   };
   permissions: {
     getState(): Promise<NativePermissions>;

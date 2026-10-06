@@ -42,6 +42,7 @@ import {
   type StepStatus,
 } from './twilio-parts';
 import './twilio-setup.css';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export const TWILIO_DOCS =
   'https://github.com/debpalash/VoiceStudio/blob/main/docs/integrations/twilio.md';
@@ -224,6 +225,7 @@ export function tunnelCommand(tool: 'cloudflared' | 'ngrok', target: string) {
 /** Twilio phone calls: everything stays local until the user turns calls on. */
 export function TwilioSetup({ hero, rail }: IntegrationPanelProps) {
   const { t, i18n } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const queryClient = useQueryClient();
   const router = useRouter();
   const state = useQuery({
@@ -905,7 +907,7 @@ export function TwilioSetup({ hero, rail }: IntegrationPanelProps) {
           maxLength={server.limits.max_greeting_chars}
           placeholder={t('twilioIntegration.greetingPlaceholder')}
           aria-describedby="twilio-greeting-hint"
-          spellCheck={false}
+          spellCheck={spellcheck}
           onChange={(event) => set('greeting', event.target.value)}
         />
       </Field>
@@ -920,7 +922,7 @@ export function TwilioSetup({ hero, rail }: IntegrationPanelProps) {
               rows={2}
               value={callsDraft!.disclosure}
               aria-describedby="twilio-disclosure-hint"
-              spellCheck={false}
+              spellCheck={spellcheck}
               onChange={(event) => setCalls('disclosure', event.target.value)}
             />
           </>

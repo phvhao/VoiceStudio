@@ -1483,6 +1483,9 @@
     "review_mode_desc": "Haga una pausa entre las etapas del proceso para que pueda revisar el resultado de ASR/traducción.",
     "review_mode_on": "Revisión",
     "review_mode_off": "Fuego rápido",
+    "spellcheck": "Revisar la ortografía al escribir",
+    "spellcheck_desc": "Subraya las palabras mal escritas, en vietnamita e inglés, en el texto que se lee en voz alta: guiones, líneas, transcripciones y frases de prueba. Los demás campos mantienen la revisión habitual.",
+    "spellcheck_offline": "La revisión ortográfica no está disponible sin conexión en este sistema: no se encontró ningún diccionario local y VoiceStudio nunca descarga uno.",
     "translate_agent": "Agente apto",
     "llmp_cli_help": "Usa la CLI instalada y su sesión mediante el mismo ejecutor que la reparación con agente. Deja Modelo vacío para usar el predeterminado. Puede ser más lento; el coste corresponde a tu cuenta de la CLI.",
     "llmp_sdk_help": "Los proveedores nativos usan LiteLLM. Para otros, introduce provider/model. Bedrock usa una clave API o perfil AWS; Vertex usa el ID de cuenta como proyecto y credenciales de Google. La URL base es opcional.",
@@ -1778,8 +1781,7 @@
   },
   "projectActions": {
     "delete": "¿Eliminar «{{name}}»? No se puede deshacer.",
-    "open": "¿Abrir «{{name}}» y reemplazar el borrador actual? Guarda tu trabajo primero.",
-    "save_copy": "Guardar una copia"
+    "open": "¿Abrir «{{name}}» y reemplazar el borrador actual? Guarda tu trabajo primero."
   },
   "sidebar": {
     "save_project": "Guardar proyecto de doblaje",
@@ -1829,7 +1831,6 @@
     "stemsDone": "Raíz(s) de caracteres {{count}} exportados",
     "format": "Formato de exportación",
     "mp3Fallback": "La codificación MP3 no está disponible; en su lugar, descargué WAV.",
-    "projects": "Proyectos",
     "newStory": "Nueva historia",
     "save": "Guardar",
     "untitled": "Historia sin título",
@@ -1876,7 +1877,6 @@
     "global_speed_hint": "Velocidad de lectura para todas las líneas sin su propia anulación de velocidad",
     "global_speed_overrides": "Líneas con velocidad propia: {{count}}",
     "global_speed_apply": "Usar en todas las líneas",
-    "deleteProjectConfirm": "¿Eliminar este proyecto permanentemente?",
     "moveUp": "Subir",
     "moveDown": "Bajar",
     "default_voice_hint": "Lee las líneas cuyo personaje no tiene voz propia.",
@@ -1895,6 +1895,8 @@
     "hint_expression": "Sonido {{tag}}: haz clic para cambiar, clic derecho para más",
     "hint_pronunciation": "Se lee “{{respelling}}”: haz clic para editar, clic derecho para más",
     "hint_unknown": "Etiqueta no reconocida, se lee tal cual: haz clic para ver opciones",
+    "hint_unknown_static": "Etiqueta no reconocida, se lee tal cual",
+    "hint_unsupported": "No se usa en esta página: las etiquetas de voz, entonación y volumen funcionan en Audiolibro e Historias. Aquí la etiqueta se lee tal cual.",
     "card_label": "Etiqueta {{tag}}",
     "card_voice": "Cambia la voz desde aquí hasta el próximo cambio de voz.",
     "card_voice_reset": "Devuelve el texto a la voz predeterminada desde aquí.",

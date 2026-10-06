@@ -1481,6 +1481,9 @@
     "review_mode_desc": "Machen Sie eine Pause zwischen den Pipeline-Stufen, damit Sie die ASR-/Übersetzungsausgabe überprüfen können.",
     "review_mode_on": "Rezension",
     "review_mode_off": "Schnellfeuer",
+    "spellcheck": "Rechtschreibprüfung beim Schreiben",
+    "spellcheck_desc": "Unterstreicht falsch geschriebene Wörter auf Vietnamesisch und Englisch in Text, der vorgelesen wird: Skripte, Zeilen, Transkripte und Testsätze. Andere Felder prüfen wie gewohnt.",
+    "spellcheck_offline": "Die Rechtschreibprüfung ist auf diesem System offline nicht verfügbar: Es wurde kein lokales Wörterbuch gefunden, und VoiceStudio lädt nie eines herunter.",
     "translate_agent": "Agententauglich",
     "llmp_cli_help": "Verwendet die installierte CLI und deren Anmeldung über denselben Prozess wie die Agentenreparatur. Modell leer lassen für den CLI-Standard. Antworten können langsamer sein; Kosten fallen beim CLI-Konto an.",
     "llmp_sdk_help": "Native Anbieter verwenden LiteLLM. Für andere Anbieter provider/model eingeben. Bedrock nutzt API-Schlüssel oder AWS-Profil; Vertex die Konto-ID als Projekt und Google-Anmeldedaten. Basis-URL ist optional.",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "„{{name}}“ löschen? Dies kann nicht rückgängig gemacht werden.",
-    "open": "„{{name}}“ öffnen und den aktuellen Entwurf ersetzen? Speichere zuerst deine Arbeit.",
-    "save_copy": "Kopie speichern"
+    "open": "„{{name}}“ öffnen und den aktuellen Entwurf ersetzen? Speichere zuerst deine Arbeit."
   },
   "sidebar": {
     "save_project": "Dub-Projekt speichern",
@@ -1824,7 +1826,6 @@
     "stemsDone": "Exportierte {{count}} Zeichenstämme",
     "format": "Exportformat",
     "mp3Fallback": "MP3-Kodierung nicht verfügbar – stattdessen WAV heruntergeladen.",
-    "projects": "Projekte",
     "newStory": "Neue Geschichte",
     "save": "Speichern",
     "untitled": "Geschichte ohne Titel",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "Lesegeschwindigkeit für alle Zeilen ohne eigene Geschwindigkeitsüberschreibung",
     "global_speed_overrides": "Zeilen mit eigener Geschwindigkeit: {{count}}",
     "global_speed_apply": "Für alle Zeilen verwenden",
-    "deleteProjectConfirm": "Dieses Projekt dauerhaft löschen?",
     "moveUp": "Nach oben",
     "moveDown": "Nach unten",
     "default_voice_hint": "Liest Zeilen, deren Figur keine eigene Stimme hat.",
@@ -1890,6 +1890,8 @@
     "hint_expression": "Laut {{tag}} – klicken zum Ändern, Rechtsklick für mehr",
     "hint_pronunciation": "Gelesen als „{{respelling}}“ – klicken zum Bearbeiten, Rechtsklick für mehr",
     "hint_unknown": "Unbekanntes Tag, wird wörtlich vorgelesen – klicken für Optionen",
+    "hint_unknown_static": "Unbekanntes Tag, wird wörtlich vorgelesen",
+    "hint_unsupported": "Auf dieser Seite nicht verwendet: Stimm-, Vortrags- und Lautstärke-Tags wirken in Hörbuch und Geschichten. Hier wird das Tag wörtlich vorgelesen.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Wechselt die Stimme ab hier bis zum nächsten Stimmwechsel.",
     "card_voice_reset": "Gibt den Text ab hier an die Standardstimme zurück.",

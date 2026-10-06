@@ -1483,6 +1483,9 @@
     "review_mode_desc": "Faça uma pausa entre os estágios do pipeline para poder revisar a saída de ASR/tradução.",
     "review_mode_on": "Revisão",
     "review_mode_off": "Fogo rápido",
+    "spellcheck": "Verificar a ortografia ao escrever",
+    "spellcheck_desc": "Sublinha palavras com erros, em vietnamita e inglês, no texto lido em voz alta: roteiros, falas, transcrições e frases de teste. Os outros campos mantêm a verificação habitual.",
+    "spellcheck_offline": "A verificação ortográfica não está disponível offline neste sistema: nenhum dicionário local foi encontrado, e o VoiceStudio nunca baixa um.",
     "translate_agent": "Ajuste do agente",
     "llmp_cli_help": "Usa a CLI instalada e sua sessão pelo mesmo executor do reparo com agente. Deixe Modelo vazio para usar o padrão da CLI. As respostas podem ser mais lentas; os custos seguem sua conta da CLI.",
     "llmp_sdk_help": "Provedores nativos usam LiteLLM. Para outros, insira provider/model. Bedrock usa chave de API ou perfil AWS; Vertex usa o ID da conta como projeto e credenciais do Google. A URL base é opcional.",
@@ -1775,8 +1778,7 @@
   },
   "projectActions": {
     "delete": "Excluir “{{name}}”? Esta ação não pode ser desfeita.",
-    "open": "Abrir “{{name}}” e substituir o rascunho atual? Salve seu trabalho primeiro.",
-    "save_copy": "Salvar uma cópia"
+    "open": "Abrir “{{name}}” e substituir o rascunho atual? Salve seu trabalho primeiro."
   },
   "sidebar": {
     "save_project": "Salvar projeto de dublagem",
@@ -1826,7 +1828,6 @@
     "stemsDone": "Hastes de caracteres {{count}} exportadas",
     "format": "Formato de exportação",
     "mp3Fallback": "Codificação MP3 indisponível – em vez disso, baixei WAV.",
-    "projects": "Projetos",
     "newStory": "Nova história",
     "save": "Salvar",
     "untitled": "História sem título",
@@ -1873,7 +1874,6 @@
     "global_speed_hint": "Velocidade de leitura para todas as linhas sem sua própria substituição de velocidade",
     "global_speed_overrides": "Linhas com velocidade própria: {{count}}",
     "global_speed_apply": "Usar em todas as linhas",
-    "deleteProjectConfirm": "Excluir este projeto permanentemente?",
     "moveUp": "Mover para cima",
     "moveDown": "Mover para baixo",
     "default_voice_hint": "Lê as linhas cujo personagem não tem voz própria.",
@@ -1892,6 +1892,8 @@
     "hint_expression": "Som {{tag}} — clique para trocar, botão direito para mais",
     "hint_pronunciation": "Lido como “{{respelling}}” — clique para editar, botão direito para mais",
     "hint_unknown": "Tag não reconhecida, lida em voz alta como está escrita — clique para ver opções",
+    "hint_unknown_static": "Tag não reconhecida, lida em voz alta como está escrita",
+    "hint_unsupported": "Não usada nesta página: as tags de voz, entonação e volume funcionam em Audiolivro e Histórias. Aqui a tag é lida em voz alta como está escrita.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Troca a voz daqui até a próxima troca de voz.",
     "card_voice_reset": "Devolve o texto à voz padrão daqui em diante.",

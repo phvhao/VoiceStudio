@@ -11,7 +11,7 @@ ignores.
 
 | You want | Do this | Works on |
 |---|---|---|
-| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text — on Clone and Voice Design, ⊕ Insert (or **Alt+/**) offers the Audiobook pause lengths and a custom one; tags are highlighted as you type | Every engine |
+| A pause | Type `[pause]`, `[pause 500ms]`, or `[pause 1.5s]` in the text — on Clone and Voice Design, ⊕ Insert (or **Alt+/**) offers the Audiobook pause lengths and a custom one, and typing `[` suggests pauses and reactions; tags are highlighted as you type, and voice, delivery and volume tags, which only Audiobook and Stories read, are underlined there as not used on the page (the engine would read them aloud) | Every engine |
 | Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Volume**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
 | Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
 | One passage quieter or louder (a whisper, a shout) | Wrap it in `[volume -6dB]…[/volume]` — the toolbar's **Volume** does it for the selected text — see [Voice volume](#voice-volume) | Every engine |
@@ -75,8 +75,27 @@ and column, the voice in effect at the cursor and the profile cast to read it
 are the same), the script's length, and the text size: **−** / **+**, or
 click the percentage for 80–160 %. **Ctrl/⌘ +**, **Ctrl/⌘ −**, **Ctrl/⌘ 0**
 and Ctrl+wheel change it too while the pointer or the cursor is in the
-editor; the size is remembered on this computer. The browser's spelling check
-is off in script editors, since it would underline every Vietnamese word.
+editor; the size is remembered on this computer.
+
+### Spellcheck
+
+Spellchecking is off by default in every field whose text is read aloud —
+the Audiobook and Stories editors and chapter titles, the Clone and Voice
+Design scripts, reference transcripts, voice-preview and Compare voices
+phrases, phone greetings and disclosures, workflow scripts, the speech-rate
+line in Tools, the pronunciation test line, dubbing segments and pasted
+translations — since an English dictionary would underline every Vietnamese
+word. **Settings → General → Spellcheck while writing** turns it on for all of
+them at once and checks in Vietnamese and English. Other fields (AI
+instructions, descriptions, chat, forms) keep the usual check either way.
+
+VoiceStudio never downloads a dictionary. Windows and macOS check with the
+system's own spellchecker, offline (macOS chooses its languages itself, from
+the ones installed in System Settings). On Linux the app only uses Hunspell
+dictionaries already in its profile's `Dictionaries` folder (for example
+`~/.config/VoiceStudio/Dictionaries/vi-VN-3-0.bdic`); with none there, the
+setting says that spellchecking is unavailable offline on this system and
+nothing is underlined. Right-click spelling suggestions are not offered.
 
 `# Title` starts a chapter (a chapter of the finished file). `## Title` and
 `### Title` start a section inside it: the title is read aloud without the

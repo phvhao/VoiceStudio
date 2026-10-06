@@ -51,7 +51,12 @@ import { toast } from 'sonner';
 import { Link } from '@tanstack/react-router';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { ScriptInsertMenu, useScriptInsertMenu } from '@/components/script-insert-menu';
+import {
+  SCRIPT_UNSUPPORTED_TAGS,
+  ScriptInsertMenu,
+  ScriptTagSuggestions,
+  useScriptInsertMenu,
+} from '@/components/script-insert-menu';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { useGenerateClone } from '@/hooks/use-generate';
 import { OutputPanel } from '@/features/clone/output-panel';
@@ -506,19 +511,22 @@ export function DesignPage() {
               </label>
               <ScriptInsertMenu menu={insert} setText={setScript} />
             </div>
-            <MarkupTextarea
-              id="design-script"
-              textareaRef={scriptRef}
-              className="min-h-40 flex-1"
-              textClassName="text-base leading-7"
-              value={draft.text}
-              placeholder={t('clone.prompt_placeholder')}
-              onValueChange={(text) => {
-                insert.close();
-                setScript(text);
-              }}
-              onKeyDown={insert.onEditorKeyDown}
-            />
+            <ScriptTagSuggestions menu={insert} setText={setScript}>
+              <MarkupTextarea
+                id="design-script"
+                textareaRef={scriptRef}
+                className="min-h-40 flex-1"
+                textClassName="text-base leading-7"
+                value={draft.text}
+                unsupported={SCRIPT_UNSUPPORTED_TAGS}
+                placeholder={t('clone.prompt_placeholder')}
+                onValueChange={(text) => {
+                  insert.close();
+                  setScript(text);
+                }}
+                onKeyDown={insert.onEditorKeyDown}
+              />
+            </ScriptTagSuggestions>
           </div>
           <div className="mx-auto w-full max-w-4xl shrink-0 px-6 pb-4">
             {designBlocker === 'engine' && !generation.isGenerating && (

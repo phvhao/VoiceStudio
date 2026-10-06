@@ -1483,6 +1483,9 @@
     "review_mode_desc": "Faites une pause entre les étapes du pipeline afin de pouvoir examiner le résultat ASR/traduction.",
     "review_mode_on": "Examen",
     "review_mode_off": "Tir rapide",
+    "spellcheck": "Vérifier l'orthographe pendant la saisie",
+    "spellcheck_desc": "Souligne les mots mal orthographiés, en vietnamien et en anglais, dans le texte lu à voix haute : scripts, répliques, transcriptions et phrases de test. Les autres champs gardent la vérification habituelle.",
+    "spellcheck_offline": "La vérification orthographique n'est pas disponible hors ligne sur ce système : aucun dictionnaire local n'a été trouvé, et VoiceStudio n'en télécharge jamais.",
     "translate_agent": "Ajustement des agents",
     "llmp_cli_help": "Utilise la CLI installée et sa connexion via le même exécuteur que la réparation par agent. Laissez Modèle vide pour la valeur par défaut. Les réponses peuvent être plus lentes ; les frais dépendent du compte CLI.",
     "llmp_sdk_help": "Les fournisseurs natifs utilisent LiteLLM. Pour les autres, saisissez provider/model. Bedrock utilise une clé API ou un profil AWS ; Vertex utilise l’ID de compte comme projet et les identifiants Google. L’URL de base est facultative.",
@@ -1778,8 +1781,7 @@
   },
   "projectActions": {
     "delete": "Supprimer « {{name}} » ? Cette action est irréversible.",
-    "open": "Ouvrir « {{name}} » et remplacer le brouillon actuel ? Enregistrez votre travail au préalable.",
-    "save_copy": "Enregistrer une copie"
+    "open": "Ouvrir « {{name}} » et remplacer le brouillon actuel ? Enregistrez votre travail au préalable."
   },
   "sidebar": {
     "save_project": "Enregistrer le projet de doublage",
@@ -1829,7 +1831,6 @@
     "stemsDone": "Tige(s) de caractère {{count}} exportée(s)",
     "format": "Format d'exportation",
     "mp3Fallback": "Encodage MP3 indisponible – téléchargé WAV à la place.",
-    "projects": "Projets",
     "newStory": "Nouvelle histoire",
     "save": "Enregistrer",
     "untitled": "Histoire sans titre",
@@ -1876,7 +1877,6 @@
     "global_speed_hint": "Vitesse de lecture pour toutes les lignes sans leur propre priorité de vitesse",
     "global_speed_overrides": "Lignes avec leur propre vitesse : {{count}}",
     "global_speed_apply": "Appliquer à toutes les lignes",
-    "deleteProjectConfirm": "Supprimer définitivement ce projet ?",
     "moveUp": "Monter",
     "moveDown": "Descendre",
     "default_voice_hint": "Lit les lignes dont le personnage n’a pas de voix propre.",
@@ -1895,6 +1895,8 @@
     "hint_expression": "Son {{tag}} — cliquez pour changer, clic droit pour plus",
     "hint_pronunciation": "Lu « {{respelling}} » — cliquez pour modifier, clic droit pour plus",
     "hint_unknown": "Balise non reconnue, lue telle quelle — cliquez pour les options",
+    "hint_unknown_static": "Balise non reconnue, lue telle quelle",
+    "hint_unsupported": "Non utilisée sur cette page : les balises de voix, de diction et de volume fonctionnent dans Livre audio et Histoires. Ici, la balise est lue telle quelle.",
     "card_label": "Balise {{tag}}",
     "card_voice": "Change de voix à partir d’ici jusqu’au prochain changement de voix.",
     "card_voice_reset": "Rend le texte à la voix par défaut à partir d’ici.",

@@ -52,6 +52,9 @@ metadata and the backend fallback mirror it.
 - Plain-text and EPUB imports with CRLF or CR line endings no longer leave stray carriage returns in chapter text
 - Clone and Voice Design color pauses and expressions in the script, and Insert (Alt+/) adds the Audiobook pause lengths or a custom one above the expressions
 - Script and transcript boxes across the app (Clone, Voice Design, voice previews, Compare voices, phone greetings, workflow scripts) no longer underline every Vietnamese word as a spelling mistake
+- Settings → General → Spellcheck while writing (off by default) checks scripts, lines, transcripts and test phrases in Vietnamese and English; dubbing segments and pasted translations, always checked before, follow it too
+- Spellchecking never downloads a dictionary: Windows and macOS check offline with the system's checker, and Linux uses only dictionaries already on the computer
+- Typing [ in Clone and Voice Design suggests pauses and reactions, and voice, delivery and volume tags there are underlined as not used on the page
 
 ## [0.5.7] — 2026-10-05
 

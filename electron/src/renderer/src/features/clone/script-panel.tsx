@@ -11,7 +11,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { ScriptInsertMenu, useScriptInsertMenu } from '@/components/script-insert-menu';
+import {
+  SCRIPT_UNSUPPORTED_TAGS,
+  ScriptInsertMenu,
+  ScriptTagSuggestions,
+  useScriptInsertMenu,
+} from '@/components/script-insert-menu';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
 import { SectionLabel } from './section-label';
@@ -220,25 +225,28 @@ export function ScriptPanel({
             <span>{coachmark}</span>
           </div>
         ) : null}
-        <MarkupTextarea
-          data-clone-script
-          textareaRef={textareaRef}
-          value={text}
-          onValueChange={(value) => {
-            insert.close();
-            onUserEdit?.();
-            setCloneSetting('text', value);
-          }}
-          placeholder={
-            voiceName
-              ? t('cloneFlow.prompt_named', { name: voiceName })
-              : t('clone.prompt_placeholder')
-          }
-          aria-label={t('clone.text_label')}
-          className="min-h-32 flex-1"
-          textClassName="py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
-          onKeyDown={insert.onEditorKeyDown}
-        />
+        <ScriptTagSuggestions menu={insert} setText={(value) => setCloneSetting('text', value)}>
+          <MarkupTextarea
+            data-clone-script
+            textareaRef={textareaRef}
+            value={text}
+            unsupported={SCRIPT_UNSUPPORTED_TAGS}
+            onValueChange={(value) => {
+              insert.close();
+              onUserEdit?.();
+              setCloneSetting('text', value);
+            }}
+            placeholder={
+              voiceName
+                ? t('cloneFlow.prompt_named', { name: voiceName })
+                : t('clone.prompt_placeholder')
+            }
+            aria-label={t('clone.text_label')}
+            className="min-h-32 flex-1"
+            textClassName="py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
+            onKeyDown={insert.onEditorKeyDown}
+          />
+        </ScriptTagSuggestions>
         <div className="flex justify-end">
           <span className="text-[length:var(--text-label)] text-muted-foreground tabular-nums">
             {t('clone.characters', { count: text.length })}

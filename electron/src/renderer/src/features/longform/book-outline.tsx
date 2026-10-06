@@ -31,6 +31,7 @@ import {
   type OutlineNode,
 } from './script-outline';
 import type { MarkupEdit } from './script-markup';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export type ChapterStatus = 'rendered' | 'changed' | 'not_rendered';
 
@@ -110,6 +111,7 @@ export function BookOutline({
   className?: string;
 }) {
   const { t, i18n } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const queryClient = useQueryClient();
   const formatCount = (value: number) =>
     value.toLocaleString(i18n.resolvedLanguage || i18n.language);
@@ -239,7 +241,7 @@ export function BookOutline({
           {editing ? (
             <Input
               autoFocus
-              spellCheck={false}
+              spellCheck={spellcheck}
               defaultValue={node.title ?? ''}
               aria-label={t('book.rename_title', { title })}
               className="h-7 w-full text-sm"

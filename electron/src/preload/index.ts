@@ -46,6 +46,9 @@ const bridge: VoiceStudioBridge = {
     onTranslationEvent: (callback) => subscribe('repair:translationEvent', callback),
     onEvent: (callback) => subscribe<RepairAgentEvent>('repair:event', callback),
   },
+  spellcheck: {
+    setEnabled: (enabled) => ipcRenderer.invoke('spellcheck:setEnabled', enabled),
+  },
   permissions: {
     getState: () => ipcRenderer.invoke('permissions:getState'),
     openSettings: (kind) => ipcRenderer.invoke('permissions:openSettings', kind),

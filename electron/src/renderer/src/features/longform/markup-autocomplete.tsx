@@ -63,7 +63,9 @@ export interface Suggestion {
   profile?: TagProfile;
 }
 
-const GROUP_LABELS: Record<Suggestion['group'], string> = {
+export type SuggestionGroup = Suggestion['group'];
+
+const GROUP_LABELS: Record<SuggestionGroup, string> = {
   voice: 'audiobook.insert_voice',
   pause: 'audiobook.insert_pause',
   delivery: 'context.delivery',
@@ -71,25 +73,34 @@ const GROUP_LABELS: Record<Suggestion['group'], string> = {
   expression: 'audiobook.insert_reactions',
 };
 
+/** The voices a script can switch to; a single-voice editor has none. */
+type VoiceContext = Partial<Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>>;
+
+const NO_NAMES: string[] = [];
+const NO_PROFILES: TagProfile[] = [];
+const NO_CAST: Record<string, string> = {};
+
 /**
  * Every tag the suggestions can offer, in list order: the script's voices, the
  * way back to the default voice and the profiles not reached through a name
- * yet, then pauses, delivery pairs and expressions.
+ * yet, then pauses, delivery pairs and expressions — only those of `groups`
+ * when given (a page that reads pauses and expressions only).
  */
 export function tagSuggestions(
   t: TFunction,
   {
-    scriptNames,
-    profiles,
-    voiceCast,
-  }: Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>,
+    scriptNames = NO_NAMES,
+    profiles = NO_PROFILES,
+    voiceCast = NO_CAST,
+    groups,
+  }: VoiceContext & { groups?: readonly SuggestionGroup[] },
   locale?: string,
 ): Suggestion[] {
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
   // A name cast to a profile (or, in older Stories scripts, a profile id
   // itself) already reaches that profile.
   const reached = new Set(scriptNames.map((name) => castVoice(voiceCast, name) || name));
-  return [
+  const all: Suggestion[] = [
     ...scriptNames.map((name): Suggestion => ({
       key: `voice:${name}`,
       group: 'voice',
@@ -146,6 +157,7 @@ export function tagSuggestions(
       })),
     ),
   ];
+  return groups ? all.filter((item) => groups.includes(item.group)) : all;
 }
 
 /**
@@ -201,16 +213,18 @@ export function useMarkupAutocomplete({
   scriptNames,
   voiceCast,
   onVoiceCast,
+  groups,
   disabled,
   onOpen,
-}: Pick<
-  TagToolProps,
-  'getTarget' | 'headings' | 'profiles' | 'scriptNames' | 'voiceCast' | 'onVoiceCast'
-> & {
-  disabled: boolean;
-  /** The list has just been shown. */
-  onOpen(): void;
-}) {
+}: Pick<TagToolProps, 'getTarget' | 'headings'> &
+  VoiceContext &
+  Partial<Pick<TagToolProps, 'onVoiceCast'>> & {
+    /** Offer only these kinds of tag; every kind by default. */
+    groups?: readonly SuggestionGroup[];
+    disabled: boolean;
+    /** The list has just been shown. */
+    onOpen(): void;
+  }) {
   const { t, i18n } = useTranslation();
   const listId = useId();
   const [state, setState] = useState<Suggesting | null>(null);
@@ -224,8 +238,8 @@ export function useMarkupAutocomplete({
   const typing = query !== undefined;
   const locale = i18n.resolvedLanguage || i18n.language;
   const all = useMemo(
-    () => (typing ? tagSuggestions(t, { scriptNames, profiles, voiceCast }, locale) : []),
-    [typing, t, scriptNames, profiles, voiceCast, locale],
+    () => (typing ? tagSuggestions(t, { scriptNames, profiles, voiceCast, groups }, locale) : []),
+    [typing, t, scriptNames, profiles, voiceCast, groups, locale],
   );
   const items = useMemo(
     () => (query === undefined ? [] : matchSuggestions(all, query)),
@@ -270,9 +284,11 @@ export function useMarkupAutocomplete({
         ? typedTagAt(element.value, element.selectionStart, { headings })
         : null;
     if (!typed) return;
-    const insert = item.profile
-      ? voiceToken(castProfileVoice(item.profile, voiceCast, onVoiceCast))
-      : item.open;
+    // A chosen profile is cast under its name where the editor keeps a cast.
+    const insert =
+      item.profile && onVoiceCast
+        ? voiceToken(castProfileVoice(item.profile, voiceCast ?? NO_CAST, onVoiceCast))
+        : item.open;
     applyMarkupEdit(target, (value) => completeTag(value, typed, insert, item.close));
   };
 
@@ -420,7 +436,7 @@ export function MarkupAutocomplete({
   // Mounted only while shown, and gone at once when closed: a list that
   // lingered to animate out would still be there for the next keystroke.
   if (!open) return null;
-  const groups: { group: Suggestion['group']; first: number; items: Suggestion[] }[] = [];
+  const groups: { group: SuggestionGroup; first: number; items: Suggestion[] }[] = [];
   items.forEach((item, index) => {
     const last = groups[groups.length - 1];
     if (last?.group === item.group) last.items.push(item);

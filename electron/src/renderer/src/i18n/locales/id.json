@@ -1481,6 +1481,9 @@
     "review_mode_desc": "Jeda di antara tahapan alur sehingga Anda dapat meninjau ASR/output terjemahan.",
     "review_mode_on": "Ulasan",
     "review_mode_off": "Tembakan cepat",
+    "spellcheck": "Periksa ejaan saat menulis",
+    "spellcheck_desc": "Menggarisbawahi kata yang salah eja, dalam bahasa Vietnam dan Inggris, pada teks yang dibacakan: skrip, baris, transkrip, dan frasa uji. Kolom lain tetap memakai pemeriksaan biasa.",
+    "spellcheck_offline": "Pemeriksaan ejaan tidak tersedia secara offline di sistem ini: tidak ditemukan kamus lokal, dan VoiceStudio tidak pernah mengunduhnya.",
     "translate_agent": "Agen cocok",
     "llmp_cli_help": "Menggunakan CLI terpasang dan loginnya melalui pelaksana yang sama dengan perbaikan agen. Kosongkan Model untuk bawaan CLI. Respons mungkin lebih lambat; biaya mengikuti akun CLI.",
     "llmp_sdk_help": "Penyedia native memakai LiteLLM. Untuk penyedia lain, masukkan provider/model. Bedrock memakai kunci API atau profil AWS; Vertex memakai ID akun sebagai proyek dan kredensial Google. URL dasar opsional.",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "Hapus “{{name}}”? Tindakan ini tidak dapat dibatalkan.",
-    "open": "Buka “{{name}}” dan ganti draf saat ini? Simpan pekerjaan Anda terlebih dahulu.",
-    "save_copy": "Simpan salinan"
+    "open": "Buka “{{name}}” dan ganti draf saat ini? Simpan pekerjaan Anda terlebih dahulu."
   },
   "sidebar": {
     "save_project": "Simpan Proyek Dub",
@@ -1824,7 +1826,6 @@
     "stemsDone": "Batang karakter {{count}} yang diekspor",
     "format": "Format ekspor",
     "mp3Fallback": "Enkode MP3 tidak tersedia — unduh WAV sebagai gantinya.",
-    "projects": "Proyek",
     "newStory": "Cerita baru",
     "save": "Simpan",
     "untitled": "Cerita tanpa judul",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "Kecepatan membaca untuk semua lini tanpa mengesampingkan kecepatannya sendiri",
     "global_speed_overrides": "Baris dengan kecepatan sendiri: {{count}}",
     "global_speed_apply": "Gunakan untuk semua baris",
-    "deleteProjectConfirm": "Hapus proyek ini secara permanen?",
     "moveUp": "Pindah ke atas",
     "moveDown": "Pindah ke bawah",
     "default_voice_hint": "Membacakan baris yang karakternya tidak punya suara sendiri.",
@@ -1890,6 +1890,8 @@
     "hint_expression": "Suara ekspresi {{tag}} — klik untuk mengganti, klik kanan untuk opsi lain",
     "hint_pronunciation": "Dibaca “{{respelling}}” — klik untuk mengedit, klik kanan untuk opsi lain",
     "hint_unknown": "Tag tidak dikenal, dibacakan apa adanya — klik untuk opsi",
+    "hint_unknown_static": "Tag tidak dikenal, dibacakan apa adanya",
+    "hint_unsupported": "Tidak dipakai di halaman ini: tag suara, gaya baca, dan volume berfungsi di Buku Audio dan Cerita. Di sini tag dibacakan apa adanya.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Mengganti suara mulai dari sini hingga pergantian suara berikutnya.",
     "card_voice_reset": "Mengembalikan teks ke suara default mulai dari sini.",

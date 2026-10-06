@@ -18,6 +18,7 @@ import { apiFetch, apiJson, describeError } from '@/lib/api/client';
 import { isImeComposing } from '@/lib/ime';
 import { saveLocalFile } from '@/lib/local-export';
 import { SettingsRow, SettingsSection } from './settings-layout';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 type PronunciationType = 'respelling' | 'ipa' | 'cmu';
 
@@ -44,6 +45,7 @@ const TYPES: PronunciationType[] = ['respelling', 'ipa', 'cmu'];
 
 export function PronunciationSettings() {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const client = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
   const [term, setTerm] = useState('');
@@ -344,6 +346,7 @@ export function PronunciationSettings() {
         </Select>
         <Input
           value={testText}
+          spellCheck={spellcheck}
           placeholder={t('pronunciation.test_placeholder')}
           aria-label={t('pronunciation.test_label')}
           className="min-w-64 flex-1 @2xl:max-w-xl"

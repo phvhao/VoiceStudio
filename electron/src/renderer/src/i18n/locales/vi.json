@@ -1481,6 +1481,9 @@
     "review_mode_desc": "Tạm dừng giữa các giai đoạn quy trình để bạn có thể xem lại đầu ra ASR/bản dịch.",
     "review_mode_on": "Xem lại",
     "review_mode_off": "Bắn nhanh",
+    "spellcheck": "Kiểm tra chính tả khi viết",
+    "spellcheck_desc": "Gạch chân từ viết sai, bằng tiếng Việt và tiếng Anh, trong văn bản được đọc thành lời: kịch bản, lời thoại, bản chép lời và câu thử. Các ô khác vẫn kiểm tra như thường.",
+    "spellcheck_offline": "Không thể kiểm tra chính tả ngoại tuyến trên hệ thống này: không tìm thấy từ điển trên máy, và VoiceStudio không bao giờ tải từ điển về.",
     "translate_agent": "Điều chỉnh bằng tác nhân",
     "llmp_cli_help": "Dùng CLI đã cài và phiên đăng nhập qua cùng bộ chạy với tính năng sửa bằng tác nhân. Để trống Mô hình để dùng mặc định của CLI. Phản hồi có thể chậm hơn; phí tính theo tài khoản CLI.",
     "llmp_sdk_help": "Nhà cung cấp gốc dùng LiteLLM. Với nhà cung cấp khác, nhập provider/model. Bedrock dùng khóa API hoặc hồ sơ AWS; Vertex dùng ID tài khoản làm dự án và thông tin xác thực Google. URL cơ sở là tùy chọn.",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "Xóa “{{name}}”? Không thể hoàn tác thao tác này.",
-    "open": "Mở “{{name}}” và thay thế bản nháp hiện tại? Hãy lưu công việc trước.",
-    "save_copy": "Lưu bản sao"
+    "open": "Mở “{{name}}” và thay thế bản nháp hiện tại? Hãy lưu công việc trước."
   },
   "sidebar": {
     "save_project": "Lưu dự án lồng tiếng",
@@ -1824,7 +1826,6 @@
     "stemsDone": "Đã xuất {{count}} gốc ký tự",
     "format": "Định dạng xuất",
     "mp3Fallback": "Không có mã hóa MP3 — thay vào đó, hãy tải xuống WAV.",
-    "projects": "Dự án",
     "newStory": "Câu chuyện mới",
     "save": "Lưu",
     "untitled": "Truyện không tên",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "Tốc độ đọc cho tất cả các dòng mà không cần ghi đè tốc độ riêng",
     "global_speed_overrides": "Số dòng có tốc độ riêng: {{count}}",
     "global_speed_apply": "Dùng cho mọi dòng",
-    "deleteProjectConfirm": "Xóa vĩnh viễn dự án này?",
     "moveUp": "Di chuyển lên",
     "moveDown": "Di chuyển xuống",
     "default_voice_hint": "Đọc các dòng mà nhân vật chưa có giọng riêng.",
@@ -1890,6 +1890,8 @@
     "hint_expression": "Âm thanh {{tag}} — nhấp để đổi, nhấp chuột phải để xem thêm",
     "hint_pronunciation": "Đọc là “{{respelling}}” — nhấp để sửa, nhấp chuột phải để xem thêm",
     "hint_unknown": "Tag không nhận ra, sẽ được đọc thành lời — nhấp để xem tùy chọn",
+    "hint_unknown_static": "Tag không nhận ra, sẽ được đọc thành lời",
+    "hint_unsupported": "Không dùng trên trang này: tag giọng, cách đọc và âm lượng chỉ có tác dụng trong Sách nói và Truyện. Ở đây tag sẽ được đọc thành lời.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Đổi giọng đọc từ đây đến lần đổi giọng tiếp theo.",
     "card_voice_reset": "Trả phần văn bản từ đây về giọng mặc định.",

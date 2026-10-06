@@ -139,6 +139,7 @@ import {
   skipFailedDubTranslations,
   planDubIncremental,
 } from './dub-session';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 const DEFAULT_TRANSLATION_AGENT_KEY = 'voicestudio.defaultTranslationAgent';
 const LIVE_PREVIEW_KEY = 'voicestudio.dubLivePreview';
@@ -211,6 +212,7 @@ export function fingerprintRevision(values?: Record<string, string>) {
 
 export function DubPage() {
   const { t, i18n } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const reviewMode = useReviewMode();
   const session = useDubSession();
   const cancelling = useDubCancelling();
@@ -2599,6 +2601,7 @@ export function DubPage() {
                                 aria-label={t('clone.text_label') + ' ' + (index + 1)}
                                 rows={1}
                                 autoFocus
+                                spellCheck={spellcheck}
                                 className="min-h-8 max-h-32 w-full resize-y overflow-y-auto rounded-md border border-input bg-background/35 px-2 py-1 text-sm leading-5 outline-none transition-[background-color,border-color,box-shadow] [field-sizing:content] focus-visible:ring-2 focus-visible:ring-ring"
                                 disabled={busy || Boolean(session.recovery)}
                                 value={segment.text}

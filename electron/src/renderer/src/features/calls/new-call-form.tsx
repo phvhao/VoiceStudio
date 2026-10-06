@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import type { Profile } from '@/lib/api/types';
 import { normalizePhone, phoneCountry, phoneProblem } from './phone';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export const MAX_MINUTES_CHOICES = [2, 5, 10, 15, 30] as const;
 
@@ -80,6 +81,7 @@ export function NewCallForm({
   onStart: (request: StartRequest) => void | Promise<void>;
 }) {
   const { t, i18n } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const ids = useId();
   const [touched, setTouched] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -257,7 +259,7 @@ export function NewCallForm({
             rows={2}
             value={disclosure}
             aria-describedby={`${ids}-disclosure-locked`}
-            spellCheck={false}
+            spellCheck={spellcheck}
             onChange={(event) => set('disclosure', event.target.value)}
           />
         ) : null}

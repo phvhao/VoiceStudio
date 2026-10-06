@@ -15,9 +15,11 @@ import SearchableSelect from '@shared/components/SearchableSelect';
 import { deleteWorkflowArtifacts, saveWorkflowMedia } from './workflow-run-store';
 import { CONDITION_MATCHES } from './workflow-model';
 import type { ConditionMatch, WorkflowStep } from './workflow-model';
+import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export function WorkflowInputs({ step, onChange }: { step: WorkflowStep; onChange(change: Partial<WorkflowStep>): void }) {
   const { t } = useTranslation();
+  const spellcheck = useScriptSpellcheck();
   const profiles = useProfiles();
   const input = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
@@ -103,7 +105,7 @@ export function WorkflowInputs({ step, onChange }: { step: WorkflowStep; onChang
   return <>
     <label htmlFor="workflow-scripts">{t('workflowRun.scripts')}</label>
     <p className="text-xs text-muted-foreground">{t('workflowRun.scripts_hint')}</p>
-    {!step.scripts?.length && <Textarea id="workflow-scripts" value={step.text} rows={9} maxLength={20_000} spellCheck={false}
+    {!step.scripts?.length && <Textarea id="workflow-scripts" value={step.text} rows={9} maxLength={20_000} spellCheck={spellcheck}
       onChange={(event) => onChange({ text: event.target.value })} />}
     {step.scripts?.map((script, index) => <div key={index} className="flex items-center justify-between text-xs gap-2">
       <span className="truncate">{script.name}</span><Button size="icon-xs" variant="ghost" aria-label={t('common.delete')} onClick={() => onChange({ scripts: step.scripts!.filter((_, i) => i !== index) })}><XIcon /></Button>

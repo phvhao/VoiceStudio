@@ -1481,6 +1481,9 @@
     "review_mode_desc": "Pauzeer tussen pijplijnfasen, zodat u de ASR-/vertaaluitvoer kunt bekijken.",
     "review_mode_on": "Beoordeling",
     "review_mode_off": "Snelvuur",
+    "spellcheck": "Spellingcontrole tijdens het typen",
+    "spellcheck_desc": "Onderstreept verkeerd gespelde woorden, in het Vietnamees en Engels, in tekst die wordt voorgelezen: scripts, regels, afschriften en testzinnen. Andere velden houden de gewone controle.",
+    "spellcheck_offline": "Spellingcontrole is offline niet beschikbaar op dit systeem: er is geen lokaal woordenboek gevonden en VoiceStudio downloadt er nooit een.",
     "translate_agent": "Agent geschikt",
     "llmp_cli_help": "Gebruikt de geïnstalleerde CLI en aanmelding via dezelfde uitvoerder als agentreparatie. Laat Model leeg voor de CLI-standaard. Antwoorden kunnen trager zijn; kosten vallen onder je CLI-account.",
     "llmp_sdk_help": "Native providers gebruiken LiteLLM. Voer voor andere providers provider/model in. Bedrock gebruikt een API-sleutel of AWS-profiel; Vertex gebruikt Account-ID als project en Google-inloggegevens. Basis-URL is optioneel.",
@@ -1773,8 +1776,7 @@
   },
   "projectActions": {
     "delete": "‘{{name}}’ verwijderen? Dit kan niet ongedaan worden gemaakt.",
-    "open": "‘{{name}}’ openen en het huidige concept vervangen? Sla je werk eerst op.",
-    "save_copy": "Kopie opslaan"
+    "open": "‘{{name}}’ openen en het huidige concept vervangen? Sla je werk eerst op."
   },
   "sidebar": {
     "save_project": "Dub-project opslaan",
@@ -1824,7 +1826,6 @@
     "stemsDone": "Geëxporteerde {{count}} tekenstam(men)",
     "format": "Formaat exporteren",
     "mp3Fallback": "MP3-codering niet beschikbaar - in plaats daarvan WAV gedownload.",
-    "projects": "Projecten",
     "newStory": "Nieuw verhaal",
     "save": "Opslaan",
     "untitled": "Naamloos verhaal",
@@ -1871,7 +1872,6 @@
     "global_speed_hint": "Leessnelheid voor alle lijnen zonder hun eigen snelheidsoverschrijving",
     "global_speed_overrides": "Regels met eigen snelheid: {{count}}",
     "global_speed_apply": "Voor alle regels gebruiken",
-    "deleteProjectConfirm": "Dit project permanent verwijderen?",
     "moveUp": "Omhoog",
     "moveDown": "Omlaag",
     "default_voice_hint": "Leest regels waarvan het personage geen eigen stem heeft.",
@@ -1890,6 +1890,8 @@
     "hint_expression": "Geluid {{tag}} — klik om te wijzigen, rechtsklik voor meer",
     "hint_pronunciation": "Uitgesproken als ‘{{respelling}}’ — klik om te bewerken, rechtsklik voor meer",
     "hint_unknown": "Onbekende tag, wordt voorgelezen zoals geschreven — klik voor opties",
+    "hint_unknown_static": "Onbekende tag, wordt voorgelezen zoals geschreven",
+    "hint_unsupported": "Niet gebruikt op deze pagina: stem-, voordracht- en volumetags werken in Audioboek en Verhalen. Hier wordt de tag voorgelezen zoals hij geschreven staat.",
     "card_label": "Tag {{tag}}",
     "card_voice": "Wisselt vanaf hier van stem tot de volgende stemwissel.",
     "card_voice_reset": "Geeft de tekst vanaf hier terug aan de standaardstem.",
