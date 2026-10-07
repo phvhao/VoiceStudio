@@ -19,11 +19,13 @@ the search box. **Add a new voice** stays one row (Upload audio, Record and the
 5–15 s hint) until one of them is pressed or audio is dragged over the window;
 a library without voices shows the drop zone and recorder at once.
 
-Clone and Voice Design share one script frame: the editor column widens with
-the window up to 72rem and takes the height left over, its status line counts
-characters, words and sentences and estimates the time read aloud (at the voice
-controls' speed), and Ctrl/⌘ + − 0 or Ctrl+wheel in it size the script's text
-(the same per-viewer size as the Audiobook editor). Generation controls stay
+Clone and Voice Design share one script frame: the editor column fills the
+window and takes the height left over, its status line counts characters,
+words and sentences and estimates the time read aloud (at the voice controls'
+speed), **Reading width** / **Fit frame** beside the zoom keep the script's
+lines to about 100 characters, centred, or run them the frame's full width,
+and Ctrl/⌘ + − 0 or Ctrl+wheel in it size the script's text (the same
+per-viewer size and line width as the Audiobook editor). Generation controls stay
 anchored under the editor. Preserve this layout when polishing visuals rather
 than moving the primary action. **Focus** hides the sidebar, the workspace's own
 panes and the takes until Esc, Focus again, opening a pane, or leaving the page.

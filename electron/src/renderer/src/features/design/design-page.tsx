@@ -657,7 +657,7 @@ export function DesignPage() {
               </div>
             </div>
             <ScriptEditorFrame className="min-h-32" text={draft.text} speed={speed}>
-              {(textStyle) => (
+              {(textStyle, measure) => (
                 <ScriptTagTools
                   menu={insert}
                   setText={setScript}
@@ -670,6 +670,7 @@ export function DesignPage() {
                     className="min-h-24 flex-1"
                     textClassName="px-4 py-3 text-base leading-7 placeholder:text-muted-foreground"
                     textStyle={textStyle}
+                    measure={measure}
                     value={draft.text}
                     unsupported={SCRIPT_UNSUPPORTED_TAGS}
                     placeholder={t('clone.prompt_placeholder')}

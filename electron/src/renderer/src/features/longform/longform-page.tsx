@@ -20,7 +20,8 @@ import { ConfirmDialog } from '../clone/confirm-dialog';
 import { MarkupToolbar } from './markup-toolbar';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupEditorTools } from './markup-editor-tools';
-import { EditorStatusBar, createCaretSource } from './editor-status-bar';
+import { measureWidth, useEditorMeasure } from './editor-measure';
+import { EditorStatusBar, MeasureToggle, createCaretSource } from './editor-status-bar';
 import { passageBounds, previewPassage } from './script-markup';
 import { usePassagePreview } from './passage-preview';
 import { usePreviewLock, usePreviewSettings, useRetakeHearing } from './preview-run';
@@ -165,6 +166,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
   // Ctrl/⌘ +, −, 0 and Ctrl+wheel size the script's text while in its frame.
   const editorFrame = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useEditorZoom();
+  const [measure, setMeasure] = useEditorMeasure();
   useEditorZoomInput(editorFrame);
   const locked = !!active || importing;
   const scriptLines = scriptSize(mode, draft);
@@ -411,9 +413,13 @@ export function LongformPage({ mode }: { mode: Mode }) {
           onCollapsedChange={setSidebarCollapsed}
         />
         <section className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-4 px-6 py-5">
+          {/* The column fills the room beside the setup pane: the editor's
+              text keeps to its reading measure inside the frame, and the
+              contents rail takes a share of a wide one. */}
+          <div className="flex w-full min-h-0 flex-1 flex-col gap-4 px-6 py-5">
             <div className="flex items-center justify-between gap-3">
-              <div>
+              {/* The actions keep together at the end of a wide column. */}
+              <div className="me-auto">
                 <h2 className="flex items-center gap-2 text-sm font-medium">
                   <BookOpenTextIcon className="size-4 text-muted-foreground" />
                   {t('clone.script')}
@@ -614,6 +620,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                       className="min-h-96 flex-1"
                       textClassName="px-4 py-3"
                       textStyle={zoomedText(zoom, 1, 1.75)}
+                      measure={measureWidth(measure)}
                       value={draft.script}
                       placeholder={t('audiobook.script_placeholder')}
                       disabled={locked}
@@ -633,26 +640,44 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   loading={profilesLoading}
                   defaultVoiceName={defaultVoice?.name}
                   stats={statsLine}
+                  measure={measure}
+                  onMeasureChange={setMeasure}
                   zoom={zoom}
                   onZoomChange={setZoom}
                 />
               </div>
             ) : (
-              <StoryEditor
-                draft={draft}
-                profiles={profiles}
-                profilesLoading={profilesLoading}
-                disabled={locked}
-                canSynthesize={ttsBlocker === null}
-                retakes={canRetake ? retakes : undefined}
-                onChange={set}
-                onBusy={setImporting}
-                previews={previews}
-                previewSettings={previewSettings}
-              />
+              // A story's lines are cards: at the reading width their column
+              // keeps to the measure, centred, instead of each card's text.
+              <div
+                data-slot="story-measure"
+                data-measure={measure}
+                className={cn(
+                  'flex w-full flex-1 flex-col',
+                  measure === 'reading' && 'mx-auto max-w-[calc(100ch+4rem)]',
+                )}
+              >
+                <StoryEditor
+                  draft={draft}
+                  profiles={profiles}
+                  profilesLoading={profilesLoading}
+                  disabled={locked}
+                  canSynthesize={ttsBlocker === null}
+                  retakes={canRetake ? retakes : undefined}
+                  onChange={set}
+                  onBusy={setImporting}
+                  previews={previews}
+                  previewSettings={previewSettings}
+                />
+              </div>
             )}
             {/* Audiobook shows these in its editor's status bar. */}
-            {mode === 'stories' && <p className="text-xs text-muted-foreground">{statsLine}</p>}
+            {mode === 'stories' && (
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <p className="min-w-0">{statsLine}</p>
+                <MeasureToggle measure={measure} onChange={setMeasure} className="ms-auto" />
+              </div>
+            )}
             {warningsDismissedFor !== settledScript && warnings.length > 0 && !active && (
               <ValidationWarnings
                 warnings={warnings}

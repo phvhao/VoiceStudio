@@ -203,6 +203,46 @@ describe('overlay', () => {
     expect(script().style.lineHeight).toBe('1.4rem');
   });
 
+  it('centres a reading measure with the same padding on both layers', () => {
+    const { container, rerender } = render(
+      <MarkupTextarea
+        aria-label="Script"
+        value="Hello"
+        onValueChange={() => {}}
+        textStyle={{ fontSize: '1.2rem', lineHeight: '2.1rem' }}
+        measure="100ch"
+        gutter
+      />,
+    );
+    const wrapper = container.querySelector<HTMLElement>('[data-slot="markup-textarea"]')!;
+    const overlay = container.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+    // The room is in the wrapper's units, so it is a container.
+    expect(wrapper).toHaveClass('@container');
+    for (const layer of [overlay, script()]) {
+      expect(layer.style.fontSize).toBe('1.2rem');
+      expect(layer.style.getPropertyValue('--measure')).toBe('100ch');
+      expect(layer.style.paddingInlineStart).toBe(
+        'max(4.5em, calc((100cqi - var(--measure)) / 2))',
+      );
+      expect(layer.style.paddingInlineEnd).toBe('max(1rem, calc((100cqi - var(--measure)) / 2))');
+    }
+    // Fit frame: the editor's own padding again, on both layers.
+    rerender(
+      <MarkupTextarea
+        aria-label="Script"
+        value="Hello"
+        onValueChange={() => {}}
+        textStyle={{ fontSize: '1.2rem', lineHeight: '2.1rem' }}
+        gutter
+      />,
+    );
+    expect(wrapper).not.toHaveClass('@container');
+    for (const layer of [overlay, script()]) {
+      expect(layer.style.paddingInlineStart).toBe('');
+      expect(layer.style.getPropertyValue('--measure')).toBe('');
+    }
+  });
+
   it('keeps tags broken across lines highlighted on both lines', () => {
     const { container } = render(<Editor initial={'[slow]\n[a tag\nbroken]'} />);
     const kinds = [...container.querySelectorAll('mark')].map((mark) => [

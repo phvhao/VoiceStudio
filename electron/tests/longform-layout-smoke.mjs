@@ -116,9 +116,102 @@ try {
       assert.deepEqual(crowding, [], `the ${screen} title bar is crowded at ${width}px`);
     }
   }
+  // A very wide window: the editor frame fills the column beside the setup
+  // pane (no centred cap leaving empty margins), and its text keeps to the
+  // reading measure — about 100ch, centred, on both layers alike — until the
+  // viewer chooses to fit the frame.
+  await page.setViewportSize({ width: 2304, height: 1296 });
+  await page.goto((process.env.VOICESTUDIO_UI_URL || 'http://localhost:3912') + '/#/audiobook');
+  await page.locator('[data-slot=audiobook-editor]').waitFor();
+  await page.evaluate(async () => {
+    const { longformSession } = await import('/src/features/longform/longform-session.ts');
+    const paragraph =
+      'The rain had not stopped for three days, and the river beneath the old bridge had risen until it licked the arches. '.repeat(
+        6,
+      );
+    longformSession.setState((state) => ({
+      ...state,
+      active: 'audiobook',
+      stage: 'idle',
+      drafts: {
+        ...state.drafts,
+        audiobook: {
+          ...state.drafts.audiobook,
+          script: `# Chapter One
+
+[voice:Mara] ${paragraph}
+
+# Chapter Two
+
+${paragraph}`,
+        },
+      },
+    }));
+  });
+  const wide = () =>
+    page.evaluate(() => {
+      const frame = document.querySelector('[data-slot=audiobook-editor]').getBoundingClientRect();
+      const column = document
+        .querySelector('[data-slot=audiobook-editor]')
+        .closest('section')
+        .getBoundingClientRect();
+      const textarea = document.querySelector('[data-slot=audiobook-editor] textarea');
+      const overlay = textarea.parentElement.querySelector('[aria-hidden=true]');
+      const style = getComputedStyle(textarea);
+      const ruler = document.createElement('span');
+      ruler.textContent = '0'.repeat(100);
+      Object.assign(ruler.style, { font: style.font, position: 'absolute', whiteSpace: 'pre' });
+      document.body.append(ruler);
+      const measure = ruler.getBoundingClientRect().width;
+      ruler.remove();
+      const padding = (element) =>
+        ['paddingLeft', 'paddingRight'].map((side) =>
+          Math.round(parseFloat(getComputedStyle(element)[side])),
+        );
+      const [start, end] = padding(textarea);
+      return {
+        margins: [frame.left - column.left, column.right - frame.right],
+        text: textarea.clientWidth - start - end,
+        measure,
+        padding: [start, end],
+        overlay: padding(overlay),
+        rail: document.querySelector('[data-slot=contents-rail]')?.getBoundingClientRect().width,
+        stored: localStorage.getItem('voicestudio.editor-measure'),
+      };
+    });
+  const measureButton = (name) =>
+    page
+      .locator('[data-slot=audiobook-editor] [data-slot=editor-measure]')
+      .getByRole('button', { name, exact: true });
+  for (const mode of ['Fit frame', 'Reading width']) {
+    await measureButton(mode).click();
+    await page.waitForTimeout(200);
+    assert.equal(await measureButton(mode).getAttribute('aria-pressed'), 'true');
+    const layout = await wide();
+    assert(
+      layout.margins.every((margin) => margin <= 48),
+      `the editor frame leaves empty margins in a wide window: ${JSON.stringify(layout)}`,
+    );
+    assert(layout.rail > 256, `the contents rail keeps its narrow width: ${JSON.stringify(layout)}`);
+    assert.deepEqual(layout.overlay, layout.padding, 'the overlay is padded unlike the editor');
+    if (mode === 'Fit frame') {
+      assert.equal(layout.stored, 'fit');
+      assert(layout.text > layout.measure, `Fit frame keeps to the measure: ${JSON.stringify(layout)}`);
+    } else {
+      assert.equal(layout.stored, 'reading');
+      assert(
+        layout.text <= layout.measure + 1,
+        `Reading width runs past 100ch: ${JSON.stringify(layout)}`,
+      );
+      assert(
+        Math.abs(layout.padding[0] - layout.padding[1]) <= 1,
+        `the reading column is off centre: ${JSON.stringify(layout)}`,
+      );
+    }
+  }
   assert.deepEqual(errors, []);
   console.log(
-    'Longform Stop stays inside the setup pane, and the title bar keeps its controls apart, at desktop and compact widths.',
+    'Longform Stop stays inside the setup pane, the title bar keeps its controls apart, and a wide window fills the editor frame with the text at its reading measure.',
   );
 } finally {
   await browser.close();

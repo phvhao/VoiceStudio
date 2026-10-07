@@ -155,7 +155,12 @@ and column, the voice in effect at the cursor and the profile cast to read it
 are the same), the script's length, and the text size: **−** / **+**, or
 click the percentage for 80–160 %. **Ctrl/⌘ +**, **Ctrl/⌘ −**, **Ctrl/⌘ 0**
 and Ctrl+wheel change it too while the pointer or the cursor is in the
-editor; the size is remembered on this computer.
+editor; the size is remembered on this computer. Beside it, **Reading width**
+keeps lines to about 100 characters, centred in the frame however wide the
+window is, and **Fit frame** runs them the frame's full width. The editor frame
+itself always fills the page; the choice is remembered on this computer and
+applies to Stories (whose line cards keep to the reading width), Clone and
+Voice Design as well.
 
 ### Spellcheck
 
@@ -189,7 +194,8 @@ marks, as a paragraph of its own, by whichever voice is reading there — a
 section never resets the voice. `####` and deeper lines are ordinary text.
 
 **Contents**, a rail on the left of the editor, lists the chapters and their
-sections with their word count and estimated length; fold it away with its
+sections with their word count and estimated length, and widens with a wide
+window so long titles read whole; fold it away with its
 button (in a narrow window it opens over the editor from the toggle). Click
 one to move the cursor to its heading and scroll the editor there; its menu
 renames it, adds a chapter or section after it, or removes the heading and

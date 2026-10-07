@@ -58,10 +58,12 @@ import {
   expressionVariant,
   formatPauseSeconds,
   isBareVoiceReset,
+  isProfileCastName,
   pauseMs,
   pauseToken,
   removeToken,
   replaceRange,
+  replaceVoiceTags,
   respellingParts,
   respellingRange,
   secondsUnit,
@@ -69,6 +71,7 @@ import {
   setVolume,
   voiceName,
   voiceSection,
+  voiceTagsNamed,
   voiceToken,
   volumeDb,
   volumeOpening,
@@ -204,6 +207,25 @@ export function editTag(
 }
 
 /**
+ * Whether a `[voice:NAME]` name is a role (Narrator, Mara) rather than the
+ * name of the profile reading it (`isProfileCastName`). Until the profiles
+ * load, a cast name is taken for the profile's own: it cannot be told yet.
+ */
+export function isRole(
+  {
+    profiles,
+    voiceCast,
+    loading = false,
+  }: Pick<TagToolProps, 'profiles' | 'voiceCast' | 'loading'>,
+  name: string,
+): boolean {
+  const reading = castVoice(voiceCast, name) || name;
+  const profile = profiles.find((candidate) => candidate.id === reading);
+  if (!profile) return !(loading && reading !== name);
+  return !isProfileCastName(name, profile);
+}
+
+/**
  * Everything that can be done to one tag. The tag card and the context menu
  * both act through here, so a tag behaves the same however it is reached.
  */
@@ -222,6 +244,14 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
     edit((value) => replaceRange(value, token.start, token.end, insert));
   // The voice a `[voice:NAME]` switches to; the resets and other tags have none.
   const name = voiceName(token.text);
+  /** Rewrite this tag, or with `all` every tag of its name, to switch to `voice`. */
+  const rewrite = (voice: string | null, all: boolean) => {
+    const insert = voice === null ? VOICE_RESET_TOKEN : voiceToken(voice);
+    return all && name !== null
+      ? edit((value) => replaceVoiceTags(value, token, insert, { headings }))
+      : replace(insert);
+  };
+  const castTo = name === null ? '' : castVoice(voiceCast, name);
   // A reset hands the text to the default voice, whose volume is kept under ''.
   const gainKey = name === null ? '' : voiceGainKey(name);
   const section = (): [number, number] | null => {
@@ -243,16 +273,30 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
     toLine: lineVoices && token.kind === 'voiceReset' && isBareVoiceReset(token.text),
     replace,
     remove: () => edit((value) => removeToken(value, token)),
-    /** Switch the tag to a script name, or with `null` back to the default voice. */
-    switchTo: (voice: string | null) =>
-      replace(voice === null ? VOICE_RESET_TOKEN : voiceToken(voice)),
-    /** Switch the tag to a profile, cast under a readable name. */
-    switchToProfile(profile: TagProfile) {
+    /**
+     * Switch the tag to a script name, or with `null` back to the default
+     * voice; with `all`, every tag of its name (`namesakes`) switches.
+     */
+    switchTo: (voice: string | null, all = false) => rewrite(voice, all),
+    /** Switch the tag (or with `all` every tag of its name) to a profile, cast under a readable name. */
+    switchToProfile(profile: TagProfile, all = false) {
       const next = castProfileVoice(profile, voiceCast, onVoiceCast);
-      return next === name || replace(voiceToken(next));
+      return next === name || rewrite(next, all);
     },
+    /** How many `[voice:NAME]` tags of this name the text holds, this one among them. */
+    namesakes(): number {
+      const element = getTarget()?.element;
+      return element && name !== null
+        ? voiceTagsNamed(element.value, name, { headings }).length
+        : 0;
+    },
+    /**
+     * The name is a role (Narrator, Mara) cast to a voice of its own, not a
+     * profile's own name: recasting it is a choice apart from this tag's voice.
+     */
+    role: name !== null && isRole(tools, name),
     /** The profile cast to the name: '' while the default voice reads it. */
-    castTo: name === null ? '' : castVoice(voiceCast, name),
+    castTo,
     /** Cast the name to a profile, or with '' leave it to the default voice. */
     cast(profileId: string) {
       if (name === null) return;
@@ -479,11 +523,14 @@ function VoiceChoicePicker({
   label,
   value,
   groups,
+  placeholder,
   onChange,
 }: {
   label: string;
   value: string;
   groups: VoiceChoiceGroup[];
+  /** Shown while `value` is none of the choices, such as a voice still loading. */
+  placeholder?: string;
   onChange(value: string): void;
 }) {
   const { t } = useTranslation();
@@ -513,7 +560,7 @@ function VoiceChoicePicker({
         className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md border border-input bg-input/20 px-2 text-start text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30 dark:hover:bg-input/50"
       >
         {current?.icon}
-        <span className="min-w-0 flex-1 truncate">{current?.label}</span>
+        <span className="min-w-0 flex-1 truncate">{current?.label ?? placeholder}</span>
         <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
       </Combobox.Trigger>
       <Combobox.Portal>
@@ -661,24 +708,32 @@ function UnsupportedBody({ token, act, focusRef, onDone }: BodyProps) {
   );
 }
 
-/** `[voice:NAME]` and `[voice:]`: who reads from here, who that is cast to, and how loud. */
+/**
+ * `[voice:NAME]` and `[voice:]`: the voice reading from here (changing it
+ * rewrites this tag, or every tag of its name), the voice a role is cast to,
+ * and how loud the voice reads.
+ */
 function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: ReactNode }) {
   const { t } = useTranslation();
-  const { profiles, scriptNames, defaultVoiceName, loading = false } = tools;
+  const { profiles, scriptNames, defaultVoiceName, lineVoices = false, loading = false } = tools;
   const voices = tools.voices ?? scriptNames;
-  const { name, toLine } = act;
+  const { name, toLine, role } = act;
   // Older Stories scripts put a profile id in the tag.
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
   const label = (voice: string) => profileName(voice) ?? voice;
   const avatar = (profile: TagProfile) => (
     <ProfileAvatar name={profile.name} imageUrl={profile.image_url} className="size-4" />
   );
+  // Every tag of the name, this one among them: offered once there are others.
+  const namesakes = act.namesakes();
+  const [all, setAll] = useState(false);
   const switchTo = (value: string) => {
     const profile = value.startsWith(PROFILE_CHOICE)
       ? profiles.find((candidate) => PROFILE_CHOICE + candidate.id === value)
       : undefined;
-    if (profile) act.switchToProfile(profile);
-    else act.switchTo(value === DEFAULT_CHOICE ? null : value);
+    const every = all && namesakes > 1;
+    if (profile) act.switchToProfile(profile, every);
+    else act.switchTo(value === DEFAULT_CHOICE ? null : value, every);
     onDone();
   };
   // A name that is a profile id reads in that profile without being cast.
@@ -688,44 +743,46 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
   const missing = act.castTo !== '' && profileName(act.castTo) === undefined && !loading;
   const section = act.section();
   const reads = section !== null && section[0] < section[1];
-  // Another role for this one tag: only worth offering once the script has two.
-  const [switching, setSwitching] = useState(false);
-  const roleLabel = name === null ? t('audiobook.insert_voice') : t('editor.role');
-  const rolePicker = (
-    <VoiceChoicePicker
-      label={roleLabel}
-      value={name ?? DEFAULT_CHOICE}
-      onChange={switchTo}
-      groups={[
-        {
-          key: 'default',
-          items: [{ value: DEFAULT_CHOICE, label: t('markup.voice_reset'), icon: <ResetDot /> }],
-        },
-        {
-          key: 'script',
-          label: t('markup.voice_in_script'),
-          items: scriptNames.map((voice) => ({
-            value: voice,
-            label: label(voice),
-            icon: <VoiceDot className={voiceAccent(voice, voices).dot} />,
-          })),
-        },
-        {
-          key: 'profiles',
-          label: t('markup.voice_profiles'),
-          items: profiles.map((profile) => ({
-            value: PROFILE_CHOICE + profile.id,
-            label: profile.name,
-            icon: avatar(profile),
-          })),
-        },
-      ]}
-    />
-  );
-  const roleRow = (
+  const voiceLabel = t('audiobook.insert_voice');
+  // A role is chosen as itself; a profile's own name, as that profile.
+  const choice =
+    name === null ? DEFAULT_CHOICE : role ? name : PROFILE_CHOICE + (readingVoice ?? name);
+  const voiceRow = (
     <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 text-xs">
-      <span className="text-muted-foreground">{roleLabel}</span>
-      {rolePicker}
+      <span className="text-muted-foreground">{voiceLabel}</span>
+      <VoiceChoicePicker
+        label={voiceLabel}
+        value={choice}
+        placeholder={loading ? t('common.loading') : undefined}
+        onChange={switchTo}
+        groups={[
+          {
+            key: 'default',
+            items: [{ value: DEFAULT_CHOICE, label: t('markup.voice_reset'), icon: <ResetDot /> }],
+          },
+          {
+            // The script's roles; a profile's own name is listed as the profile.
+            key: 'script',
+            label: t('markup.voice_in_script'),
+            items: scriptNames
+              .filter((voice) => isRole(tools, voice))
+              .map((voice) => ({
+                value: voice,
+                label: label(voice),
+                icon: <VoiceDot className={voiceAccent(voice, voices).dot} />,
+              })),
+          },
+          {
+            key: 'profiles',
+            label: t('markup.voice_profiles'),
+            items: profiles.map((profile) => ({
+              value: PROFILE_CHOICE + profile.id,
+              label: profile.name,
+              icon: avatar(profile),
+            })),
+          },
+        ]}
+      />
     </div>
   );
   return (
@@ -735,7 +792,7 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
           <Header icon={<ResetDot />} title={t('markup.voice_reset')} token={token}>
             {t(toLine ? 'editor.card_voice_reset_line' : 'editor.card_voice_reset')}
           </Header>
-          {roleRow}
+          {voiceRow}
         </>
       ) : (
         <>
@@ -743,46 +800,55 @@ function VoiceBody({ token, tools, act, onDone, remove }: BodyProps & { remove: 
           <Header icon={<VoiceDot className={voiceAccent(name, voices).dot} />} title={label(name)}>
             {t('editor.card_voice')}
           </Header>
-          <div className="space-y-1">
-            <p className="text-xs text-muted-foreground">{t('editor.reading_voice')}</p>
-            <VoicePicker
-              value={readingVoice}
-              onChange={(id) => act.cast(id ?? '')}
-              profiles={profiles}
-              loading={loading}
-              defaultOption={{
-                label: defaultVoiceName
-                  ? t('editor.status_default', { name: defaultVoiceName })
-                  : t('editor.status_default_none'),
-              }}
-              aria-label={t('editor.reading_voice')}
-              className="h-8 text-xs"
-            />
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              {t('editor.reading_voice_hint', { name: label(name) })}
-            </p>
-          </div>
+          {voiceRow}
+          {namesakes > 1 && (
+            <label className="flex items-start gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={all}
+                onChange={(event) => setAll(event.target.checked)}
+                className="mt-0.5 accent-primary"
+              />
+              <span className="min-w-0 break-words">
+                {t(lineVoices ? 'editor.voice_apply_all_line' : 'editor.voice_apply_all', {
+                  count: namesakes,
+                  tag: voiceToken(name),
+                })}
+              </span>
+            </label>
+          )}
         </>
       )}
-      {name !== null && (missing || readingVoice === null) && (
-        <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
-          <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-          {missing ? t('editor.cast_missing') : t('editor.uncast', { name: label(name) })}
-        </p>
+      {/* A role's own voice, for all its tags: a choice apart from this tag's. */}
+      {name !== null && role && (
+        <div className="space-y-1 border-t border-border/50 pt-2">
+          <p className="text-xs text-muted-foreground">
+            {t('editor.role_read_by', { name: label(name) })}
+          </p>
+          <VoicePicker
+            value={readingVoice}
+            onChange={(id) => act.cast(id ?? '')}
+            profiles={profiles}
+            loading={loading}
+            defaultOption={{
+              label: defaultVoiceName
+                ? t('editor.status_default', { name: defaultVoiceName })
+                : t('editor.status_default_none'),
+            }}
+            aria-label={t('editor.role_read_by', { name: label(name) })}
+            className="h-8 text-xs"
+          />
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            {t('editor.role_read_by_hint', { tag: voiceToken(name) })}
+          </p>
+          {(missing || readingVoice === null) && (
+            <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+              <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+              {missing ? t('editor.cast_missing') : t('editor.uncast', { name: label(name) })}
+            </p>
+          )}
+        </div>
       )}
-      {name !== null &&
-        scriptNames.length >= 2 &&
-        (switching ? (
-          roleRow
-        ) : (
-          <button
-            type="button"
-            className="text-xs text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline"
-            onClick={() => setSwitching(true)}
-          >
-            {t('editor.switch_role')}
-          </button>
-        ))}
       {/* In Stories `[voice:]` goes back to each line's own voice, not one shared default. */}
       {act.setGain && !toLine && (
         <div className="space-y-1">

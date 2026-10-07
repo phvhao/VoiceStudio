@@ -235,7 +235,7 @@ export function ScriptPanel({
           </div>
         ) : null}
         <ScriptEditorFrame text={text} speed={speed}>
-          {(textStyle) => (
+          {(textStyle, measure) => (
             <ScriptTagTools
               menu={insert}
               setText={(value) => {
@@ -264,6 +264,7 @@ export function ScriptPanel({
                 className="min-h-24 flex-1"
                 textClassName="px-4 py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
                 textStyle={textStyle}
+                measure={measure}
                 onKeyDown={insert.onEditorKeyDown}
               />
             </ScriptTagTools>

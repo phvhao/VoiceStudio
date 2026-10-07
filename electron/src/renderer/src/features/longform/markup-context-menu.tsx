@@ -32,6 +32,7 @@ import {
   ResetDot,
   VoiceDot,
   expressionGroupLabel,
+  isRole,
   removeTagLabel,
   tagActions,
   unsupportedKind,
@@ -57,6 +58,7 @@ import {
   pronounceSelection,
   replaceRange,
   tokenAround,
+  voiceToken,
   volumeToken,
   wrapSelection,
   type DeliveryTag,
@@ -148,7 +150,10 @@ function Submenu({
   );
 }
 
-/** The script's voices, then the profiles (cast under a readable name when chosen). */
+/**
+ * The script's roles, then the profiles (cast under a readable name when
+ * chosen); a profile's own name in the script is listed as the profile.
+ */
 function VoiceItems({
   tools,
   choose,
@@ -160,9 +165,10 @@ function VoiceItems({
 }) {
   const { profiles, scriptNames } = tools;
   const voices = tools.voices ?? scriptNames;
+  const roles = scriptNames.filter((name) => isRole(tools, name));
   return (
     <>
-      {scriptNames.map((name) => (
+      {roles.map((name) => (
         <Item
           key={`name-${name}`}
           icon={<VoiceDot className={voiceAccent(name, voices).dot} />}
@@ -171,9 +177,7 @@ function VoiceItems({
           onClick={() => choose(name)}
         />
       ))}
-      {scriptNames.length > 0 && profiles.length > 0 && (
-        <ContextMenu.Separator className={SEPARATOR} />
-      )}
+      {roles.length > 0 && profiles.length > 0 && <ContextMenu.Separator className={SEPARATOR} />}
       {profiles.map((profile) => (
         <Item key={profile.id} label={profile.name} onClick={() => chooseProfile(profile)} />
       ))}
@@ -277,11 +281,13 @@ function VolumeSubmenu({
 /** What the tag card offers for the right-clicked tag, as menu items. */
 function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps }) {
   const { t } = useTranslation();
-  const { profiles, scriptNames, defaultVoiceName, loading = false } = tools;
+  const { profiles, scriptNames, defaultVoiceName, lineVoices = false, loading = false } = tools;
   const voices = tools.voices ?? scriptNames;
   const act = tagActions(tools, token);
   const { name, setGain } = act;
   const profileName = (id: string) => profiles.find((profile) => profile.id === id)?.name;
+  // Every tag of the name, this one among them: offered once there are others.
+  const namesakes = act.namesakes();
   const section = name === null ? null : act.section();
   const reads = section !== null && section[0] < section[1];
   const kind = deliveryKind(token.text);
@@ -318,10 +324,32 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
           )}
         </Submenu>
       )}
-      {name !== null && (
+      {name !== null && namesakes > 1 && (
+        <Submenu
+          icon={<AudioLinesIcon />}
+          label={t(lineVoices ? 'editor.voice_apply_all_line' : 'editor.voice_apply_all', {
+            count: namesakes,
+            tag: voiceToken(name),
+          })}
+        >
+          <VoiceItems
+            tools={tools}
+            choose={(voice) => act.switchTo(voice, true)}
+            chooseProfile={(profile) => act.switchToProfile(profile, true)}
+          />
+          <ContextMenu.Separator className={SEPARATOR} />
+          <Item
+            icon={<RotateCcwIcon />}
+            label={t('markup.voice_reset')}
+            onClick={() => act.switchTo(null, true)}
+          />
+        </Submenu>
+      )}
+      {/* A role's own voice, for all its tags; a profile's own name has no other. */}
+      {name !== null && act.role && (
         <Submenu
           icon={<UserRoundIcon />}
-          label={t('editor.read_by')}
+          label={t('editor.role_read_by', { name: profileName(name) ?? name })}
           hint={
             act.castTo
               ? (profileName(act.castTo) ??

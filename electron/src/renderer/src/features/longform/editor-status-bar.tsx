@@ -1,11 +1,18 @@
 import { memo, useSyncExternalStore } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { useTranslation } from 'react-i18next';
-import { CheckIcon, MinusIcon, PlusIcon } from 'lucide-react';
+import {
+  CheckIcon,
+  FoldHorizontalIcon,
+  MinusIcon,
+  PlusIcon,
+  UnfoldHorizontalIcon,
+} from 'lucide-react';
 import { isMac } from '@/components/bridge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { castVoice } from './cast-map';
+import type { EditorMeasure } from './editor-measure';
 import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, ZOOM_PRESETS, ZOOM_STEP } from './editor-zoom';
 import { textVoiceSwitches } from './markup-textarea';
 import { caretPosition, normalizeNewlines, voiceInEffect } from './script-markup';
@@ -49,8 +56,9 @@ export function sameVoiceName(a: string, b: string): boolean {
 
 /**
  * The editor's bottom line: the caret's line and column, who reads the text
- * at the caret (its cast mapping, or the default voice), `stats`, and the
- * editor's zoom when `onZoomChange` is given.
+ * at the caret (its cast mapping, or the default voice), `stats`, the
+ * editor's measure when `onMeasureChange` is given, and its zoom when
+ * `onZoomChange` is.
  */
 export function EditorStatusBar({
   text,
@@ -62,6 +70,8 @@ export function EditorStatusBar({
   loading = false,
   defaultVoiceName,
   stats,
+  measure,
+  onMeasureChange,
   zoom,
   onZoomChange,
   className,
@@ -79,6 +89,9 @@ export function EditorStatusBar({
   /** The book's default voice, when one is chosen. */
   defaultVoiceName?: string | null;
   stats?: string;
+  /** How wide the editor's lines run. */
+  measure?: EditorMeasure;
+  onMeasureChange?(measure: EditorMeasure): void;
   /** The editor's text size in percent. */
   zoom?: number;
   onZoomChange?(zoom: number): void;
@@ -128,12 +141,79 @@ export function EditorStatusBar({
         <span className="truncate">{reader()}</span>
       </span>
       {stats && <span className="ms-auto min-w-0 truncate">{stats}</span>}
+      {measure !== undefined && onMeasureChange && (
+        <MeasureToggle
+          measure={measure}
+          onChange={onMeasureChange}
+          className={stats ? '' : 'ms-auto'}
+        />
+      )}
       {zoom !== undefined && onZoomChange && (
-        <ZoomControl zoom={zoom} onChange={onZoomChange} className={stats ? '' : 'ms-auto'} />
+        <ZoomControl
+          zoom={zoom}
+          onChange={onZoomChange}
+          className={stats || (measure !== undefined && onMeasureChange) ? '' : 'ms-auto'}
+        />
       )}
     </div>
   );
 }
+
+const MEASURES = [
+  {
+    value: 'reading',
+    label: 'editor.measure_reading',
+    hint: 'editor.measure_reading_hint',
+    icon: FoldHorizontalIcon,
+  },
+  {
+    value: 'fit',
+    label: 'editor.measure_fit',
+    hint: 'editor.measure_fit_hint',
+    icon: UnfoldHorizontalIcon,
+  },
+] as const;
+
+/**
+ * Reading width / Fit frame: whether the editor's lines stop at a reading
+ * measure, centred in the frame, or run its full width.
+ */
+export const MeasureToggle = memo(function MeasureToggle({
+  measure,
+  onChange,
+  className,
+}: {
+  measure: EditorMeasure;
+  onChange(measure: EditorMeasure): void;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      role="group"
+      aria-label={t('editor.measure')}
+      data-slot="editor-measure"
+      className={cn('flex shrink-0 items-center', className)}
+    >
+      {MEASURES.map(({ value, label, hint, icon: Icon }) => (
+        <Button
+          key={value}
+          variant="ghost"
+          size="icon-xs"
+          className="size-5 text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground [&_svg]:size-3"
+          aria-label={t(label)}
+          aria-pressed={measure === value}
+          title={t(hint)}
+          // Keep the caret in the script.
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => onChange(value)}
+        >
+          <Icon />
+        </Button>
+      ))}
+    </span>
+  );
+});
 
 const ZOOM_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs tabular-nums outline-none data-highlighted:bg-accent';

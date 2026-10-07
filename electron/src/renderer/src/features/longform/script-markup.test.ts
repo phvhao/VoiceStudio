@@ -17,6 +17,7 @@ import {
   formatSignedDb,
   insertChapter,
   insertToken,
+  isProfileCastName,
   normalizeNewlines,
   pauseMs,
   passageBounds,
@@ -25,6 +26,7 @@ import {
   pronounceSelection,
   removeToken,
   replaceRange,
+  replaceVoiceTags,
   respellingParts,
   respellingRange,
   secondsUnit,
@@ -377,6 +379,50 @@ describe('castNameForProfile', () => {
 
   it('never produces the reserved default name', () => {
     expect(castNameForProfile({ id: 'p3', name: 'Default' }, {})).toBe('Default 2');
+  });
+});
+
+describe('isProfileCastName', () => {
+  const profile = { id: 'p1', name: 'Ms [Nhu]  Voice' };
+
+  it('knows the names castNameForProfile gives a profile, and its id', () => {
+    expect(isProfileCastName('Ms Nhu Voice', profile)).toBe(true);
+    expect(isProfileCastName('Ms Nhu Voice 2', profile)).toBe(true);
+    expect(isProfileCastName('p1', profile)).toBe(true);
+  });
+
+  it('takes any other name for a role', () => {
+    expect(isProfileCastName('Narrator', profile)).toBe(false);
+    expect(isProfileCastName('Ms Nhu Voice two', profile)).toBe(false);
+    expect(isProfileCastName('Ms Nhu', profile)).toBe(false);
+  });
+});
+
+describe('replaceVoiceTags', () => {
+  const text = '[voice:Mai] One. [voice:Ben] Two. [voice: Mai ] Three. [voice:Mai] Four.';
+  const at = (tag: string, from = 0) => {
+    const start = text.indexOf(tag, from);
+    return { start, text: tag };
+  };
+
+  it('rewrites every tag of the name in one edit, and no other', () => {
+    const edit = replaceVoiceTags(text, at('[voice: Mai ]'), '[voice:Hao]');
+    expect(edit.text).toBe(
+      '[voice:Hao] One. [voice:Ben] Two. [voice:Hao] Three. [voice:Hao] Four.',
+    );
+    // One span, first tag to last: one undo step.
+    expect([edit.from, edit.to]).toEqual([0, text.length - ' Four.'.length]);
+    expect(edit.text.slice(0, edit.selectionStart)).toBe(
+      '[voice:Hao] One. [voice:Ben] Two. [voice:Hao]',
+    );
+  });
+
+  it('leaves a tag on a chapter heading, part of its title', () => {
+    const book = '[voice:Mai] One.\n# Mai [voice:Mai]\n[voice:Mai] Two.';
+    const edit = replaceVoiceTags(book, { start: 0, text: '[voice:Mai]' }, '[voice:]', {
+      headings: true,
+    });
+    expect(edit.text).toBe('[voice:] One.\n# Mai [voice:Mai]\n[voice:] Two.');
   });
 });
 

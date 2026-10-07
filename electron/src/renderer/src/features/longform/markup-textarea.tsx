@@ -136,6 +136,29 @@ const FULL_WIDTH: CSSProperties = {
   clipPath: 'inset(0 -100vmax)',
 };
 const LANE = 'absolute start-[3.75em] w-[3px] rounded-full';
+// A reading measure centres a column no wider than `--measure` by padding
+// both layers alike, each side half the room the column leaves and never less
+// than the editor's own padding (the gutter's 4.5em, or the editors' `px-4`),
+// so the overlay wraps where the textarea does at every zoom: `ch` is the
+// layers' own type. The room is in units of the wrapper (a container), not a
+// max-width on one layer — the textarea keeps the frame's width, its
+// scrollbar at the edge and every click in it — and the lane, measured in
+// the same units, keeps to the text.
+const MEASURE_ROOM = 'calc((100cqi - var(--measure)) / 2)';
+const MEASURE_INSET = '1rem';
+
+/** Both layers' inline padding, and the lane's place, for a `measure`. */
+function measuredInsets(measure: string, gutter: boolean) {
+  const start = `max(${gutter ? '4.5em' : MEASURE_INSET}, ${MEASURE_ROOM})`;
+  return {
+    layer: {
+      '--measure': measure,
+      paddingInlineStart: start,
+      paddingInlineEnd: `max(${MEASURE_INSET}, ${MEASURE_ROOM})`,
+    } as CSSProperties,
+    lane: { insetInlineStart: `calc(${start} - 0.75em)` } as CSSProperties,
+  };
+}
 // The gutter's mark on a `## Section` / `### Section` line.
 const SECTION_MARK = '§';
 
@@ -857,6 +880,7 @@ export function MarkupTextarea({
   unsupported,
   onCaretChange,
   textStyle,
+  measure,
   className,
   textClassName,
   title,
@@ -901,6 +925,11 @@ export function MarkupTextarea({
    * the same text in view and measures the lane again.
    */
   textStyle?: CSSProperties;
+  /**
+   * The text column's widest (a CSS length, in the editor's own type, such
+   * as `100ch`): a wider editor centres it. Unset, the text fills the editor.
+   */
+  measure?: string;
 }) {
   const { t, i18n } = useTranslation();
   const tools = useContext(MarkupEditorContext);
@@ -1099,7 +1128,13 @@ export function MarkupTextarea({
     latest.current.track('input');
     latest.current.scheduleHover();
   }, [text, fit, syncScroll]);
-  const layout = textStyle ? `${textStyle.fontSize}/${textStyle.lineHeight}` : '';
+  // The zoom and the measure both wrap the text anew.
+  const layout = `${textStyle?.fontSize ?? ''}/${textStyle?.lineHeight ?? ''}/${measure ?? ''}`;
+  const insets = useMemo(
+    () => (measure ? measuredInsets(measure, gutter) : undefined),
+    [measure, gutter],
+  );
+  const layerStyle = insets ? { ...textStyle, ...insets.layer } : textStyle;
   const laidOut = useRef(layout);
   useLayoutEffect(() => {
     if (laidOut.current === layout) return;
@@ -1147,12 +1182,16 @@ export function MarkupTextarea({
 
   const scrollbarGutter = autoGrow ? '' : '[scrollbar-gutter:stable]';
   return (
-    <div data-slot="markup-textarea" className={cn('relative', className)}>
+    <div
+      data-slot="markup-textarea"
+      data-measure={measure ? '' : undefined}
+      className={cn('relative', measure && '@container', className)}
+    >
       {highlight && (
         <div
           ref={overlay}
           aria-hidden="true"
-          style={textStyle}
+          style={layerStyle}
           className={cn(
             LAYER,
             textClassName,
@@ -1181,7 +1220,11 @@ export function MarkupTextarea({
             <span
               key={index}
               className={cn(LANE, voiceAccent(segment.voice, voices ?? []).lane)}
-              style={{ top: segment.top + 1, height: Math.max(0, segment.height - 2) }}
+              style={{
+                ...insets?.lane,
+                top: segment.top + 1,
+                height: Math.max(0, segment.height - 2),
+              }}
             />
           ))}
         </div>
@@ -1301,7 +1344,7 @@ export function MarkupTextarea({
           // and scroll inside; the overlay follows that scroll.
           autoGrow ? 'relative overflow-hidden' : 'absolute inset-0 h-full overflow-y-auto',
         )}
-        style={textStyle}
+        style={layerStyle}
         // Settings → Spellcheck while writing (off by default): an English
         // dictionary would underline a Vietnamese script end to end.
         spellCheck={spellcheck}

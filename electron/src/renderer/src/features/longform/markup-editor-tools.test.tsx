@@ -21,6 +21,7 @@ const profiles = [
 
 function Editor({
   initial,
+  profiles: given = profiles,
   cast = {},
   gains = {},
   headings = false,
@@ -32,6 +33,7 @@ function Editor({
   retakes,
 }: {
   initial: string;
+  profiles?: { id: string; name: string }[];
   loading?: boolean;
   cast?: Record<string, string>;
   gains?: VoiceGains;
@@ -53,7 +55,7 @@ function Editor({
       disabled={false}
       headings={headings}
       lineVoices={lineVoices}
-      profiles={profiles}
+      profiles={given}
       loading={loading}
       scriptNames={names}
       voiceCast={voiceCast}
@@ -412,7 +414,98 @@ describe('voice card', () => {
     fireEvent.click(await screen.findByRole('option', { name }));
   };
 
-  it('shows who reads a voice and recasts every tag of it', async () => {
+  /** Run with `document.execCommand` stubbed, to see each edit as one `insertText`: one undo step. */
+  const withUndo = async (run: (exec: ReturnType<typeof vi.fn>) => Promise<void>) => {
+    const exec = vi.fn((_command: string, _ui?: boolean, _value?: string) => false);
+    Object.defineProperty(document, 'execCommand', { configurable: true, value: exec });
+    try {
+      await run(exec);
+    } finally {
+      delete (document as { execCommand?: unknown }).execCommand;
+    }
+  };
+
+  it('changes the voice of this tag alone, cast under the voice’s own name', async () => {
+    // A profile's own name as the tag: choosing another voice rewrites the
+    // tag, it does not recast the name behind every tag of it.
+    const named = [...profiles, { id: 'p-chanel', name: 'chanel-kênh vũ trụ' }];
+    const onVoiceCast = vi.fn();
+    const text = '[voice:chanel-kênh vũ trụ] One. [voice:chanel-kênh vũ trụ] Two.';
+    await withUndo(async (exec) => {
+      render(
+        <Editor
+          initial={text}
+          profiles={named}
+          cast={{ 'chanel-kênh vũ trụ': 'p-chanel' }}
+          onVoiceCast={onVoiceCast}
+        />,
+      );
+      focus();
+      clickAt(3);
+      const voice = await card('[voice:chanel-kênh vũ trụ]');
+      // The scope the card states is this tag's, and nothing says otherwise.
+      expect(within(voice).getByText(i18n.t('editor.card_voice'))).toBeVisible();
+      expect(within(voice).queryByText(/every passage of/)).toBeNull();
+      // A profile's own name is no role: there is no second picker for it.
+      expect(within(voice).getAllByRole('combobox')).toHaveLength(1);
+      const picker = within(voice).getByRole('combobox', { name: 'Voice' });
+      expect(picker).toHaveTextContent('chanel-kênh vũ trụ');
+      await pick(picker, 'Đào Lan');
+      expect(onVoiceCast).toHaveBeenLastCalledWith({
+        'chanel-kênh vũ trụ': 'p-chanel',
+        'Đào Lan': 'p-dao',
+      });
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith('insertText', false, '[voice:Đào Lan]');
+      expect(script().value).toBe('[voice:Đào Lan] One. [voice:chanel-kênh vũ trụ] Two.');
+      await waitFor(noCard);
+    });
+  });
+
+  it('applies a voice to every tag of the name in one edit', async () => {
+    const text =
+      '[voice:Mai] One. [voice:Ben] Two. [voice:Mai] Three.\n# Ch [voice:Mai]\n[voice:Mai] Four.';
+    await withUndo(async (exec) => {
+      render(<Editor initial={text} cast={{ Mai: 'p-mai' }} headings />);
+      focus();
+      clickAt(text.indexOf('[voice:Mai] Three') + 3);
+      const voice = await card('[voice:Mai]');
+      // The tag on the chapter heading is part of its title, not a switch.
+      const all = within(voice).getByRole('checkbox', {
+        name: 'Apply to all 3 [voice:Mai] tags',
+      });
+      expect(all).not.toBeChecked();
+      fireEvent.click(all);
+      await pick(within(voice).getByRole('combobox', { name: 'Voice' }), 'Hao PV');
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(script().value).toBe(
+        '[voice:Hao PV] One. [voice:Ben] Two. [voice:Hao PV] Three.\n# Ch [voice:Mai]\n[voice:Hao PV] Four.',
+      );
+      await nextFrame();
+      // The caret stays after the tag the card was open for.
+      expect(script().selectionStart).toBe(
+        '[voice:Hao PV] One. [voice:Ben] Two. [voice:Hao PV]'.length,
+      );
+    });
+  });
+
+  it('offers no "apply to all" for a name used once, and says so per line in Stories', async () => {
+    const { unmount } = render(<Editor initial="[voice:Mai] One. [voice:Ben] Two." />);
+    focus();
+    clickAt(3);
+    expect(within(await card('[voice:Mai]')).queryByRole('checkbox')).toBeNull();
+    unmount();
+    render(<Editor initial="[voice:Mai] One. [voice:Mai] Two." lineVoices />);
+    focus();
+    clickAt(3);
+    expect(
+      within(await card('[voice:Mai]')).getByRole('checkbox', {
+        name: 'Apply to all 2 [voice:Mai] tags in this line',
+      }),
+    ).toBeVisible();
+  });
+
+  it('recasts a role for every tag of it in a picker of its own', async () => {
     const onVoiceCast = vi.fn();
     render(
       <Editor
@@ -424,15 +517,21 @@ describe('voice card', () => {
     focus();
     clickAt(3);
     const voice = await card('[voice:Mara]');
-    const reading = within(voice).getByRole('combobox', { name: 'Reading voice' });
-    expect(reading).toHaveTextContent('Mai');
-    // It says the choice holds for the whole name, not this tag alone.
-    expect(within(voice).getByText('Applies to every passage of Mara.')).toBeVisible();
-    await pick(reading, 'Hao PV');
+    // This tag reads the role; the role reads Mai.
+    expect(within(voice).getByRole('combobox', { name: 'Voice' })).toHaveTextContent('Mara');
+    const role = within(voice).getByRole('combobox', { name: 'Role Mara is read by' });
+    expect(role).toHaveTextContent('Mai');
+    expect(
+      within(voice).getByText('Every [voice:Mara] tag reads in this voice, as in the Cast panel.'),
+    ).toBeVisible();
+    await pick(role, 'Hao PV');
     expect(onVoiceCast).toHaveBeenLastCalledWith({ Mara: 'p-hao' });
     // Recasting changes no text, so the card stays to go on with.
     expect(screen.getByRole('dialog', { name: 'Tag [voice:Mara]' })).toBeVisible();
-    await pick(within(voice).getByRole('combobox', { name: 'Reading voice' }), /Default voice/);
+    await pick(
+      within(voice).getByRole('combobox', { name: 'Role Mara is read by' }),
+      /Default voice/,
+    );
     expect(onVoiceCast).toHaveBeenLastCalledWith({});
     expect(within(voice).getByText(/not cast yet, so the default voice reads it/)).toBeVisible();
     expect(script().value).toBe('[voice:Mara] Hello. [voice:Mara] Again.');
@@ -444,7 +543,7 @@ describe('voice card', () => {
     focus();
     clickAt(3);
     fireEvent.click(
-      within(await card('[voice:Mara]')).getByRole('combobox', { name: 'Reading voice' }),
+      within(await card('[voice:Mara]')).getByRole('combobox', { name: 'Role Mara is read by' }),
     );
     const search = await screen.findByRole('combobox', { name: 'Search voices' });
     fireEvent.input(search, { target: { value: 'DAO' }, inputType: 'insertText' });
@@ -472,11 +571,11 @@ describe('voice card', () => {
     const voice = await card('[voice:Mara]');
     expect(within(voice).queryByText(/voice cast to this name was deleted/)).toBeNull();
     expect(
-      within(voice).getByRole('combobox', { name: i18n.t('editor.reading_voice') }),
+      within(voice).getByRole('combobox', { name: i18n.t('audiobook.insert_voice') }),
     ).toHaveTextContent(i18n.t('common.loading'));
   });
 
-  it('switches this tag to another name, a profile, or the default voice', async () => {
+  it('switches this tag to another role, a profile, or the default voice', async () => {
     const onVoiceCast = vi.fn();
     render(
       <Editor
@@ -485,40 +584,43 @@ describe('voice card', () => {
       />,
     );
     focus();
-    // Switching one tag is the secondary choice: a link reveals it.
-    const role = async (tag: string) => {
-      const opened = await card(tag);
-      expect(within(opened).queryByRole('combobox', { name: 'Role' })).toBeNull();
-      fireEvent.click(
-        within(opened).getByRole('button', { name: 'Switch this tag to another role' }),
-      );
-      return within(opened).getByRole('combobox', { name: 'Role' });
-    };
+    const voice = async (tag: string) =>
+      within(await card(tag)).getByRole('combobox', { name: 'Voice' });
     clickAt(3);
-    await pick(await role('[voice:Mara]'), 'Ben');
+    await pick(await voice('[voice:Mara]'), 'Ben');
     expect(script().value).toBe('[voice:Ben] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
     await waitFor(noCard);
     clickAt(3);
-    await pick(await role('[voice:Ben]'), 'Hao PV');
+    await pick(await voice('[voice:Ben]'), 'Hao PV');
     expect(onVoiceCast).toHaveBeenLastCalledWith({ 'Hao PV': 'p-hao' });
     expect(script().value).toBe('[voice:Hao PV] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
     await waitFor(noCard);
     clickAt(3);
-    await pick(await role('[voice:Hao PV]'), 'Back to the default voice');
+    await pick(await voice('[voice:Hao PV]'), 'Back to the default voice');
     expect(script().value).toBe('[voice:] Hi. [voice:Ben] Yo. [voice:Mara] Bye.');
   });
 
-  it('names the voice once, and offers no role switch with one name in the script', async () => {
-    render(<Editor initial="[voice:Mara] Hello. [voice:Mara] Again." cast={{ Mara: 'p-mai' }} />);
+  it('lists a profile’s own name as the profile, not as a role', async () => {
+    render(<Editor initial="[voice:Mai] Hi. [voice:Mara] Yo." cast={{ Mai: 'p-mai' }} />);
     focus();
     clickAt(3);
-    const voice = await card('[voice:Mara]');
-    // The header names Mara once, without the tag as written beside it.
-    expect(within(voice).queryByText('[voice:Mara]')).toBeNull();
-    expect(within(voice).getAllByText('Mara')).toHaveLength(1);
+    fireEvent.click(within(await card('[voice:Mai]')).getByRole('combobox', { name: 'Voice' }));
+    const roles = await screen.findByRole('group', { name: i18n.t('markup.voice_in_script') });
     expect(
-      within(voice).queryByRole('button', { name: 'Switch this tag to another role' }),
-    ).toBeNull();
+      within(roles)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Mara']);
+    expect(selected()).toHaveTextContent('Mai');
+  });
+
+  it('names the voice once, without the tag as written', async () => {
+    render(<Editor initial="[voice:Mai] Hello." cast={{ Mai: 'p-mai' }} />);
+    focus();
+    clickAt(3);
+    const voice = await card('[voice:Mai]');
+    expect(within(voice).queryByText('[voice:Mai]')).toBeNull();
+    expect(within(voice).getByText('Mai', { selector: 'p > span' })).toBeVisible();
   });
 
   it('sets the volume of the voice, the one the Cast panel shows', async () => {

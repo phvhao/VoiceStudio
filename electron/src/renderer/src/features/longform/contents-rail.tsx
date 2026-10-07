@@ -151,7 +151,9 @@ export function ContentsRail({
           !shown && 'hidden',
           shown &&
             (wide
-              ? 'relative w-64 shrink-0 border-e border-border/50 bg-muted/10'
+              ? // A wide frame gives the contents a share, so long chapter
+                // titles read whole; the editor keeps the rest.
+                'relative w-[clamp(16rem,22%,24rem)] shrink-0 border-e border-border/50 bg-muted/10'
               : 'absolute inset-y-0 start-0 z-20 w-72 max-w-[85%] border-e border-border/60 bg-background shadow-lg'),
         )}
         onPointerDownCapture={() => {

@@ -16,6 +16,7 @@ metadata and the backend fallback mirror it.
 - Editing or retaking one sentence of a book renders just that sentence again; the rest of its chapter is reused
 
 ### Changed
+- Wide windows fill the script editors, Contents and player edge to edge; Reading width keeps lines to about 100 characters, centred, and Fit frame runs them the full width (Audiobook, Stories, Clone, Voice Design)
 - Long page titles stay whole in a crowded title bar: buttons drop their words, then move into a More actions menu, then a side pane narrows
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
 - Script editors highlight voice, pause, delivery, expression and chapter markup as you type, flag unrecognized tags, and toolbar inserts undo with Ctrl+Z

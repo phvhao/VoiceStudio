@@ -427,6 +427,19 @@ export function castNameForProfile(
   return `${base} ${n}`;
 }
 
+/**
+ * Whether `[voice:NAME]` names the profile itself rather than a role cast to
+ * it: the profile's own name, the numbered variant `castNameForProfile` gives
+ * it when that name is taken, or its id, as older Stories scripts wrote.
+ */
+export function isProfileCastName(name: string, profile: { id: string; name: string }): boolean {
+  if (name === profile.id) return true;
+  const base = sanitizeCastName(profile.name) || profile.id;
+  return (
+    name === base || (name.startsWith(`${base} `) && /^\d+$/.test(name.slice(base.length + 1)))
+  );
+}
+
 const BLANK_LINE_RE = /\n[ \t]*\n/g;
 
 /** Whether `text` has anything to say besides markup. */
@@ -540,6 +553,46 @@ export function voiceSwitches(text: string, { headings = false } = {}): VoiceSwi
   }
   scan(cursor, text.length);
   return switches;
+}
+
+/** The `[voice:NAME]` tags that switch to `name`, as the render reads them (`voiceSwitches`). */
+export function voiceTagsNamed(
+  text: string,
+  name: string,
+  options: { headings?: boolean } = {},
+): VoiceSwitch[] {
+  return voiceSwitches(text, options).filter(
+    (change) => change.kind === 'voice' && change.voice === name,
+  );
+}
+
+/**
+ * Rewrite every `[voice:NAME]` tag of `token`'s name to `insert`, in one edit
+ * (one undo step) from the first of them to the last. The caret lands after
+ * `token`'s new text, so the editor stays where the user was.
+ */
+export function replaceVoiceTags(
+  text: string,
+  token: Pick<MarkupToken, 'start' | 'text'>,
+  insert: string,
+  options: { headings?: boolean } = {},
+): MarkupEdit {
+  const name = voiceName(token.text);
+  const tags = name === null ? [] : voiceTagsNamed(text, name, options);
+  if (tags.length === 0) {
+    const end = token.start + token.text.length;
+    return replaceRange(text, token.start, end, insert);
+  }
+  const from = tags[0].offset;
+  let rewritten = '';
+  let cursor = from;
+  let caret = from;
+  for (const tag of tags) {
+    rewritten += text.slice(cursor, tag.offset) + insert;
+    cursor = tag.end;
+    if (tag.offset <= token.start) caret = from + rewritten.length;
+  }
+  return edit(text, from, cursor, rewritten, caret);
 }
 
 /**

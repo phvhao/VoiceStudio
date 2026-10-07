@@ -111,6 +111,26 @@ it('says a name once when it is cast to the voice it is named after', () => {
   expect(sameVoiceName('Mara', 'Hao PV')).toBe(false);
 });
 
+it('sets the editor measure: Reading width or Fit frame, beside the zoom', () => {
+  const onMeasureChange = vi.fn();
+  const { container } = bar('one', 0, {
+    measure: 'reading',
+    onMeasureChange,
+    zoom: 100,
+    onZoomChange: vi.fn(),
+  });
+  const group = screen.getByRole('group', { name: 'Line width' });
+  const reading = screen.getByRole('button', { name: 'Reading width' });
+  const fit = screen.getByRole('button', { name: 'Fit frame' });
+  expect(group).toContainElement(reading);
+  expect(reading).toHaveAttribute('aria-pressed', 'true');
+  expect(fit).toHaveAttribute('aria-pressed', 'false');
+  // Next to the zoom, at the end of the bar.
+  expect(group.nextElementSibling).toBe(container.querySelector('[data-slot=editor-zoom]'));
+  fireEvent.click(fit);
+  expect(onMeasureChange).toHaveBeenLastCalledWith('fit');
+});
+
 it('zooms the editor from its − / % / + control', async () => {
   const onZoomChange = vi.fn();
   const { rerender } = bar('one', 0, { zoom: 100, onZoomChange });

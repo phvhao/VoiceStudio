@@ -10,6 +10,7 @@ import type { PlacedTake, RetakeTarget, RetakeTools } from './take-retake';
 
 function Editor({
   initial,
+  cast = {},
   onListen,
   onListenRange,
   onVoiceCast,
@@ -18,6 +19,7 @@ function Editor({
   headings = false,
 }: {
   initial: string;
+  cast?: Record<string, string>;
   onListen?: () => void;
   onListenRange?: (from: number, to: number) => void;
   onVoiceCast?: (cast: Record<string, string>) => void;
@@ -26,7 +28,7 @@ function Editor({
   headings?: boolean;
 }) {
   const [text, setText] = useState(initial);
-  const [voiceCast, setVoiceCast] = useState<Record<string, string>>({});
+  const [voiceCast, setVoiceCast] = useState(cast);
   const [voiceGains, setVoiceGains] = useState<VoiceGains>({});
   const input = useRef<HTMLTextAreaElement>(null);
   return (
@@ -148,9 +150,51 @@ it('heads a voice tag with its color and recasts the voice', async () => {
   const header = within(await screen.findByRole('menu')).getByText('[voice:Mara]');
   // Mara is the script's second voice: the palette's second color, as in the editor.
   expect(header.previousElementSibling).toHaveClass('bg-amber-400');
-  const readBy = await submenu(/Read by/);
+  // Mara is a role: its voice, for every tag of it, is a choice of its own.
+  const readBy = await submenu(/Role Mara is read by/);
   fireEvent.click(within(readBy).getByRole('menuitemradio', { name: 'Hao PV' }));
   expect(onVoiceCast).toHaveBeenLastCalledWith({ Mara: 'p2' });
+});
+
+it('changes the voice of the tag, or of every tag of its name, in one edit', async () => {
+  const onVoiceCast = vi.fn();
+  const closed = () => waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  render(
+    <Editor
+      initial="[voice:Hao PV] One. [voice:Ben] Two. [voice:Hao PV] Three. [voice:Hao PV] Four."
+      cast={{ 'Hao PV': 'p2' }}
+      onVoiceCast={onVoiceCast}
+    />,
+  );
+  rightClickAt(3);
+  await screen.findByRole('menu');
+  // A profile's own name is no role: it has no voice of its own to recast.
+  expect(screen.queryByRole('menuitem', { name: /is read by/ })).toBeNull();
+  const voices = await submenu('Change voice');
+  // The profile is listed once, as a profile; Ben is the script's one role.
+  expect(
+    within(voices)
+      .getAllByRole('menuitem')
+      .map((item) => item.textContent),
+  ).toEqual(['Ben', 'ms nhu', 'Hao PV', 'Back to the default voice']);
+  fireEvent.click(within(voices).getByRole('menuitem', { name: 'ms nhu' }));
+  expect(script().value).toBe(
+    '[voice:ms nhu] One. [voice:Ben] Two. [voice:Hao PV] Three. [voice:Hao PV] Four.',
+  );
+  expect(onVoiceCast).toHaveBeenLastCalledWith({ 'Hao PV': 'p2', 'ms nhu': 'p1' });
+  await closed();
+  // A name used once has no other tag to change.
+  rightClickAt(3);
+  await screen.findByRole('menu');
+  expect(screen.queryByRole('menuitem', { name: /Apply to all/ })).toBeNull();
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  await closed();
+  rightClickAt('[voice:ms nhu] One. [voice:Ben] Two. [vo'.length);
+  const all = await submenu('Apply to all 2 [voice:Hao PV] tags');
+  fireEvent.click(within(all).getByRole('menuitem', { name: 'Ben' }));
+  expect(script().value).toBe(
+    '[voice:ms nhu] One. [voice:Ben] Two. [voice:Ben] Three. [voice:Ben] Four.',
+  );
 });
 
 it('steps a voice’s volume with the menu open', async () => {

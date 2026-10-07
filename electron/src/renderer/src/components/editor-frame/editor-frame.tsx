@@ -6,12 +6,13 @@ import { cn } from '@/lib/utils';
 import { setEditorFocus, useEditorFocus, useEditorFocusMode } from './editor-focus';
 
 /**
- * The script workspace shared by Clone and Voice Design: a column that widens
- * with the window up to 72rem and gives the editor the height left over, the
- * composer anchored under it, and the results below in their own dock. Focus
- * mode leaves the column and the composer alone on the page: the results are
- * hidden, not unmounted, so a take playing in them plays on and the dock is
- * as it was when Esc brings it back.
+ * The script workspace shared by Clone and Voice Design: a column as wide as
+ * the window leaves it (the script keeps to its reading measure inside the
+ * editor) that gives the editor the height left over, the composer anchored
+ * under it, and the results below in their own dock. Focus mode leaves the
+ * column and the composer alone on the page: the results are hidden, not
+ * unmounted, so a take playing in them plays on and the dock is as it was
+ * when Esc brings it back.
  */
 export function EditorFrame({
   children,
@@ -34,13 +35,11 @@ export function EditorFrame({
         {/* A container: beside an open pane the column narrows to 20rem, and
             the script toolbar's labels give way to their icons (the names stay
             for screen readers and tooltips) instead of running past it. */}
-        <div className="@container mx-auto flex w-full max-w-[72rem] flex-1 flex-col gap-4 px-6 pt-5 pb-3">
+        <div className="@container flex w-full flex-1 flex-col gap-4 px-6 pt-5 pb-3">
           {children}
         </div>
       </div>
-      {composer ? (
-        <div className="mx-auto w-full max-w-[72rem] shrink-0 px-6 pb-3">{composer}</div>
-      ) : null}
+      {composer ? <div className="w-full shrink-0 px-6 pb-3">{composer}</div> : null}
       {results ? (
         <div data-slot="editor-results-frame" hidden={focused} className="contents">
           {results}

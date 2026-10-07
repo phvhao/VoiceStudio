@@ -74,7 +74,7 @@ export function ResultsDock({
           <span className="h-px w-10 rounded-full bg-border/0 transition-[width,background-color,box-shadow] duration-150 group-hover/resize:w-16 group-hover/resize:bg-primary/45 group-hover/resize:shadow-[0_0_8px_var(--primary)] group-focus-visible/resize:w-16 group-focus-visible/resize:bg-primary motion-reduce:transition-none" />
         </div>
       )}
-      <div className="mx-auto flex h-9 w-full max-w-[72rem] shrink-0 items-center gap-3 px-6">
+      <div className="flex h-9 w-full shrink-0 items-center gap-3 px-6">
         <button
           type="button"
           aria-expanded={open}
@@ -106,7 +106,7 @@ export function ResultsDock({
           id={bodyId}
           className="studio-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         >
-          <div className="mx-auto w-full max-w-[72rem] px-6 pb-3">{children}</div>
+          <div className="w-full px-6 pb-3">{children}</div>
         </div>
       )}
     </section>
