@@ -96,6 +96,61 @@ def test_engine_codes_name_a_standard_variety_by_its_macrolanguage(codes, langua
     assert codes.engine_language_code(language) == expected
 
 
+# ── The speech check's recognizer: Whisper's code, from the same vocabulary ─
+
+
+@pytest.mark.parametrize("language,expected", [
+    ("Vietnamese", "vi"), ("pt-BR", "pt"), ("Arabic", "ar"), ("Standard Arabic", "ar"),
+    ("Chinese (Simplified)", "zh"), ("cmn-Hant", "zh"), ("zho", "zh"), ("Filipino", "tl"),
+    # Whisper's own spellings: Javanese is "jw", and it knows Nynorsk apart.
+    ("Javanese", "jw"), ("jv", "jw"), ("jw", "jw"),
+    ("Norwegian Bokmål", "no"), ("nb", "no"), ("Norwegian Nynorsk", "nn"), ("nn", "nn"),
+    # It hears every Pashto as one language, and knows its own names.
+    ("Southern Pashto", "ps"), ("pbu", "ps"), ("Pashto", "ps"),
+    ("Myanmar", "my"), ("Burmese", "my"), ("Malagasy", "mg"), ("Plateau Malagasy", "mg"),
+    ("Faroese", "fo"), ("Nynorsk", "nn"),
+    # Languages Whisper does not transcribe are detected instead.
+    ("Kurdish", None), ("Northern Kurdish", None), ("Cantonese", None), ("Odia", None),
+    ("Auto", None), ("", None), (None, None), (7, None), ("Klingon", None),
+])
+def test_recognizers_are_told_whispers_code_for_every_spelling(codes, language, expected):
+    assert codes.whisper_language(language) == expected
+
+
+def test_a_picker_label_tells_the_recognizer_what_its_code_does(codes):
+    for code, label in _picker_languages():
+        assert codes.whisper_language(label) == codes.whisper_language(code), label
+
+
+def test_the_speech_check_keeps_no_language_table_of_its_own(codes):
+    """Every spelling the app's vocabulary learns reaches the speech check."""
+    from omnivoice.utils.lang_map import LANG_NAME_TO_ID
+    from services import speech_verify
+
+    spellings = [*LANG_NAME_TO_ID, *LANG_NAME_TO_ID.values(),
+                 *(item for pair in _picker_languages() for item in pair)]
+    for spelling in spellings:
+        assert speech_verify.recognizer_language(spelling) == codes.whisper_language(spelling)
+
+
+def test_codes_still_reach_the_recognizer_without_omnivoices_names(codes, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "omnivoice.utils.lang_map", None)
+    assert codes.whisper_language("vi-VN") == "vi"
+    assert codes.whisper_language("Chinese (Traditional)") == "zh"
+    assert codes.whisper_language("Vietnamese") is None  # named only by OmniVoice
+
+
+def test_whisper_codes_are_the_ones_faster_whisper_knows(codes):
+    tokenizer = pytest.importorskip("faster_whisper.tokenizer")
+    known = getattr(tokenizer, "_LANGUAGE_CODES", None)
+    if known is None:
+        pytest.skip("faster-whisper no longer lists its language codes here")
+    # Cantonese is left out on purpose: only large-v3 knows it.
+    assert codes.WHISPER_LANGUAGES == set(known) - {"yue"}
+
+
 # ── OmniVoice: every family gets the id the model was trained with ────────
 
 

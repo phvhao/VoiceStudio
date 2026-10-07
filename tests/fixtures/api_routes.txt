@@ -209,6 +209,8 @@ POST /audiobook/outline
 POST /audiobook/plan
 POST /audiobook/preview
 POST /audiobook/resume/{job_id}
+POST /audiobook/retake
+POST /audiobook/takes
 POST /batch/enqueue
 POST /batch/jobs/{job_id}/cancel
 POST /batch/jobs/{job_id}/retry
@@ -261,6 +263,8 @@ POST /generate
 POST /glossary/{project_id}
 POST /glossary/{project_id}/auto-extract
 POST /longform/render
+POST /longform/retake
+POST /longform/takes
 POST /marketplace/export/{profile_id}
 POST /marketplace/import
 POST /marketplace/install/{filename}

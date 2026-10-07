@@ -21,8 +21,10 @@ import { MarkupToolbar } from './markup-toolbar';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupEditorTools } from './markup-editor-tools';
 import { EditorStatusBar, createCaretSource } from './editor-status-bar';
-import { previewPassage } from './script-markup';
+import { passageBounds, previewPassage } from './script-markup';
 import { usePassagePreview } from './passage-preview';
+import { paragraphsAround, useRetakes } from './take-retake';
+import type { RetakenChapter } from './chapter-previews';
 import { storyVoicesReady } from './story-inputs';
 import { StorySpeed } from './story-speed';
 import { ProjectSwitcher } from './project-settings';
@@ -46,8 +48,9 @@ import { BookSettings } from './book-settings';
 import { duplicateWords } from './book-options';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { DownloadIcon, ListIcon, PlayIcon, SparklesIcon, SquareIcon, XIcon } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -65,18 +68,22 @@ import { saveExport } from '@/lib/export-history';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { LANG_CODES } from '@shared/utils/languages';
 import {
+  audiobookRetakeChapter,
   bookLanguageTag,
   editLongform,
   dismissLongformError,
+  passageContext,
   renderLongform,
   resumeLongform,
   stopLongform,
+  storyRetakeChapter,
   useLongformSession,
   storiesImportEpoch,
   type Mode,
 } from './longform-session';
 import { SAMPLE_AUDIOBOOK_SCRIPT } from '@shared/data/sampleAudiobook';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
+import { useReadingSettings } from '@/lib/reading-settings';
 /** Built once: the page re-renders on every keystroke in the script. */
 const BOOK_LANGUAGES = ['Auto', ...LANG_CODES.map((item) => item.label)];
 interface Recovery {
@@ -173,18 +180,54 @@ export function LongformPage({ mode }: { mode: Mode }) {
   });
   const canPreview = ttsBlocker === null && voicesReady && !duplicateWords(draft.lexicon);
   const passage = usePassagePreview(draft, setImporting);
-  const previewSelection = () => {
-    const input = audiobookInput.current;
-    if (!input) return;
-    void passage.preview(
-      previewPassage(input.value, input.selectionStart ?? 0, input.selectionEnd ?? 0),
-    );
-  };
-  // Offsets come from the editor, so they index its (newline-normalized) value.
+  // Offsets come from the editor, so they index its (newline-normalized)
+  // value. The passage goes with where it is read, so it reads the book's
+  // own takes there.
   const previewRange = (from: number, to: number) => {
     const input = audiobookInput.current;
-    if (input) void passage.preview(previewPassage(input.value, from, to));
+    if (!input) return;
+    const [start, end] = passageBounds(input.value, from, to);
+    void passage.preview(
+      previewPassage(input.value, from, to),
+      passageContext(input.value, start, end),
+    );
   };
+  const previewSelection = () => {
+    const input = audiobookInput.current;
+    if (input) previewRange(input.selectionStart ?? 0, input.selectionEnd ?? 0);
+  };
+  // "Retake this sentence" needs the takes kept one by one: the book (or
+  // Settings → Reading) reads sentence by sentence.
+  const { reading: appReading } = useReadingSettings();
+  const phrases = (draft.overrides.reading ?? appReading).phraseRendering !== false;
+  const queryClient = useQueryClient();
+  const [retaken, setRetaken] = useState<RetakenChapter | null>(null);
+  const retakes = useRetakes({
+    chapterAt: (editor, offset) =>
+      mode === 'audiobook'
+        ? audiobookRetakeChapter(draft, offset)
+        : storyRetakeChapter(draft, editor),
+    onRetaken: ({ chapter, takes }) => {
+      if (mode === 'stories') {
+        // A story is heard from its render, which reads them anew.
+        toast.success(
+          takes.length > 1
+            ? t('editor.retaken_many', { count: takes.length })
+            : t('editor.retaken'),
+        );
+        return;
+      }
+      void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] });
+      const index = chapter.index;
+      if (index !== undefined) setRetaken((last) => ({ chapter: index, id: (last?.id ?? 0) + 1 }));
+      // Heard at once, where they are read: the paragraphs holding them —
+      // unless the script was edited meanwhile, and they are elsewhere now.
+      const input = audiobookInput.current;
+      if (input && input.value === chapter.sources[0]?.text)
+        previewRange(...paragraphsAround(input.value, takes));
+    },
+  });
+  const canRetake = phrases && (mode === 'audiobook' ? canPreview : ttsBlocker === null);
   const generatePanel = (
     <GeneratePanel
       mode={mode}
@@ -590,6 +633,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                       disabled={locked}
                       canPreview={canPreview}
                       onBusy={setImporting}
+                      retaken={retaken}
                       getTarget={() =>
                         audiobookInput.current && {
                           element: audiobookInput.current,
@@ -619,6 +663,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     defaultVoiceName={defaultVoice?.name}
                     onListen={canPreview ? previewSelection : undefined}
                     onListenRange={canPreview ? previewRange : undefined}
+                    retakes={canRetake ? retakes.tools('script') : undefined}
                   >
                     <MarkupTextarea
                       textareaRef={audiobookInput}
@@ -663,6 +708,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 profilesLoading={profilesLoading}
                 disabled={locked}
                 canSynthesize={ttsBlocker === null}
+                retakes={canRetake ? retakes : undefined}
                 onChange={set}
                 onBusy={setImporting}
               />

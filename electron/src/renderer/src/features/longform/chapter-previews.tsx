@@ -17,6 +17,12 @@ export interface ChapterPreviewOutput {
   title: string;
 }
 
+/** A retake asked for takes of chapter `chapter` (the plan's index) again; `id` tells retakes apart. */
+export interface RetakenChapter {
+  chapter: number;
+  id: number;
+}
+
 export interface ChapterPreviewState {
   /** Render chapter `index` of the plan and hold its audio. */
   render(index: number): Promise<void>;
@@ -31,7 +37,9 @@ export interface ChapterPreviewState {
 /**
  * One chapter rendered on its own through `/audiobook/preview`. It shares the
  * full render's chapter and segment caches, so the book reuses what it
- * renders. `onRendered` follows every render (the cache changed).
+ * renders. `onRendered` follows every render (the cache changed). Once a
+ * retake asks for one of its takes again (`retaken`), the audio it holds is
+ * an older reading of that chapter, and goes.
  */
 export function useChapterPreview(
   draft: Draft,
@@ -40,17 +48,24 @@ export function useChapterPreview(
     canPreview,
     onBusy,
     onRendered,
+    retaken = null,
   }: {
     disabled: boolean;
     canPreview: boolean;
     onBusy: (busy: boolean) => void;
     onRendered?: () => void;
+    retaken?: RetakenChapter | null;
   },
 ): ChapterPreviewState {
   const [output, setOutput] = useState<ChapterPreviewOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  const [heard, setHeard] = useState(retaken);
+  if (retaken !== heard) {
+    setHeard(retaken);
+    if (retaken && output?.index === retaken.chapter) setOutput(null);
+  }
   // A preview is stale once the request it came from would change. Deriving
   // the key from that request keeps every input it reads (a voice's volume
   // included) in step without a list to maintain here.

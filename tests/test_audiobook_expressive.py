@@ -75,6 +75,21 @@ def test_every_expressive_field_perturbs_the_cache_signature_distinctly():
     assert {f.name for f in dataclasses.fields(base)} == set(_ALL_FIELDS)
 
 
+def test_every_field_is_take_level_or_assembly_level():
+    """Phrase takes are cached on their own: a take-level field keys every
+    take, an assembly-level one never does (changing it re-joins the takes
+    already cached). A field added in neither class — or in both — fails
+    here, so nobody can add a knob that silently replays stale takes or
+    needlessly renders them all again."""
+    base = ExpressiveOptions()
+    take, assembly = set(ExpressiveOptions.TAKE_LEVEL), set(ExpressiveOptions.ASSEMBLY_LEVEL)
+    assert not take & assembly
+    assert take | assembly == {f.name for f in dataclasses.fields(base)}
+    for field, value in _ALL_FIELDS.items():
+        changed = dataclasses.replace(base, **{field: value}).take_level_signature()
+        assert (changed != base.take_level_signature()) is (field in take), field
+
+
 # ── segment_seed nonce (cache opt-out determinism) ──────────────────────────
 
 def test_segment_seed_nonce_zero_is_backward_compatible():

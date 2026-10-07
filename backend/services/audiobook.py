@@ -66,6 +66,32 @@ def segment_seed(base_seed: int, text: str, nonce: int = 0) -> int:
     return (int(base_seed) + zlib.crc32(text.encode("utf-8")) + int(nonce) * _NONCE_MIX) % (2**31)
 
 
+def take_seed_input(text: str, attempt: int, next_nonce: Callable[[], int], *,
+                    occurrence: Optional[int] = None, retake: str = "",
+                    vary: bool = False) -> tuple[str, int]:
+    """``(text, nonce)`` that :func:`segment_seed` seeds one take with — the
+    one rule this machine and a remote worker both seed by, so a chapter
+    sounds the same wherever it renders. The first take is seeded exactly as
+    before; a speech-check retake (``attempt`` > 0) salts the text so a pinned
+    seed still gives a different take, without advancing the repeat counter
+    the first take already used.
+
+    A phrase take of a planned chapter names its ``occurrence`` in the
+    chapter (``longform_render.TakeRef``): with ``vary`` (Vary repeated
+    lines) it is the nonce — the same seed whatever else was cached, where
+    ``next_nonce`` (a running counter) would count only the takes a render
+    synthesized — and without it 0, as before. A ``retake`` the user asked
+    for (its salt) salts the text too, so a pinned seed gives that take
+    anew."""
+    if retake:
+        text = f"{text}\x00take{retake}"
+    if attempt:
+        return f"{text}\x00retake{int(attempt)}", 0
+    if occurrence is not None:
+        return text, int(occurrence) if vary else 0
+    return text, next_nonce()
+
+
 def punctuation_pause_pairs(pauses) -> Optional[tuple]:
     """``{family: ms}`` → the sorted, hashable pairs :class:`ExpressiveOptions`
     stores (``None`` stays ``None``: phrase rendering off)."""
@@ -155,6 +181,21 @@ class ExpressiveOptions:
     #: Manifest keys that are never engine kwargs (the join, plus render-side
     #: switches such as the speech check).
     RENDER_KEYS = JOIN_KEYS + ("verify_speech",)
+    #: Every field is one of two kinds (``tests/test_audiobook_expressive.py``
+    #: fails on a field in neither). Take-level: what the engine is asked or
+    #: how it samples — these key each phrase take (``longform_render.
+    #: TakeCache``), so changing one renders the takes again.
+    TAKE_LEVEL = ("num_step", "guidance_scale", "position_temperature", "class_temperature",
+                  "postprocess_output", "seed", "emo_vector", "emo_text", "emo_alpha",
+                  "vary_repeats")
+    #: Assembly-level: what cuts, checks, joins or balances takes. Changing
+    #: one re-assembles chapters from the takes already cached: the cut
+    #: reaches a take only through its own text (a pause or the paragraph gap
+    #: changes no take; the comma rule only the takes it cuts), trims and gaps
+    #: act on finished takes, leveling and volumes re-balance them, and the
+    #: speech check listens to cached takes, keeping its score with each.
+    ASSEMBLY_LEVEL = ("line_gap_ms", "paragraph_gap_ms", "trim_edges", "punctuation_pauses",
+                      "split_commas", "verify_speech", "level_voices", "voice_gains")
 
     def join_kwargs(self) -> dict:
         """The subset of options :func:`synthesize_chapter` takes directly."""
@@ -224,6 +265,14 @@ class ExpressiveOptions:
         """:meth:`take_signature` as builds before the line gap left it keyed
         segments — so a segment cached under it is still found."""
         return replace(self, level_voices=False, voice_gains=None).cache_signature()
+
+    def take_level_signature(self) -> str:
+        """What keys one phrase take (``longform_render.take_identity``): the
+        :attr:`TAKE_LEVEL` options alone, so every :attr:`ASSEMBLY_LEVEL`
+        change joins the takes already cached instead of rendering them."""
+        payload = {name: getattr(self, name) for name in self.TAKE_LEVEL}
+        payload["emo_vector"] = list(self.emo_vector) if self.emo_vector else None
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False)
 
     def to_manifest(self) -> dict:
         """JSON-safe dict for the durable resume manifest (emo_vector → list).
@@ -521,15 +570,38 @@ def _span_units(text: str, *, paragraph_gap_ms: int = 0,
     return units
 
 
-def _accepts_attempt(synth) -> bool:
-    """Whether ``synth`` takes ``attempt=`` (a retake that must differ)."""
+def chapter_units(spans, *, lexicon: Optional[dict] = None, paragraph_gap_ms: int = 0,
+                  punctuation_pauses: Optional[dict] = None, split_commas: bool = False) -> list:
+    """Each span's takes as the engine receives them (:func:`_span_units`
+    over its text): the lexicon first, then the script's own
+    ``[[word|respelling]]`` overrides, so an inline override always wins
+    (the order of ``apply_pronunciation``). ``[]`` for a span with no text."""
+    from services.pronunciation import apply_inline_overrides, apply_lexicon
+
+    return [_span_units(apply_inline_overrides(apply_lexicon(span.text, lexicon)),
+                        paragraph_gap_ms=paragraph_gap_ms,
+                        punctuation_pauses=punctuation_pauses,
+                        split_commas=split_commas) if span.text else []
+            for span in spans]
+
+
+#: What :func:`synthesize_chapter` tells a synth that takes it: the retake of
+#: a check (``attempt``), and which occurrence of a phrase take this is and
+#: which retake of it the user asked for (``occurrence`` / ``retake``).
+_TAKE_KEYWORDS = ("attempt", "occurrence", "retake")
+
+
+def _accepted_keywords(synth) -> frozenset:
+    """Which of :data:`_TAKE_KEYWORDS` ``synth`` takes (all with ``**kw``)."""
     import inspect
 
     try:
-        params = inspect.signature(synth).parameters.values()
+        params = list(inspect.signature(synth).parameters.values())
     except (TypeError, ValueError):
-        return False
-    return any(p.name == "attempt" or p.kind is p.VAR_KEYWORD for p in params)
+        return frozenset()
+    if any(p.kind is p.VAR_KEYWORD for p in params):
+        return frozenset(_TAKE_KEYWORDS)
+    return frozenset(p.name for p in params if p.name in _TAKE_KEYWORDS)
 
 
 def synthesize_chapter(
@@ -551,6 +623,8 @@ def synthesize_chapter(
     voice_names: Optional[Sequence[str]] = None,
     timing: Optional[list] = None,
     recognizer: Optional[bool] = None,
+    take_cache: Optional["object"] = None,
+    takes: Optional[list] = None,
 ):
     """Render a chapter's spans to one waveform via an injected ``synth``.
 
@@ -583,6 +657,30 @@ def synthesize_chapter(
     recognizer answers: asked once per chapter with that span's audio, unless
     ``recognizer`` already says it does (``True``) or does not (``False``).
 
+    ``take_cache`` (a :class:`services.longform_render.TakeCache`, used with
+    ``punctuation_pauses``) keeps every phrase take on its own, the moment it
+    finishes: a span not cached whole is assembled from its takes, so an edit
+    renders only the takes whose spoken text changed, any assembly-level
+    change (pauses, trimming, gaps, leveling, volume) renders nothing, and an
+    interrupted chapter loses at most the take in progress. Such a span is
+    not stored whole — its takes are the cache — but a span cached whole
+    before takes were kept is still reused; once a take of it is asked for
+    again (``TakeRef.salt``), or the check must listen to takes it could not
+    hear, it is cut into its takes by the take ranges kept with it
+    (``longform_render.cuttable_takes``), so only the retaken or failing
+    takes render. Every repeat of a phrase in the chapter is a take of its
+    own (``TakeRef.occurrence``). ``takes`` (the chapter's takes by span, as
+    ``TakeCache.plan`` gives them) stands in for the cache's own plan — a
+    passage read in its chapter is planned by that chapter — and, without a
+    take cache, has each take rendered as it names it (a remote worker).
+    ``synth`` receives ``occurrence=`` and ``retake=`` (the retake's salt)
+    when it accepts them, to seed each take as its own. With the speech
+    check on, a cached take is listened to only when the check never heard
+    it; its score is kept with the take, and a retake the check chose in a
+    slot of its own, so a re-render reports what was found without listening
+    again and a render without the check still reads each take as it was
+    first rendered.
+
     ``level_voices`` / ``voice_gains`` re-balance the rendered spans before
     they are joined (:mod:`services.voice_leveling`): each voice — span ``i``
     speaks ``voice_names[i]``, ``''`` for the book's default voice (default:
@@ -608,7 +706,6 @@ def synthesize_chapter(
     from services.chunked_tts import (concatenate_audio_chunks,
                                       join_phrases,
                                       join_rendered_chunks)
-    from services.pronunciation import apply_inline_overrides, apply_lexicon
 
     if voice_names is None:
         voice_names = [span.voice_id or "" for span in spans]
@@ -620,17 +717,12 @@ def synthesize_chapter(
     # Validate the complete requested silence before touching synthesis/cache.
     # Incremental shortening would bake context-dependent gaps into reusable
     # segment audio, and cache hits could evade the chapter's silence budget.
-    paragraphs_by_span = []
+    paragraphs_by_span = chapter_units(spans, lexicon=lexicon, paragraph_gap_ms=paragraph_gap_ms,
+                                       punctuation_pauses=punctuation_pauses,
+                                       split_commas=split_commas)
     planned_gap_ms = 0
     total_join_ms = 0
-    for span in spans:
-        # Same order as apply_pronunciation: lexicon first, then the script's
-        # own [[word|respelling]] overrides, so an inline override always wins.
-        text = apply_inline_overrides(apply_lexicon(span.text, lexicon)) if span.text else ""
-        units = _span_units(text, paragraph_gap_ms=paragraph_gap_ms,
-                            punctuation_pauses=punctuation_pauses,
-                            split_commas=split_commas)
-        paragraphs_by_span.append(units)
+    for span, units in zip(spans, paragraphs_by_span):
         if span.text:
             total_join_ms += sum(sum(gaps) for _, gaps in units if gaps)
             total_join_ms += planned_gap_ms + max(0, len(units) - 1) * paragraph_gap_ms
@@ -648,15 +740,34 @@ def synthesize_chapter(
     # gets a distinct cache slot — and therefore a distinct take — instead of
     # replaying one WAV. Always computed (cheap); inert when the cache ignores it.
     occ_counts: dict = {}
-    retake_kw = _accepts_attempt(synth)
+    take_kw = _accepted_keywords(synth)
 
-    def _take(text, span):
+    def _take(text, span, ref=None, first=None, produced=None):
+        """``text`` in ``span``'s voice, through the speech check when on;
+        ``ref`` names the phrase take for a synth that seeds by it, and
+        ``first`` is a take of it already rendered (cached), listened to
+        before anything is synthesized. ``produced`` (a dict the caller owns)
+        receives each take synthesized, by attempt."""
+        extra = {}
+        if ref is not None:
+            if "occurrence" in take_kw:
+                extra["occurrence"] = ref.occurrence
+            if "retake" in take_kw and ref.salt:
+                extra["retake"] = ref.salt
+
         def take(attempt):
             if attempt:
                 _stop_if_abandoned()
-                kw = {"attempt": attempt} if retake_kw else {}
-                return trace_call("synthesis", synth, text, span.voice_id, span.speed, **kw)
-            return trace_call("synthesis", synth, text, span.voice_id, span.speed)
+                kw = {"attempt": attempt} if "attempt" in take_kw else {}
+                audio = trace_call("synthesis", synth, text, span.voice_id, span.speed,
+                                   **extra, **kw)
+            elif first is not None:
+                return first
+            else:
+                audio = trace_call("synthesis", synth, text, span.voice_id, span.speed, **extra)
+            if produced is not None:
+                produced[attempt] = audio
+            return audio
         return verifier.render(text, take) if verifier is not None else take(0)
 
     # What the speech check found in this chapter: the spans rendered now and
@@ -664,6 +775,65 @@ def synthesize_chapter(
     # counts what it listened to, as SpeechVerifier does).
     report = speech_check_record() if _counts_checks(verifier) else None
     listens = {"answer": recognizer}
+    # Every phrase take of every span: the plan given, else the take
+    # cache's own when takes are cached one by one.
+    takes_by_span = None
+    if punctuation_pauses is not None:
+        if takes is not None:
+            if [len(refs) for refs in takes] != [
+                    sum(len(texts) for texts, _gaps in units) for units in paragraphs_by_span]:
+                raise ValueError("takes must name every take of the chapter's spans")
+            takes_by_span = takes
+        elif take_cache is not None:
+            takes_by_span = take_cache.plan(spans, paragraphs_by_span)
+
+    def _phrase_take(text, span, ref):
+        """One phrase take through the take cache: ``(audio, what the speech
+        check found in it)`` — the record ``None`` when the check is off or
+        the take too short to judge. A cached take is reused as it is; with
+        the check on it is first listened to, unless the check heard it
+        before (its score is kept with it, and a retake it chose in a slot of
+        its own) or has no recognizer to ask now. A take rendered is cached
+        the moment it is chosen; a retake the check chose goes to its own
+        slot, so the take a render without the check reads stays the first
+        one. Without a take cache, the take is rendered as ``ref`` names it."""
+        judged = report is not None and _checkable(text)
+        cached = trace_call("cache", take_cache.load, ref) if take_cache is not None else None
+        if cached is not None and not judged:
+            return cached, None
+        if cached is not None:
+            kept = take_cache.load_check(ref, samples=cached.shape[-1])
+            if kept is not None and kept["heard"]:
+                chosen = (trace_call("cache", take_cache.load, ref, kept["attempt"])
+                          if kept["attempt"] else cached)
+                if chosen is not None:
+                    return chosen, kept
+                # The retake it chose was evicted: the check listens again.
+            elif getattr(verifier, "unavailable", False):
+                return cached, {"heard": False, "score": None,
+                                "retaken": (kept or {}).get("retaken", 0),
+                                "no_recognizer": bool(getattr(verifier, "no_recognizer", False))}
+        before = _check_marks(verifier) if judged else None
+        produced: dict = {}
+        audio = _take(text, span, ref, first=cached, produced=produced)
+        found = _take_check(verifier, before) if judged else None
+        if take_cache is None:
+            return audio, found
+        first = produced.get(0)
+        if first is not None and first.shape[-1] > 0:
+            trace_call("cache", take_cache.store, ref, first)
+        attempt = next((n for n, take in produced.items() if take is audio), 0)
+        rendered = audio is not None and audio.shape[-1] > 0
+        if attempt:
+            if cached is not None:
+                take_cache.discount()  # the check rendered it again
+            if rendered:
+                trace_call("cache", take_cache.store, ref, audio, attempt)
+        own = first if first is not None else cached
+        if found is not None and rendered and own is not None and own.shape[-1] > 0:
+            take_cache.store_check(ref, {**found, "attempt": attempt}, samples=own.shape[-1])
+        return audio, found
+
 
     def rechecks(audio) -> bool:
         """Whether a cached span the check could not listen to is rendered
@@ -682,13 +852,22 @@ def synthesize_chapter(
             occ_key = (span.voice_id, span.text, getattr(span, "speed", None))
             occ = occ_counts.get(occ_key, 0)
             occ_counts[occ_key] = occ + 1
-            audio = trace_call("cache", segment_cache.load, span, nonce=occ) if segment_cache is not None else None
+            takes = takes_by_span[index] if takes_by_span is not None else None
+            audio = (trace_call("cache", segment_cache.load, span, nonce=occ)
+                     if segment_cache is not None else None)
             units = None
             if audio is not None:
                 found = (_cached_check(segment_cache, span, occ, audio.shape[-1])
                          if report is not None else None)
-                if found and found["unchecked"] and rechecks(audio):
-                    # Rendered while no recognizer answered: check it now.
+                # A span cached whole holds the takes it was rendered with: it
+                # is read take by take once one of them was asked for again,
+                # or — rendered while no recognizer answered — to be checked
+                # now; the takes it holds are cut from it, not rendered again.
+                retaken = bool(takes) and any(ref.salt for ref in takes)
+                if retaken or (found and found["unchecked"] and rechecks(audio)):
+                    if takes is not None and take_cache is not None:
+                        trace_call("cache", cut_cached_span, take_cache, segment_cache, span,
+                                   occ, audio, takes, checking=report is not None)
                     if hasattr(segment_cache, "discount"):
                         segment_cache.discount()
                     audio = None
@@ -696,6 +875,8 @@ def synthesize_chapter(
                     units = _cached_take_ranges(segment_cache, span, occ, audio.shape[-1])
                     if found:
                         add_speech_check(report, found)
+                    if takes is not None and take_cache is not None:
+                        take_cache.reused(len(takes))
             if audio is None:
                 # A blank line inside one span is a paragraph break: render
                 # each paragraph on its own so the join can put a deliberate
@@ -706,11 +887,17 @@ def synthesize_chapter(
                 paragraph_ranges = []
                 first_take = 0
                 before = _check_marks(verifier) if report is not None else None
+                heard: list = []  # (text, what the check found) per phrase take
                 for chunks, gaps in paragraphs:
                     rendered = []
                     for c in chunks:
                         _stop_if_abandoned()
-                        rendered.append(_take(c, span))
+                        if takes is not None:
+                            take, checked = _phrase_take(c, span, takes[first_take + len(rendered)])
+                            heard.append((c, checked))
+                            rendered.append(take)
+                        else:
+                            rendered.append(_take(c, span))
                         _note_chunk_done()
                     # Deliberately NOT pre-filtered (#1330). Dropping the empties
                     # here both hid them — a chapter would come back short with
@@ -738,10 +925,13 @@ def synthesize_chapter(
                     units = [[k, start + a, start + b]
                              for start, ranges in zip(starts, paragraph_ranges)
                              if start is not None for k, a, b in ranges if b > a] or None
-                found = _span_check(verifier, before, paragraphs) if report is not None else None
-                if found is not None:
+                found = None
+                if report is not None:
+                    found = (_takes_check(heard, verifier) if takes is not None
+                             else _span_check(verifier, before, paragraphs))
                     add_speech_check(report, found)
-                if audio is not None and segment_cache is not None:
+                # Phrase takes are the cache: the span is not stored whole too.
+                if audio is not None and segment_cache is not None and takes is None:
                     trace_call("cache", segment_cache.store, span, audio, nonce=occ)
                     if (units or found) and hasattr(segment_cache, "store_timing"):
                         extra = {"check": found} if found is not None else {}
@@ -828,6 +1018,32 @@ def synthesize_chapter(
     return audio, audio.shape[-1] / float(sample_rate)
 
 
+def cut_cached_span(take_cache, segment_cache, span, occurrence: int, audio, refs, *,
+                    checking: bool) -> int:
+    """Fill ``take_cache`` with the takes a span cached whole holds — ``audio``,
+    the segment ``segment_cache`` holds for ``span`` (a span rendered before
+    takes were kept) — cut by the take ranges kept with it, so the span is
+    read take by take without rendering again the takes it already holds.
+    ``refs`` are the span's takes; retaken ones, ones already cached and ones
+    it holds no range for are left alone (``longform_render.cuttable_takes``;
+    ``checking``: the segment was rendered with the speech check). Returns
+    how many takes it cut. Best-effort, like every cache write."""
+    from services.longform_render import cuttable_takes
+
+    samples = audio.shape[-1]
+    units = _cached_take_ranges(segment_cache, span, occurrence, samples)
+    check = _cached_check(segment_cache, span, occurrence, samples) if checking else None
+    cut = cuttable_takes(units, check, checking=checking)
+    ranges = {k: (start, end) for k, start, end in units or []}
+    stored = 0
+    for k, ref in enumerate(refs):
+        if k in cut and not ref.salt and not take_cache.has(ref):
+            start, end = ranges[k]
+            take_cache.store(ref, audio[..., start:end].clone())
+            stored += 1
+    return stored
+
+
 # ── Speech-check results kept with the audio ────────────────────────────────
 
 #: Seconds of a cached span played to the recognizer to learn whether it
@@ -909,6 +1125,50 @@ def _span_check(verifier, before: tuple, paragraphs: list) -> dict:
             "suspect": [dict(item) for item in verifier.suspect[suspects:]],
             "unavailable": bool(unchecked and getattr(verifier, "unavailable", False)),
             "no_recognizer": bool(unchecked and getattr(verifier, "no_recognizer", False))}
+
+
+def _checkable(text: str) -> bool:
+    from services.speech_verify import checkable
+
+    return checkable(text)
+
+
+def _take_check(verifier, before: tuple) -> dict:
+    """What the speech check found in the one phrase take it was just asked
+    about (``longform_render.valid_take_check``): heard or not, its score,
+    the retakes it rendered."""
+    checked, retaken, suspects = before
+    heard = verifier.checked > checked
+    score = getattr(verifier, "last_score", None) if heard else None
+    if heard and score is None and len(verifier.suspect) > suspects:
+        score = verifier.suspect[-1].get("score")  # a verifier that keeps no score
+    return {"heard": heard, "score": score, "retaken": verifier.retaken - retaken,
+            "no_recognizer": bool(not heard and getattr(verifier, "no_recognizer", False))}
+
+
+def _takes_check(takes: list, verifier) -> dict:
+    """What the speech check found in one span assembled from phrase takes,
+    from each take's own result — ``(text, result)``, the result ``None``
+    for a take too short to judge — whether it was just heard or kept with
+    the cached take (:func:`_span_check`'s shape). A take heard below the
+    match threshold is one to listen to."""
+    from services.speech_verify import MATCH_THRESHOLD
+
+    threshold = getattr(verifier, "threshold", MATCH_THRESHOLD)
+    found = speech_check_record()
+    for text, take in takes:
+        if take is None:
+            continue
+        found["retaken"] += take["retaken"]
+        if take["heard"]:
+            found["checked"] += 1
+            if take["score"] is not None and take["score"] < threshold:
+                found["suspect"].append({"text": text[:300], "score": round(take["score"], 2)})
+        else:
+            found["unchecked"] += 1
+            found["no_recognizer"] = found["no_recognizer"] or take["no_recognizer"]
+    found["unavailable"] = bool(found["unchecked"] and getattr(verifier, "unavailable", False))
+    return found
 
 
 def _cached_check(segment_cache, span, nonce: int, samples: int) -> Optional[dict]:

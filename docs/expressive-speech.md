@@ -15,6 +15,7 @@ ignores.
 | Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Volume**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
 | Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
 | One passage quieter or louder (a whisper, a shout) | Wrap it in `[volume -6dB]…[/volume]` — the toolbar's **Volume** does it for the selected text — see [Voice volume](#voice-volume) | Every engine |
+| One sentence of a book or story read again (a stumble, an odd laugh) | Right-click it → **Retake this sentence**; the rest of the chapter is reused — see [Sentence-by-sentence rendering](#sentence-by-sentence-rendering-and-punctuation-pauses) | Every engine, read sentence by sentence |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
 | Whispering | Style → `whisper` (the voice-design/style field) | Default engine |
@@ -48,6 +49,47 @@ must fit their subtitle timing. In long-form renders the pause is exact when
 **Trim engine silence** is on (it is off by default); otherwise the engine's
 own lead-in is kept at the outer edges of each line.
 
+In Audiobook and Stories each sentence's take is kept on its own the moment it
+is rendered, and a chapter is put together from its takes. Editing a word
+renders only the take that says it; changing a pause, trimming, either gap,
+voice leveling or a volume joins the takes already rendered without rendering
+any (**Pause at every comma** renders only the sentences it cuts differently);
+adding a pronunciation renders only the takes it respells; and **Stop**, or a
+crash, loses at most the take in progress. A sentence that occurs twice in a
+chapter has a take of its own each time. Listening to a passage or a chapter
+uses the same takes and keeps them for the book: a passage is read where it
+sits in its chapter, so a sentence the chapter said earlier plays the take
+the book reads there, not the earlier one's. Since an edit no longer reads
+its neighbours anew, a sentence that came out wrong — a stumble, an odd
+laugh — is read anew on its own: right-click it and choose **Retake this
+sentence** (with text selected, **Retake N sentences** retakes every sentence
+the selection reaches), or use the same button on the card of a reaction,
+delivery or respelling inside it. The next render or preview of its chapter
+renders that take alone and reuses every other. The retake stays with that
+sentence where it is read — the sentences around it and its chapter's title
+— so the same sentence elsewhere in the book, or in another book, keeps its
+take, and editing a sentence or two around it, or adding or removing a copy
+of it earlier in the chapter, keeps the retake. In Audiobook the paragraph
+holding it plays straight away, so you hear the new take where it is read
+(the Contents rail then counts it as rendered); in Stories the next render
+reads it anew. A retake asked for while another is being saved waits its
+turn, and when the sentence cannot be looked up (the backend is not
+answering) the app says why instead of "no sentence here". Retake is offered
+where the book reads sentence by sentence and its voices are set
+(`POST /audiobook/takes` lists a chapter's takes as `span`, `take`, `text`,
+`retake` and `cached`; `POST /audiobook/retake`, with the same body plus
+`span`, `take` and optionally `phrase`, asks for one again;
+`POST /longform/takes` and `/longform/retake` take a Stories chapter as
+`/longform/render` posts it; `POST /audiobook/preview` takes a passage's
+`context`: its chapter's script text and where the passage starts and ends in
+it). Chapters and lines cached by earlier versions keep playing as they were;
+the first edit of a chapter cached that way renders it once more, take by
+take from then on, and a retake in one cuts its other sentences from it, so
+only the retaken sentence renders. A remote GPU worker renders whole
+chapters, so a retake renders that chapter there again: every sentence is
+seeded as this computer would seed it, so with a voice that pins its seed
+the retaken sentence comes back anew and every other as before.
+
 **Check the reading and redo mistakes** (off by default) listens to each
 sentence with the speech recognizer you already installed, re-renders the ones
 whose words differ from the script (up to twice, keeping the closest take) and,
@@ -64,20 +106,29 @@ of detecting it, so after the first sentence a check takes well under a second
 stays loaded only while the render runs: it is released when the render ends,
 between two checks when the memory it holds runs low (GPU memory for a
 recognizer on the GPU; system memory for one on the CPU, on a Mac, or on a
-computer without a GPU), and by its **Unload** button in **Model Catalogue**
-("In memory" while a render holds it); the next check loads it again.
+computer without a GPU), and by its **Unload** button in **Model Catalogue**,
+where the model it loaded, an installed fallback included, shows "In memory"
+while a render holds it (so does the status bar's speech recognition row for
+the selected model); the next check loads it again. With the GPU nearly full
+it loads on the CPU instead of crashing the backend (see
+[faster-whisper](engines/faster-whisper.md)).
 mlx-whisper on a Mac keeps its model loaded, as before. Renders share the
 recognizer, one check at a time; a check never waits more than
 `OMNIVOICE_SPEECH_CHECK_WAIT_S` (default 120 s) for another render's, so a
 transcription that hangs leaves the sentences after it unchecked instead of
 stalling every render. The render trace
 (**Settings → About → Save diagnostic bundle**) shows the checks as the
-`speech_check` stage. What it found is kept with the cached audio, so
-re-rendering an unchanged or partly edited chapter still lists those
-sentences. Sentences it could not listen to are kept as unchecked, not
-as checked: they are reused as they are while no recognizer is installed, and
-the first render after one is installed checks them. Chapters rendered on a
-remote worker are not checked.
+`speech_check` stage. What it found is kept with the cached audio — with each
+sentence's take, its score included — so re-rendering an unchanged or partly
+edited chapter still lists those sentences without listening again, and
+turning the check on for a book already read sentence by sentence only listens
+to its takes, rendering again just the ones that fail. A take the check
+rendered again is kept beside the first one, not in its place: turning the
+check off reads every sentence as first rendered, as a render without the
+check always does. Sentences it could not listen to are kept as unchecked,
+not as checked: they are reused as they are while no recognizer is
+installed, and the first render after one is installed checks them. Chapters
+rendered on a remote worker are not checked.
 
 API callers keep the take they had unless they ask: long-form requests
 (`/audiobook`, `/longform/render`, `/audiobook/preview`) send
@@ -141,8 +192,13 @@ shows as *Intro (untitled)*, and its menu's **Add title** puts a `# ` heading
 above it. Each chapter says whether its audio is **Rendered** for the script
 and settings as they are now, **Changed** (its script or settings changed
 since the last audiobook, so it renders again; hover the badge for the
-reason), or **Not rendered**; its play button renders that chapter on its own
-in a compact player under the contents, and the full book reuses it.
+reason), or **Not rendered**; read sentence by sentence, a chapter that must
+render again and already has sentences rendered says how many are left
+(**1 sentence to render** after a one-word edit or a retake), or **All
+sentences ready** when a render only joins them again (after a pause or a
+volume changed). Its play button renders that chapter on its own in a compact
+player under the contents, and the full book reuses it; a retake in that
+chapter puts away the player that held the old take.
 
 In Audiobook and Stories, click a tag — or put the cursor on it and press
 **Alt+Enter** — to open a card for it:
@@ -155,7 +211,9 @@ In Audiobook and Stories, click a tag — or put the cursor on it and press
   tag to another name, a voice profile or the default voice.
 - **`[pause …]`** — pick a preset or type a length.
 - **Delivery** (`[slow]`, `[fast]`, `[emphasis]`, `[spell]`) — switch both
-  halves of the pair to another kind, or remove the pair.
+  halves of the pair to another kind, or remove the pair. Like the reaction
+  and respelling cards, it offers **Retake this sentence** for the sentence it
+  sits in (read sentence by sentence).
 - **`[volume …]`** — pick a step (quieter, a little quieter, a little louder,
   louder) or set the passage's gain with the slider; from either half, only
   the opening tag changes. **Remove this markup** unwraps the words.
@@ -165,7 +223,10 @@ In Audiobook and Stories, click a tag — or put the cursor on it and press
   written.
 
 Every change is one ordinary edit, so **Ctrl+Z** undoes it. Right-clicking a
-tag offers the same actions. Typing `[` suggests voices (the script's names
+tag offers the same actions, and right-clicking a sentence offers **Retake
+this sentence** (see
+[Sentence-by-sentence rendering](#sentence-by-sentence-rendering-and-punctuation-pauses)).
+Typing `[` suggests voices (the script's names
 and your voice profiles), pauses, delivery, volume steps and reactions; ↑↓ choose, **Enter** or **Tab** inserts and
 **Esc** closes. Tags inside a `# Chapter` line are part of the title, so they
 are not clickable there.
@@ -371,6 +432,9 @@ The Audiobook panel adds two longform-only controls on top of that surface:
 IndexTTS2 emotion (see below), and **Vary repeated lines** — a cache opt-out
 that gives every identical line its own take instead of replaying one recording
 (off by default, so books stay byte-reproducible unless you ask for variety).
+Read sentence by sentence, every repeat of a sentence has a take of its own
+already; with a pinned seed those takes come out the same unless **Vary
+repeated lines** seeds each repeat apart.
 
 It also owns the **joins**. Every engine pads each rendered line with its own
 lead-in and tail silence (GPT-SoVITS ≈ 70 ms / 300 ms, others similar); joined
@@ -382,7 +446,8 @@ explicit `[pause]` replaces the gap rather than adding to it — and **Gap
 between paragraphs** at a blank line inside one line of script; 250 ms and
 350 ms work well. Both gaps start at 0. The gap between lines goes between
 finished takes, so changing it joins the cached takes again instead of
-rendering them. A line that inline markup (`[slow]`, `[emphasis]`, `[spell]`)
+rendering them; read sentence by sentence, so do the gap between paragraphs
+and trimming. A line that inline markup (`[slow]`, `[emphasis]`, `[spell]`)
 splits into several renders is still one line: no gap lands in the middle of
 it (and a blank line sitting on that split still gets the paragraph gap). A
 `[voice:NAME]` change is a line boundary and gets the line gap, blank line or

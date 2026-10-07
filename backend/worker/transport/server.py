@@ -76,6 +76,10 @@ REQUIRED_FEATURES = frozenset({
     # profile conditioning controls. Require the canonical worker render path
     # so an older peer cannot successfully return a different voice.
     "remote_tts_render_v1",
+    # An audiobook chapter's ``takes`` (a retake the user asked for, a
+    # passage's repeated sentence) reseed single sentences. An older peer
+    # ignores them and returns the take the user rejected as a success.
+    "audiobook_takes_v1",
 })
 
 

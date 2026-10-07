@@ -15,6 +15,15 @@ equivalent is pinning HOW MANY expensive operations a hot path performs:
   - batch native TTS  — one native batch of width W renders ceil(N/W)
                         `generate_batch` calls and zero per-segment
                         `generate` calls (fix/perf-dub-cache-batching).
+  - long-form takes   — with phrase-by-phrase reading, a one-word edit in a
+                        parsed chapter renders ONE take (it rendered every
+                        take of the span: plain prose is one span); a pause,
+                        trim, gap, leveling or volume change renders none; a
+                        paragraph previewed after the render renders none; a
+                        lexicon entry renders only the takes it respells; a
+                        stopped chapter resumes with the takes it had left;
+                        turning the speech check on renders nothing and
+                        listens to each cached take once.
 
 A counter budget fails on ANY regression (stricter than 5 %) and cancels out
 host speed. The guards deliberately count expensive work rather than timing
@@ -37,6 +46,7 @@ os.environ.setdefault("OMNIVOICE_MODEL", "test")
 os.environ.setdefault("OMNIVOICE_DISABLE_FILE_LOG", "1")
 
 import asyncio
+import dataclasses
 import importlib
 import json
 
@@ -515,3 +525,166 @@ def test_batch_budget_exact_native_batch_calls(monkeypatch, tmp_path):
         f"budget: zero per-segment generates when the native batch path "
         f"covers all segments — got {len(fake.generate_calls)}"
     )
+
+
+# ── Long-form phrase takes — an edit renders only what it changed ────────────
+#
+# Phrase-by-phrase reading is the app's default, and a chapter of plain
+# paragraphs parses to ONE span: caching whole spans re-rendered every take
+# of the chapter for a one-word edit (48 of 48 here), a pause change or a
+# lexicon entry, and a Stop threw away every finished take of the span. Each
+# take is cached on its own the moment it finishes, beneath the span cache.
+
+
+_KEEPER = ("The old lighthouse keeper climbed the spiral stairs every evening at dusk. "
+           "He carried a brass lantern, a thermos of tea, and a notebook full of weather. "
+           "Nobody in the village remembered when he had first arrived; "
+           "some said forty years, some said more. "
+           "The gulls knew him, though, and they wheeled above the gallery "
+           "whenever he stepped outside.")
+
+
+def _book() -> list:
+    """Twelve paragraphs: four takes each, three of them repeated every time."""
+    return [_KEEPER.replace("keeper", f"keeper {i}") for i in range(12)]
+
+
+@pytest.fixture
+def takes_render(tmp_path, monkeypatch):
+    """``render(paragraphs, **options)`` → the texts the stub engine was
+    asked to say for that one-chapter script, through the real chapter
+    render and its caches under ``tmp_path`` (unmarked, no model)."""
+    from services import watermark
+
+    monkeypatch.setattr(watermark, "will_mark", lambda: False)
+    monkeypatch.setattr(watermark, "mark_synthetic", lambda audio, *_a, **_k: audio)
+    router = importlib.import_module("api.routers.audiobook")
+    ab = importlib.import_module("services.audiobook")
+    from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
+
+    phrases = ab.ExpressiveOptions(
+        punctuation_pauses=ab.punctuation_pause_pairs(DEFAULT_PUNCTUATION_PAUSES))
+
+    def render(paragraphs, *, lexicon=None, stop_after=None, around=None, **options):
+        """``around`` (the book's paragraphs, the one previewed): a passage
+        preview, read where the app sends it — in its chapter."""
+        calls: list = []
+
+        def synth(text, voice_id, speed=None):
+            if stop_after is not None and len(calls) >= stop_after:
+                raise RuntimeError("stopped")
+            calls.append(text)
+            return torch.full((1, 240 + 7 * len(text)), 0.1)
+
+        chapter = ab.parse_audiobook_script("# One\n\n" + "\n\n".join(paragraphs)).chapters[0]
+        resolve = lambda _v: {"ref_audio": None, "ref_text": None,  # noqa: E731
+                              "instruct": None, "seed": None}
+        read_in = None
+        if around is not None:
+            book, at = around
+            script = "# One\n\n" + "\n\n".join(book)
+            start = script.index(book[at])
+            read_in = router._passage_read_in(router.AudiobookPreviewRequest(
+                text=book[at], context={"chapter": script, "start": start,
+                                        "end": start + len(book[at])}))
+        try:
+            router._render_chapter_cached(chapter, synth, SR, "eng", resolve, str(tmp_path),
+                                          lexicon=lexicon,
+                                          opts=dataclasses.replace(phrases, **options),
+                                          read_in=read_in)
+        except RuntimeError:
+            pass
+        return calls
+
+    return render
+
+
+def test_longform_budget_one_word_edit_renders_one_take(takes_render):
+    assert len(takes_render(_book())) >= 40  # every sentence or clause a take
+    edited = _book()
+    edited[5] = edited[5].replace("brass lantern", "copper lantern")
+    calls = takes_render(edited)
+    assert len(calls) == 1 and "copper lantern" in calls[0], (
+        f"budget: a one-word edit renders the one take it changed — got {len(calls)}")
+
+
+@pytest.mark.parametrize("change", [
+    {"punctuation_pauses": (("comma", 400), ("sentence", 300))},
+    {"trim_edges": True},
+    {"line_gap_ms": 250},
+    {"paragraph_gap_ms": 350},
+    {"level_voices": True},
+    {"voice_gains": (("", 3.0),)},
+], ids=["comma pause", "trim", "line gap", "paragraph gap", "leveling", "volume"])
+def test_longform_budget_assembly_changes_render_no_take(takes_render, change):
+    takes_render(_book())
+    calls = takes_render(_book(), **change)
+    assert calls == [], f"budget: re-assembling cached takes renders none — got {len(calls)}"
+
+
+def test_longform_budget_a_volume_passage_renders_no_take(takes_render):
+    """``[volume]`` cuts its passage into a span of its own: the spans change,
+    the takes they are read in do not."""
+    book = _book()
+    takes_render(book)
+    book[3] = f"[volume -6dB]{book[3]}[/volume]"
+    assert takes_render(book) == []
+    book[3] = book[3].replace("-6dB", "-9dB")
+    assert takes_render(book) == []
+
+
+def test_longform_budget_a_paragraph_previewed_after_the_render_renders_nothing(takes_render):
+    book = _book()
+    takes_render(book)
+    # A passage preview sends the paragraph as a one-chapter script and where
+    # it is read: its repeated sentences are that paragraph's own takes.
+    assert takes_render([book[6]], around=(book, 6)) == []
+
+
+def test_longform_budget_a_stopped_chapter_resumes_with_what_it_had_left(takes_render):
+    ab = importlib.import_module("services.audiobook")
+    from services.chunked_tts import DEFAULT_PUNCTUATION_PAUSES
+
+    spans = ab.parse_audiobook_script("# One\n\n" + "\n\n".join(_book())).chapters[0].spans
+    takes = sum(len(texts) for units in ab.chapter_units(
+        spans, punctuation_pauses=dict(DEFAULT_PUNCTUATION_PAUSES)) for texts, _ in units)
+    assert len(takes_render(_book(), stop_after=takes - 6)) == takes - 6
+    assert len(takes_render(_book())) == 6, "budget: a resume renders only the takes left"
+
+
+def test_longform_budget_a_lexicon_entry_renders_only_the_takes_it_respells(takes_render):
+    book = _book()
+    book[3] = book[3].replace("thermos", "Thermos-Q")
+    takes_render(book)
+    calls = takes_render(book, lexicon={"Thermos-Q": "thur-moss queue"})
+    assert calls == ["He carried a brass lantern, a thur-moss queue of tea, and a notebook "
+                     "full of weather."]
+
+
+def test_longform_budget_turning_the_check_on_listens_to_each_cached_take_once(
+        takes_render, monkeypatch):
+    speech = importlib.import_module("services.speech_verify")
+    heard: list = []
+
+    class Listening(speech.SpeechVerifier):
+        """Hears every take say exactly its text."""
+
+        def __init__(self, sample_rate, **kw):
+            super().__init__(sample_rate, transcribe=self._hear, **kw)
+
+        def render(self, text, take):
+            self._text = text
+            return super().render(text, take)
+
+        def _hear(self, _audio, _sample_rate):
+            heard.append(self._text)
+            return self._text
+
+    monkeypatch.setattr(speech, "SpeechVerifier", Listening)
+    takes = len(takes_render(_book()))
+    assert takes_render(_book(), verify_speech=True) == []
+    assert len(heard) == takes, f"budget: one check per cached take — got {len(heard)}"
+    heard.clear()
+    # Its scores are kept with the takes: re-joined, nothing is heard again.
+    assert takes_render(_book(), verify_speech=True, trim_edges=True) == []
+    assert heard == []

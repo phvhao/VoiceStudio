@@ -17,7 +17,7 @@ import { buttonVariants, Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { apiJson } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
-import { ChapterPreview, useChapterPreview } from './chapter-previews';
+import { ChapterPreview, useChapterPreview, type RetakenChapter } from './chapter-previews';
 import { outlineQueryKey, outlineRequest, type Draft } from './longform-session';
 import { applyMarkupEdit, type MarkupTarget } from './markup-toolbar';
 import { revealOffset } from './markup-textarea';
@@ -35,12 +35,20 @@ import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 export type ChapterStatus = 'rendered' | 'changed' | 'not_rendered';
 
+/** How many phrase takes a chapter reads, and how many a render would reuse. */
+interface ChapterTakes {
+  total: number;
+  cached: number;
+}
+
 interface OutlineStatus {
   chapters: Array<{
     title: string;
     untitled?: boolean;
     status: ChapterStatus;
     cached: boolean | null;
+    /** Read sentence by sentence and not cached whole (newer backends). */
+    takes?: ChapterTakes;
   }>;
   book: boolean;
 }
@@ -70,6 +78,17 @@ export function statusHint(status: ChapterStatus, cached: boolean | null): strin
   return status === 'changed' && cached ? 'book.hint_changed_ready' : STATUS_LABELS[status][1];
 }
 
+/**
+ * What a chapter that must render again has left to render, read sentence by
+ * sentence: how many of its takes (0: every take is rendered, so the book only
+ * joins them again). `null` when the outline cannot tell, or while none of
+ * its takes is rendered yet — its status says as much.
+ */
+export function takesLeft(status: ChapterStatus, takes?: ChapterTakes): number | null {
+  if (status === 'rendered' || !takes || takes.cached <= 0) return null;
+  return Math.max(0, takes.total - takes.cached);
+}
+
 const MENU_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-3 py-2 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50';
 
@@ -77,11 +96,13 @@ const MENU_ITEM =
  * The book's table of contents, a rail inside the Audiobook editor: chapters
  * and their sections, each with its length and — for chapters — whether its
  * audio is rendered for the script and settings as they are now, or changed
- * since the last book. A row moves the editor's caret to its heading and
- * scrolls the editor, never the page; its menu renames, adds or removes
- * headings (undoable edits in the editor), and a chapter renders on its own,
- * filling the caches the full book reuses. The untitled text before the first
- * heading is the intro, never a "Chapter 1": its menu gives it a heading.
+ * since the last book, and, read sentence by sentence, how many of its
+ * sentences a render has left to read. A row moves the editor's caret to its
+ * heading and scrolls the editor, never the page; its menu renames, adds or
+ * removes headings (undoable edits in the editor), and a chapter renders on
+ * its own, filling the caches the full book reuses. The untitled text before
+ * the first heading is the intro, never a "Chapter 1": its menu gives it a
+ * heading.
  */
 export function BookOutline({
   draft,
@@ -89,6 +110,7 @@ export function BookOutline({
   canPreview,
   onBusy,
   getTarget,
+  retaken,
   onCollapse,
   onReveal,
   className,
@@ -98,6 +120,8 @@ export function BookOutline({
   canPreview: boolean;
   onBusy: (busy: boolean) => void;
   getTarget: () => MarkupTarget | null;
+  /** The last retake of a sentence: a preview of its chapter is out of date. */
+  retaken?: RetakenChapter | null;
   /** Fold the rail away. */
   onCollapse?: () => void;
   /** A row moved the editor's caret to its heading. */
@@ -133,6 +157,7 @@ export function BookOutline({
     canPreview,
     onBusy,
     onRendered: () => void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] }),
+    retaken,
   });
   const [renaming, setRenaming] = useState<number | null>(null);
   // The row whose title takes the focus back once its rename field is gone.
@@ -169,6 +194,7 @@ export function BookOutline({
   const row = (node: OutlineNode, chapter: OutlineChapter) => {
     const title = titleOf(node);
     const state = node.level === 1 && chapter.plan !== null ? statuses?.[chapter.plan] : undefined;
+    const left = state ? takesLeft(state.status, state.takes) : null;
     const editing = renaming === node.start && node.title !== null;
     const actions: NodeAction[] = [];
     if (node.title !== null)
@@ -300,6 +326,16 @@ export function BookOutline({
                   </StatusBadge>
                 )
               ))}
+            {left !== null && (
+              <span
+                data-slot="outline-takes"
+                title={t(left ? 'book.hint_takes_to_render' : 'book.hint_takes_ready')}
+              >
+                {left
+                  ? t('book.takes_to_render', { count: left, number: formatCount(left) })
+                  : t('book.takes_ready')}
+              </span>
+            )}
           </p>
         </div>
         {node.level === 1 && chapter.plan !== null && (

@@ -12,6 +12,18 @@ export interface SidebarModelStatus {
 
 export type RuntimeHealth = 'checking' | 'unavailable' | 'loading' | 'ready';
 
+/** `/model/loaded` rows that can hold the selected speech recognizer: the ASR
+ *  co-loaded with the TTS model, the dictation engine, and the speech check's
+ *  recognizer. Each counts only while it holds the selected model. */
+const ASR_RESIDENT_IDS = new Set(['asr', 'capture-asr', 'speech-check-asr']);
+
+export function holdsSelectedAsrModel(
+  entry: { id: string; checkpoint: string },
+  activeModel: string | null | undefined,
+) {
+  return ASR_RESIDENT_IDS.has(entry.id) && entry.checkpoint === activeModel;
+}
+
 export function sidebarToolState(state: string, online: boolean) {
   if (!online) return 'modelMaintenance.offline';
   if (state === 'engineRuntime.idle') return 'modelSettings.available';

@@ -41,6 +41,19 @@ transcription.
 
 ## Degradation chains
 
+- **VRAM preflight.** A CUDA load that does not fit in the VRAM left raises no
+  error: CTranslate2 aborts and takes the whole backend down ("Can't reach the
+  local backend"). So before every load — Clone and voice-reference
+  transcription, dictation, the speech check, dub and batch — the engine checks
+  free VRAM against the same budgets as [whisperx](whisperx.md) (float16
+  5.0 GB, int8_float16 3.5 GB, int8 3.0 GB for large-v3; about half for
+  turbo, distil and medium) and starts at the first compute type that fits, or
+  loads on the CPU (slower, same model and accuracy)
+  ([#723](https://github.com/debpalash/VoiceStudio/issues/723)). A compute
+  type pinned with `ASR_COMPUTE_TYPE` is kept when it fits, else the model
+  loads on the CPU — with int8 when the pin is one only a GPU runs (float16,
+  bfloat16, int8_float16, int8_bfloat16), which the CPU refuses. Disable with
+  `OMNIVOICE_ASR_VRAM_PREFLIGHT=0`.
 - GPUs without efficient fp16 (older Maxwell/Pascal, GTX 16xx, or a
   CTranslate2/cuDNN mismatch) fail at model construction with a compute-type
   error; the engine walks float16 → int8_float16 → int8 instead of failing

@@ -19,6 +19,12 @@ book: where each phrase is heard, measured while the chapters were joined
 active engine takes when the request leaves them unset (the performance
 preset applied), so the app shows what a render will use.
 
+``POST /audiobook/takes`` + ``POST /audiobook/retake`` — with phrase-by-phrase
+reading every sentence is a take cached on its own: the first lists a
+chapter's takes, the second asks for one of them again, so the next render or
+preview synthesizes that take and reuses the rest. ``POST /longform/takes`` +
+``POST /longform/retake`` do the same for a chapter of a posted plan (Stories).
+
 ``GET /audiobook/jobs`` + ``POST /audiobook/resume/{job_id}`` — durable
 crash-resume: an interrupted render persists its plan + params to a
 ``resume.json`` manifest in the job work dir, so it can be resumed later (the
@@ -65,6 +71,7 @@ from services.longform_render import (
     ENCODER_PEAK_HEADROOM_DB,
     LONGFORM_CACHE_SUBDIR,
     LOUDNESS_PRESETS,
+    CacheHold,
     build_concat_list,
     build_ffmetadata,
     build_render_cmd,
@@ -617,14 +624,14 @@ def _base_seed(opts: ExpressiveOptions, voice: dict):
     return opts.seed if opts.seed is not None else voice.get("seed")
 
 
-def _retake_seed_input(text: str, attempt: int, next_nonce) -> tuple[str, int]:
-    """``(text, nonce)`` to seed a take with. The first take is seeded exactly
-    as before; a speech-check retake (``attempt`` > 0) salts the text so a
-    pinned seed still gives a different take, without advancing the repeat
-    counter the first take already used."""
-    if not attempt:
-        return text, next_nonce()
-    return f"{text}\x00retake{int(attempt)}", 0
+def _retake_seed_input(text: str, attempt: int, next_nonce, *, occurrence: int | None = None,
+                       retake: str = "", vary: bool = False) -> tuple[str, int]:
+    """``(text, nonce)`` to seed a take with: ``services.audiobook.
+    take_seed_input``, the rule a remote worker seeds by too."""
+    from services.audiobook import take_seed_input
+
+    return take_seed_input(text, attempt, next_nonce, occurrence=occurrence, retake=retake,
+                           vary=vary)
 
 
 def _make_occ_counter(opts: ExpressiveOptions):
@@ -830,9 +837,11 @@ def _build_synth(
              else _generic_extra_kwargs(opts))
     next_nonce = _make_occ_counter(opts)
 
-    def synth(text, voice_id, speed=None, attempt=0):
+    def synth(text, voice_id, speed=None, attempt=0, occurrence=None, retake=""):
         v = resolve(voice_id)
-        seed = _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(text, attempt, next_nonce))
+        seed = _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(
+            text, attempt, next_nonce, occurrence=occurrence, retake=retake,
+            vary=opts.vary_repeats))
         call_extra = dict(extra)
         if native_proxy and seed is not None:
             call_extra["seed"] = seed
@@ -871,9 +880,11 @@ async def _prepare_synth(
         sampling = _omnivoice_sampling_kwargs(opts)
         next_nonce = _make_occ_counter(opts)
 
-        def synth(text, voice_id, speed=None, attempt=0):
+        def synth(text, voice_id, speed=None, attempt=0, occurrence=None, retake=""):
             v = resolve(voice_id)
-            _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(text, attempt, next_nonce))
+            _seed_segment_rng(_base_seed(opts, v), *_retake_seed_input(
+                text, attempt, next_nonce, occurrence=occurrence, retake=retake,
+                vary=opts.vary_repeats))
             # A book is the worst case for the re-encode this avoids: hundreds of
             # segments, one voice. The reference is encoded on the first segment
             # and reused for every one after it.
@@ -898,6 +909,9 @@ class _ChapterKeys:
     #: per-voice keys derived for the same request.
     seg_extra_sig: str
     legacy_seg_extra_sig: str
+    #: What keys a phrase take besides its voice, text and speed
+    #: (:func:`_take_signature`).
+    take_sig: str
     #: The voice each span is leveled under.
     voice_names: list
     #: The chapter WAV under the current key, then under every legacy one.
@@ -905,6 +919,12 @@ class _ChapterKeys:
     legacy_paths: list
     content_id: str
     inputs: dict
+    #: The chapter's title as a retake is kept with it (``None``: untitled).
+    title: str | None = None
+    #: Its phrase takes by span, when a retake was asked for in the cache or
+    #: the chapter is a passage read in its chapter (:func:`_phrase_plan`);
+    #: ``None`` otherwise — then they are planned as they are cut.
+    takes: list | None = None
 
     @property
     def names(self) -> list:
@@ -959,6 +979,113 @@ def _language_input_marker(engine_id, language) -> str:
     return str(LANGUAGE_INPUT_RENDER) if language_input_changed(engine_id, language) else ""
 
 
+def _voice_signature(voice: dict) -> str:
+    """A resolved voice as the cache keys name it: its reference audio by its
+    path inside the data dir (#2279), its transcript, instruct and seed."""
+    return (f"{_portable_ref_audio(voice.get('ref_audio'))}|{voice.get('ref_text')}"
+            f"|{voice.get('instruct')}|{voice.get('seed')}")
+
+
+def _take_signature(opts: ExpressiveOptions, language, language_input: str) -> str:
+    """What keys one phrase take besides its voice, text and speed: the
+    take-level options the engine receives (``ExpressiveOptions.
+    take_level_signature``) and the language it is told — never what only
+    cuts, checks or joins takes, nor the lexicon, which reaches a take
+    through its text."""
+    return json.dumps({"options": opts.take_level_signature(), "language": language or None,
+                       "language input": language_input or None},
+                      sort_keys=True, ensure_ascii=False)
+
+
+def _split_kwargs(opts: ExpressiveOptions) -> dict:
+    """How ``opts`` cut a span's text into takes (``services.audiobook.
+    chapter_units``)."""
+    return {"paragraph_gap_ms": opts.paragraph_gap_ms,
+            "punctuation_pauses": (dict(opts.punctuation_pauses)
+                                   if opts.punctuation_pauses is not None else None),
+            "split_commas": opts.split_commas}
+
+
+@dataclasses.dataclass(frozen=True)
+class _ReadIn:
+    """Where a passage preview is read in its book (``PassageContext``): the
+    chapter it is part of, as the script parses it, and that chapter's
+    spans before the passage."""
+
+    chapter: object
+    lead: list
+
+
+def _chapter_title(chapter) -> str | None:
+    """A chapter's title as a retake is kept with it: ``None`` when the
+    script left it untitled (its title is then only its place)."""
+    return None if getattr(chapter, "untitled", False) else (chapter.title or None)
+
+
+def _spoken_span(span, language):
+    """``span`` as synthesis reads it: its text normalized for ``language``."""
+    from services.audiobook import Span
+    from services.text_normalization import normalize_for_tts
+
+    return Span(voice_id=span.voice_id, text=normalize_for_tts(span.text, language),
+                pause_ms_after=span.pause_ms_after, speed=getattr(span, "speed", None),
+                join=getattr(span, "join", None), gain_db=getattr(span, "gain_db", None))
+
+
+def _phrase_plan(spans, voice_sigs: dict, *, resolve, language, lexicon, opts: ExpressiveOptions,
+                 take_sig: str, cache_dir: str, title: str | None,
+                 read_in: _ReadIn | None = None) -> tuple[list | None, list | None]:
+    """``(takes, alone)`` of a chapter whose spans read ``spans`` (normalized
+    text), read sentence by sentence: its phrase takes by span with the
+    retakes asked for placed on them (``longform_render.chapter_takes``) —
+    and, for a passage read in its chapter (``read_in``), named as that
+    chapter names them (``longform_render.passage_takes``), with ``alone``
+    the passage's takes planned on their own. ``(None, None)`` when neither
+    applies: the takes are then planned as they are cut."""
+    from services.audiobook import chapter_units
+    from services.longform_render import chapter_takes, load_retakes, passage_takes
+
+    if opts.punctuation_pauses is None:
+        return None, None
+    retakes = load_retakes(cache_dir)
+    if not retakes and read_in is None:
+        return None, None
+    split = _split_kwargs(opts)
+    sigs = dict(voice_sigs)
+
+    def plan(chapter_spans, records=None, name=None):
+        return chapter_takes(chapter_spans, chapter_units(chapter_spans, lexicon=lexicon, **split),
+                             voice_sig=sigs, take_sig=take_sig, retakes=records, title=name)
+
+    if read_in is None:
+        return plan(spans, retakes, title), None
+    around = [_spoken_span(span, language) for span in read_in.chapter.spans]
+    lead = [_spoken_span(span, language) for span in read_in.lead]
+    for span in (*around, *lead):
+        if (span.voice_id or "") not in sigs:
+            sigs[span.voice_id or ""] = _voice_signature(resolve(span.voice_id))
+    before = sum(len(texts) for units in chapter_units(lead, lexicon=lexicon, **split)
+                 for texts, _gaps in units)
+    alone = plan(spans)
+    return (passage_takes(alone, plan(around, retakes, _chapter_title(read_in.chapter)), before),
+            alone)
+
+
+def _takes_fragment(takes: list | None, alone: list | None) -> str:
+    """What a chapter's phrase takes (:func:`_phrase_plan`) add to its cache
+    key: each take read otherwise than its text alone says — a retake asked
+    for (the take and the retake's salt) or, in a passage read in its
+    chapter, a take that chapter names otherwise — as JSON. ``""`` without
+    one, so every other chapter keeps its key."""
+    if takes is None:
+        return ""
+    own = [ref for refs in alone for ref in refs] if alone is not None else None
+    changed = [[ref.identity, ref.salt]
+               for j, ref in enumerate(ref for refs in takes for ref in refs)
+               if ref.salt or (own is not None and ref.identity != own[j].identity)]
+    return json.dumps(changed) if changed else ""
+
+
 def _span_key_tuple(span) -> tuple:
     """``(voice_id, text, pause_ms_after, speed[, join[, gain_db]])`` — what
     :func:`services.longform_render.chapter_cache_key` hashes of one span. A
@@ -974,7 +1101,8 @@ def _span_key_tuple(span) -> tuple:
 
 def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=None,
                         language=None, opts=None, voice_map=None,
-                        default_voice=None, request_opts=None) -> _ChapterKeys:
+                        default_voice=None, request_opts=None,
+                        read_in: _ReadIn | None = None) -> _ChapterKeys:
     """Derive where a chapter's rendered audio is cached — the single
     derivation the render (:func:`_render_chapter_cached`) and the outline's
     status (:func:`_chapter_cache_state`) both read, so the two can never
@@ -987,10 +1115,12 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
     request's options, the whole cast map and — for a take — the gap between
     lines; that derivation is kept as the legacy key family, so their cached
     audio is still found (and moved to the current key) instead of rendering
-    again."""
+    again. ``read_in`` places a passage preview in its chapter
+    (:func:`_phrase_plan`): its takes are then that chapter's own, and its
+    key says so where they differ from the passage's own."""
     import json
 
-    from services.audiobook import ExpressiveOptions, Span, voice_map_signature
+    from services.audiobook import ExpressiveOptions, voice_map_signature
     from services.longform_render import (
         chapter_cache_key,
         chapter_content_id,
@@ -998,16 +1128,12 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
     )
     from core.config import VOICES_DIR
     from services.pronunciation import normalize_lexicon
-    from services.text_normalization import normalize_for_tts
     from services.watermark import will_mark
 
     opts = opts or ExpressiveOptions()
     request_opts = request_opts or opts
 
-    spans = [Span(voice_id=s.voice_id, text=normalize_for_tts(s.text, language),
-                  pause_ms_after=s.pause_ms_after, speed=getattr(s, "speed", None),
-                  join=getattr(s, "join", None), gain_db=getattr(s, "gain_db", None))
-             for s in chapter.spans]
+    spans = [_spoken_span(s, language) for s in chapter.spans]
     # `join` and a [volume] gain enter the tuple only when set, so a plan
     # without inline-markup splits keeps its pre-existing chapter cache key.
     spans_tuples = [_span_key_tuple(s) for s in spans]
@@ -1028,7 +1154,7 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
         if k not in voice_sigs:
             v = resolved[k] = resolve(s.voice_id)
             tail = f"{v.get('ref_text')}|{v.get('instruct')}|{v.get('seed')}"
-            voice_sigs[k] = f"{_portable_ref_audio(v.get('ref_audio'))}|{tail}"
+            voice_sigs[k] = _voice_signature(v)
             for sigs, ref in zip(legacy_voice_sigs,
                                  _legacy_ref_audios(v.get("ref_audio"), old_roots)):
                 sigs[k] = f"{ref}|{tail}"
@@ -1073,6 +1199,19 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
         # with marking off the key is byte-identical to the released
         # derivation, so those caches keep hitting.
         sig["\x00watermark"] = "1"
+    # A phrase take is keyed by the options the engine receives and the
+    # language alone (the lexicon reaches it through its text). A retake the
+    # user asked for renders that take again, and a passage read in its
+    # chapter reads that chapter's takes, so either moves the chapter's key —
+    # only where it applies.
+    take_sig = _take_signature(opts, language, language_input)
+    title = _chapter_title(chapter)
+    takes, alone = _phrase_plan(spans, voice_sigs, resolve=resolve, language=language,
+                                lexicon=lexicon, opts=opts, take_sig=take_sig,
+                                cache_dir=cache_dir, title=title, read_in=read_in)
+    retakes = _takes_fragment(takes, alone)
+    if retakes:
+        sig["\x00retakes"] = retakes
 
     def chapter_sig(expressive: str, cast: str = "") -> dict:
         extra = {"\x00expressive": expressive} if expressive else {}
@@ -1135,6 +1274,8 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
         inputs["language input"] = language_input
     if leveled_sig:
         inputs["leveled voices"] = leveled_sig
+    if retakes:
+        inputs["retakes"] = retakes
     for k, v in resolved.items():
         label = f"voice {re.sub(r'[^A-Za-z0-9_-]', '', k)[:40] or '(default)'}"
         inputs[f"{label} reference audio"] = _portable_ref_audio(v.get("ref_audio"))
@@ -1143,13 +1284,14 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
         inputs[f"{label} seed"] = v.get("seed")
     return _ChapterKeys(spans=spans, voice_sigs=voice_sigs, legacy_voice_sigs=legacy_voice_sigs,
                         seg_extra_sig=seg_extra_sig, legacy_seg_extra_sig=legacy_seg_extra_sig,
-                        voice_names=voice_names, wav_path=wav_path, legacy_paths=legacy_paths,
-                        content_id=content_id, inputs=inputs)
+                        take_sig=take_sig, voice_names=voice_names, wav_path=wav_path,
+                        legacy_paths=legacy_paths, content_id=content_id, inputs=inputs,
+                        title=title, takes=takes)
 
 
 def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, lexicon=None,
                            language=None, opts=None, voice_map=None, default_voice=None,
-                           request_opts=None):
+                           request_opts=None, read_in: _ReadIn | None = None):
     """Render one chapter, content-addressed so a re-run reuses it (resume).
 
     Returns ``(wav_path, duration_s, was_cached, seg_stats)``. Two cache
@@ -1170,6 +1312,19 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
       edited/missing ones synthesize, and each fresh segment persists the
       moment it renders (an interrupted chapter resumes from them).
       ``seg_stats`` is ``{"total": spoken_spans, "cached": reused}``.
+    * Takes — with phrase-by-phrase reading, a span not cached whole is
+      assembled from its phrase takes, each cached on its own under
+      ``cache_dir/takes`` (:class:`services.longform_render.TakeCache`) the
+      moment it finishes: an edit renders only the takes whose spoken text
+      changed, an assembly-level change (pauses, trimming, gaps, leveling,
+      volume) renders none, and such a span is not stored whole as well.
+      ``seg_stats`` then counts takes: ``{"total": takes, "cached":
+      reused}``. A passage preview read in its chapter (``read_in``) reads
+      that chapter's takes (:func:`_phrase_plan`).
+
+    Every segment and take the chapter may read is held from eviction while
+    it renders (:class:`services.longform_render.CacheHold`), so another
+    render's pruning cannot drop the takes this one is about to reuse.
 
     Span text is normalized (``services.text_normalization``) up front — BEFORE
     either cache key and BEFORE ``synthesize_chapter``'s lexicon pass, so the
@@ -1182,9 +1337,10 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     ``default_voice`` tells which spans the default voice reads for it.
 
     With the speech check on, what it found is kept with the chapter's timing
-    and each segment's, so a cached chapter still reports it; a cached
-    chapter with takes the check could not listen to is checked once a
-    recognizer answers (see :func:`services.audiobook.synthesize_chapter`).
+    and each segment's or take's, so a cached chapter still reports it; a
+    cached chapter with takes the check could not listen to is checked once a
+    recognizer answers (see :func:`services.audiobook.synthesize_chapter`) —
+    a phrase take by listening to it, rendering it again only if it fails.
     ``opts`` / ``request_opts``: see :func:`_chapter_cache_keys`.
 
     Runs in the GPU-pool executor.
@@ -1193,6 +1349,7 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     from services.audiobook import ExpressiveOptions, speech_check_answers
     from services.longform_render import (
         SegmentCache,
+        TakeCache,
         explain_chapter_miss,
         record_chapter_inputs,
         remove_timeline_sidecar,
@@ -1203,7 +1360,8 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     opts = opts or ExpressiveOptions()
     keys = _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, lexicon=lexicon,
                                language=language, opts=opts, voice_map=voice_map,
-                               default_voice=default_voice, request_opts=request_opts)
+                               default_voice=default_voice, request_opts=request_opts,
+                               read_in=read_in)
     spans, voice_sigs, voice_names = keys.spans, keys.voice_sigs, keys.voice_names
     wav_path, content_id, inputs = keys.wav_path, keys.content_id, keys.inputs
 
@@ -1241,11 +1399,28 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
                              vary_repeats=opts.vary_repeats,
                              legacy_voice_sigs=keys.legacy_voice_sigs,
                              legacy_extra_sig=keys.legacy_seg_extra_sig)
+    take_cache = (TakeCache(cache_dir, sample_rate=sr, engine_id=engine_id,
+                            voice_sig=voice_sigs, take_sig=keys.take_sig)
+                  if opts.punctuation_pauses is not None else None)
+    takes = (_chapter_take_plan(keys, opts=opts, lexicon=lexicon)
+             if take_cache is not None else None)
     timing: list = []
-    audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
-                                    segment_cache=seg_cache, verifier=verifier,
-                                    voice_names=voice_names, timing=timing,
-                                    recognizer=recognizer, **opts.join_kwargs())
+    with CacheHold() as hold:
+        _hold_chapter_audio(hold, keys, seg_cache, take_cache, takes,
+                            attempts=getattr(verifier, "retries", 0))
+        if read_in is not None and take_cache is not None:
+            # The chapter around the passage, keyed as a render of it would be.
+            around = _chapter_cache_keys(read_in.chapter, sr, engine_id, resolve, cache_dir,
+                                         lexicon=lexicon, language=language, opts=opts,
+                                         voice_map=voice_map, default_voice=default_voice,
+                                         request_opts=request_opts)
+            _cut_chapter_around(takes, around, take_cache, hold, cache_dir=cache_dir, opts=opts,
+                                lexicon=lexicon, checking=verifier is not None)
+        audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
+                                        segment_cache=seg_cache, verifier=verifier,
+                                        voice_names=voice_names, timing=timing,
+                                        recognizer=recognizer, take_cache=take_cache,
+                                        takes=takes, **opts.join_kwargs())
     # Invisible provenance mark on the assembled chapter (#1169), tensor stage,
     # before the WAV lands in the cache — this single site covers every
     # longform front door (/audiobook, /longform/render [Stories],
@@ -1263,11 +1438,74 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     atomic_save_wav(wav_path, audio, sr, durable=True)
     write_chapter_timeline(wav_path, timing[0] if timing else None)
     record_chapter_inputs(cache_dir, content_id, inputs)
-    stats = {"total": seg_cache.hits + seg_cache.misses, "cached": seg_cache.hits}
+    counted = take_cache if take_cache is not None else seg_cache
+    stats = {"total": counted.hits + counted.misses, "cached": counted.hits}
     if verifier is not None:
         # The chapter's whole result, spans reused from the cache included.
         stats["speech_check"] = (timing[0].get("speech_check") if timing else None) or verifier.stats()
     return wav_path, dur, False, stats
+
+
+def _hold_chapter_audio(hold, keys: _ChapterKeys, segments, store, takes: list | None, *,
+                        attempts: int = 0) -> None:
+    """Hold every file a chapter render may read (``hold``, a ``CacheHold``):
+    each spoken span's segment, under its current key and every legacy one,
+    and each planned take with the retakes the speech check may have chosen
+    of it (up to ``attempts``). Held up front, before the render reads the
+    first: another render's pruning walks past them, so a take this one has
+    yet to reach — likely the oldest file in the cache — is never evicted and
+    rendered again (with an unpinned voice, read differently)."""
+    seen: dict = {}
+    for span in keys.spans:
+        if not span.text:
+            continue
+        # The occurrence synthesis keys a repeated span's segment by.
+        repeat = (span.voice_id, span.text, getattr(span, "speed", None))
+        occurrence = seen.get(repeat, 0)
+        seen[repeat] = occurrence + 1
+        for path in segments.paths(span, occurrence):
+            hold.add(path)
+    for refs in takes or []:
+        for ref in refs:
+            for attempt in range(attempts + 1):
+                hold.add(store.path(ref, attempt))
+
+
+def _cut_chapter_around(takes: list, around: _ChapterKeys, store, hold, *, cache_dir: str, opts,
+                        lexicon, checking: bool) -> None:
+    """A passage read in its chapter reads that chapter's takes (``takes``,
+    by span): where a span of the chapter ``around`` holding takes it has not
+    cached is cached whole — rendered before takes were kept — that span is
+    cut into its takes first (``services.audiobook.cut_cached_span``), so the
+    passage plays the audio the book holds and renders only what it does not
+    (a retaken take). Each segment read is held (``hold``) like the
+    passage's own."""
+    from services.audiobook import cut_cached_span
+    from services.longform_render import SegmentCache
+
+    missing = {store.path(ref) for refs in takes for ref in refs if not store.has(ref)}
+    if not missing:
+        return
+    segments = SegmentCache(cache_dir, sample_rate=store.sample_rate, engine_id=store.engine_id,
+                            voice_sig=around.voice_sigs, extra_sig=around.seg_extra_sig,
+                            vary_repeats=opts.vary_repeats,
+                            legacy_voice_sigs=around.legacy_voice_sigs,
+                            legacy_extra_sig=around.legacy_seg_extra_sig)
+    seen: dict = {}
+    for span, refs in zip(around.spans, _chapter_take_plan(around, opts=opts, lexicon=lexicon)):
+        if not span.text:
+            continue
+        # The occurrence synthesis keys a repeated span's segment by.
+        repeat = (span.voice_id, span.text, getattr(span, "speed", None))
+        occurrence = seen.get(repeat, 0)
+        seen[repeat] = occurrence + 1
+        if not any(store.path(ref) in missing for ref in refs):
+            continue
+        for path in segments.paths(span, occurrence):
+            hold.add(path)
+        audio = segments.load(span, occurrence)
+        if audio is not None:
+            cut_cached_span(store, segments, span, occurrence, audio, refs, checking=checking)
 
 
 def _chapter_cache_lookup(keys: _ChapterKeys, sr: int) -> tuple[str, float] | None:
@@ -1336,16 +1574,33 @@ def _wav_head(path: str, seconds: float = 30.0):
         return None
 
 
+def _worker_takes(takes: list | None, alone: list | None) -> list:
+    """``[[span, take, occurrence, salt], …]``: each take a remote worker must
+    read otherwise than it plans the chapter it is sent (its spans alone, no
+    retakes known) — a retake asked for, or a passage's sentence the chapter
+    it is read in repeats — so it seeds the take as this machine would
+    (``services.audiobook.take_seed_input``)."""
+    told = []
+    for row, refs in enumerate(takes or []):
+        for k, ref in enumerate(refs):
+            own = alone[row][k] if alone is not None else ref
+            if ref.salt or ref.occurrence != own.occurrence:
+                told.append([row, k, ref.occurrence, ref.salt])
+    return told
+
+
 def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
                          language, lexicon, opts, cache_dir, lease=None,
-                         request_opts=None, names: list | None = None):
+                         request_opts=None, names: list | None = None,
+                         read_in: _ReadIn | None = None):
     """Build one opaque remote chapter task without loading a local TTS model.
 
     ``opts`` are what the engine receives (:func:`_preset_opts`), so the
     worker renders at this machine's performance preset; ``request_opts``
     the request's own, which keyed remote chapters before that. ``names`` (a
     list the caller owns) receives every name the chapter may be cached under
-    (the current key first), as a book's timeline may have recorded it."""
+    (the current key first), as a book's timeline may have recorded it.
+    ``read_in``: a passage preview read in its chapter (:func:`_phrase_plan`)."""
     import hashlib
 
     from services import gpu_gateway
@@ -1402,6 +1657,28 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
     language_input = _language_input_marker(engine_id, language)
     if language_input:
         revisions["language_input"] = language_input
+    # A worker renders the whole chapter and keeps no takes, so it is told
+    # which takes to read otherwise than it plans them: a retake asked for
+    # (its salt seeds the take anew) and, for a passage read in its chapter,
+    # the occurrence that chapter gives a repeated sentence. Sent only where
+    # there is one, so every other chapter keeps its remote key; a worker
+    # that cannot read them is refused at registration (audiobook_takes_v1).
+    from services.audiobook import Span
+
+    spoken = [Span(voice_id=span.voice_id, text=row["text"], speed=row["speed"])
+              for span, row in zip(chapter.spans, rows)]
+    sigs: dict = {}
+    for span, voice, ref in zip(chapter.spans, voices, refs):
+        sigs.setdefault(span.voice_id or "", _voice_signature({**voice, "ref_audio": ref}))
+    takes, alone = _phrase_plan(
+        spoken, sigs,
+        resolve=lambda voice_id: _resolve_voice(_map_span_voice(voice_id, default_voice, voice_map)),
+        language=language, lexicon=lexicon, opts=opts,
+        take_sig=_take_signature(opts, language, language_input), cache_dir=cache_dir,
+        title=_chapter_title(chapter), read_in=read_in)
+    told = _worker_takes(takes, alone)
+    if told:
+        params["takes"] = told
 
     def _signature(ref_audio: list, expressive: dict | None = None) -> str:
         payload = {**params, **revisions, "ref_audio": ref_audio}
@@ -1477,7 +1754,7 @@ def _chapter_opts(opts: ExpressiveOptions, chapter, default_voice, voice_map) ->
 
 
 async def _run_chapter(chapter, *, operation="audiobook", decision, job, default_voice, language, opts,
-                       voice_map, lexicon, cache_dir, lease=None):
+                       voice_map, lexicon, cache_dir, lease=None, read_in: _ReadIn | None = None):
     """Run one chapter through the gateway; local preparation stays lazy.
 
     The performance preset is read once here (:func:`_preset_opts`): the
@@ -1486,7 +1763,8 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
     loading the model — a fully cached book after the model idled out used
     to wait for a load it never used.
 
-    ``lease`` holds the reference files the chapter resolves (#2535)."""
+    ``lease`` holds the reference files the chapter resolves (#2535);
+    ``read_in`` places a passage preview in its chapter (:func:`_phrase_plan`)."""
     from services import gpu_gateway
     from services.tts_backend import active_backend_id, get_backend_class
 
@@ -1497,6 +1775,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
         chapter, engine_id=engine_id, default_voice=default_voice,
         voice_map=voice_map, language=language, lexicon=lexicon,
         opts=opts, cache_dir=cache_dir, lease=lease, request_opts=request_opts,
+        read_in=read_in,
     )
     from services.longform_render import touch_cached_file, wav_is_complete
 
@@ -1510,7 +1789,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
         return _cached_local_chapter(
             chapter, engine_id=engine_id, default_voice=default_voice, language=language,
             opts=opts, request_opts=request_opts, voice_map=voice_map, lexicon=lexicon,
-            cache_dir=cache_dir, lease=lease)
+            cache_dir=cache_dir, lease=lease, read_in=read_in)
 
     looked = not decision.remote or (job is not None and job.latched_local)
     if looked:
@@ -1541,7 +1820,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
             fn=lambda: _render_chapter_cached(
                 chapter, synth, sr, local_engine, resolve, cache_dir, lexicon,
                 language, opts, voice_map, default_voice=default_voice,
-                request_opts=request_opts,
+                request_opts=request_opts, read_in=read_in,
             ),
             what="Audiobook chapter",
             timeout=generate_timeout_s(
@@ -1556,7 +1835,8 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
 
 
 def _cached_local_chapter(chapter, *, engine_id, default_voice, language, opts, request_opts,
-                          voice_map, lexicon, cache_dir, lease=None):
+                          voice_map, lexicon, cache_dir, lease=None,
+                          read_in: _ReadIn | None = None):
     """``(wav_path, duration, True, None)`` when the chapter's audio is in the
     local cache, found without loading a model — the key needs only the
     engine's sample rate (:func:`_local_sample_rate`); ``None`` otherwise, and
@@ -1571,7 +1851,7 @@ def _cached_local_chapter(chapter, *, engine_id, default_voice, language, opts, 
                                _voice_resolver(default_voice, voice_map, lease), cache_dir,
                                lexicon=lexicon, language=language, opts=opts,
                                voice_map=voice_map, default_voice=default_voice,
-                               request_opts=request_opts)
+                               request_opts=request_opts, read_in=read_in)
     found = _chapter_cache_lookup(keys, sr)
     if found is None:
         return None
@@ -1584,6 +1864,19 @@ def _cached_local_chapter(chapter, *, engine_id, default_voice, language, opts, 
     return _use_cached_chapter(keys, candidate, cache_dir), dur, True, None
 
 
+class PassageContext(BaseModel):
+    """Where a passage preview is read in its book: the script text of the
+    chapter it is part of, its ``# Title`` line included, and where the
+    passage starts and ends in that text (``start`` / ``end``). The
+    passage's sentences are then the chapter's own takes: a sentence the
+    chapter says before it is the repeat it is there, and a retake asked
+    for in the chapter plays in it."""
+
+    chapter: str
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
 class AudiobookPreviewRequest(ExpressiveMixin):
     text: str
     chapter_index: int = 0
@@ -1593,6 +1886,25 @@ class AudiobookPreviewRequest(ExpressiveMixin):
     # Cast map {[voice:NAME] → profile id} — MUST match the full render's so a
     # preview warms exactly the cache slot the render reuses (#1217).
     voice_map: dict[str, str] | None = None
+    # A passage preview (``text`` is the passage as a one-chapter script):
+    # where it is read in its book, so it reads the book's own takes.
+    context: PassageContext | None = None
+
+
+def _passage_read_in(req: AudiobookPreviewRequest) -> _ReadIn | None:
+    """The chapter a passage preview is read in (``req.context``), as the
+    script parses it; ``None`` without a context, or with one that is not a
+    single chapter holding the passage — the passage is then read on its
+    own."""
+    context = req.context
+    if context is None or not context.start <= context.end <= len(context.chapter):
+        return None
+    around = parse_audiobook_script(context.chapter, default_voice=req.default_voice).chapters
+    if len(around) != 1:
+        return None
+    lead = parse_audiobook_script(context.chapter[:context.start],
+                                  default_voice=req.default_voice).chapters
+    return _ReadIn(chapter=around[0], lead=lead[0].spans if len(lead) == 1 else [])
 
 
 @router.post("/audiobook/preview")
@@ -1600,7 +1912,9 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
     """Render a single chapter so the user can audition it before the full run.
 
     Reuses the same content-addressed cache as the job, so a preview warms the
-    cache (the later full render reuses it) and a re-preview is instant.
+    cache (the later full render reuses it) and a re-preview is instant. A
+    passage preview sends where the passage is read (``context``), so its
+    sentences are its chapter's takes — the ones the book reads there.
     """
     from core.config import OUTPUTS_DIR
     from services import gpu_gateway
@@ -1623,6 +1937,7 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
             chapter, decision=decision, job=None, default_voice=req.default_voice,
             language=resolved_lang, opts=opts, voice_map=req.voice_map,
             lexicon=req.lexicon, cache_dir=cache_dir, lease=lease,
+            read_in=_passage_read_in(req),
         )
     check = (seg_stats or {}).get("speech_check")
     if check is None and opts.verify_speech:
@@ -1636,6 +1951,253 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
         **_untitled(chapter),
         **({"speech_check": check} if check is not None else {}),
     }
+
+
+class AudiobookRetakeRequest(AudiobookPreviewRequest):
+    """A chapter preview's inputs plus the take to render anew: its ``span``
+    in the chapter (the index into that chapter's spans as ``/audiobook/plan``
+    lists them) and ``take``, its index among that span's takes in reading
+    order — the position ``/audiobook/takes`` lists it at. ``phrase`` (the
+    take's ``text`` there), when given, refuses the retake (409) if the take
+    at that position now says something else."""
+
+    span: int = Field(ge=0)
+    take: int = Field(ge=0)
+    phrase: str | None = Field(default=None, max_length=2000)
+
+
+def _take_store(keys: _ChapterKeys, cache_dir: str, sr: int, engine_id: str):
+    """The take cache a render of a chapter keyed ``keys`` reads."""
+    from services.longform_render import TakeCache
+
+    return TakeCache(cache_dir, sample_rate=sr, engine_id=engine_id,
+                     voice_sig=keys.voice_sigs, take_sig=keys.take_sig)
+
+
+def _chapter_take_plan(keys: _ChapterKeys, *, opts, lexicon) -> list:
+    """Every phrase take of a chapter keyed ``keys``, by span: as
+    :func:`_chapter_cache_keys` planned them (retakes placed, a passage read
+    in its chapter), else — none applied when its key was derived — as
+    synthesis cuts the chapter with ``opts``. One plan for the key, the
+    render and the lists, so they never disagree about a take."""
+    from services.audiobook import chapter_units
+    from services.longform_render import chapter_takes
+
+    if keys.takes is not None:
+        return keys.takes
+    units = chapter_units(keys.spans, lexicon=lexicon, **_split_kwargs(opts))
+    return chapter_takes(keys.spans, units, voice_sig=keys.voice_sigs, take_sig=keys.take_sig)
+
+
+class _CacheListing:
+    """The file names in a long-form cache's take and segment folders, each
+    folder read once, on first use: the outline counts a whole book's takes
+    from two directory listings instead of a look at the disk per take."""
+
+    def __init__(self, cache_dir: str) -> None:
+        self.cache_dir = cache_dir
+        self._names: dict = {}
+
+    def names(self, subdir: str) -> frozenset:
+        if subdir not in self._names:
+            try:
+                with os.scandir(os.path.join(self.cache_dir, subdir)) as entries:
+                    self._names[subdir] = frozenset(entry.name for entry in entries)
+            except OSError:
+                self._names[subdir] = frozenset()
+        return self._names[subdir]
+
+
+def _reused_takes(keys: _ChapterKeys, plan: list, store, *, opts, cache_dir,
+                  listing: _CacheListing | None = None) -> list:
+    """Which phrase takes of ``plan`` a render would reuse, by span, one bool
+    per take — decided as :func:`services.audiobook.synthesize_chapter` does:
+    a span cached whole (by a version before takes were kept) serves all of
+    its takes; once one of them was asked for again, the others are cut from
+    it where it keeps their ranges (``longform_render.cuttable_takes``); any
+    other take is reused from the take cache (``store``). Reads file names
+    (from ``listing`` when given), WAV headers and timing sidecars only:
+    nothing is loaded or moved."""
+    from services.longform_render import (
+        SEGMENT_SUBDIR,
+        TAKE_SUBDIR,
+        SegmentCache,
+        cuttable_takes,
+    )
+
+    segments = SegmentCache(cache_dir, sample_rate=store.sample_rate, engine_id=store.engine_id,
+                            voice_sig=keys.voice_sigs, extra_sig=keys.seg_extra_sig,
+                            vary_repeats=opts.vary_repeats,
+                            legacy_voice_sigs=keys.legacy_voice_sigs,
+                            legacy_extra_sig=keys.legacy_seg_extra_sig)
+    whole_names = listing.names(SEGMENT_SUBDIR) if listing is not None else None
+    take_names = listing.names(TAKE_SUBDIR) if listing is not None else None
+
+    def kept(ref) -> bool:
+        if take_names is None:
+            return store.has(ref)
+        return os.path.basename(store.path(ref)) in take_names
+
+    seen: dict = {}
+    out = []
+    for span, refs in zip(keys.spans, plan):
+        whole, cut = False, frozenset()
+        if span.text:
+            # The occurrence synthesis keys a repeated span's segment by.
+            repeat = (span.voice_id, span.text, getattr(span, "speed", None))
+            occurrence = seen.get(repeat, 0)
+            seen[repeat] = occurrence + 1
+            if refs and segments.holds(span, occurrence, names=whole_names):
+                if not any(ref.salt for ref in refs):
+                    whole = True
+                elif (timing := segments.timing_at(span, occurrence)) is not None:
+                    cut = cuttable_takes(timing["units"], timing["check"],
+                                         checking=opts.verify_speech)
+        out.append([whole or (k in cut and not ref.salt) or kept(ref)
+                    for k, ref in enumerate(refs)])
+    return out
+
+
+@dataclasses.dataclass
+class _TakeListing:
+    """A chapter's phrase takes as :func:`_list_takes` lists them: each
+    ``(entry, take)`` in reading order, and the chapter's title as a retake
+    is kept with it (``None``: untitled)."""
+
+    takes: list
+    title: str | None
+
+
+def _list_takes(chapter, *, default_voice, language, opts, voice_map, lexicon,
+                cache_dir) -> _TakeListing | None:
+    """Every phrase take of ``chapter`` as a render (or preview) with these
+    inputs cuts it, in reading order, each with its take
+    (``longform_render.TakeRef``): ``{"span", "take", "text",
+    "retake", "cached"}`` — the span's index in the chapter, the take's index
+    in that span (as the timing documents count them), its text as the reader
+    shows it, the retakes asked for so far, and whether a render would reuse
+    its audio (:func:`_reused_takes`; ``None`` while the engine's rate is
+    unknown until its model loads). ``None`` without phrase-by-phrase
+    reading: the chapter is then read in takes of up to 800 characters,
+    which are not kept one by one. Renders and loads nothing."""
+    from services.audiobook import span_display_takes
+    from services.tts_backend import active_backend_id
+
+    request_opts = _chapter_opts(opts, chapter, default_voice, voice_map)
+    engine_id = active_backend_id()
+    opts = _preset_opts(request_opts, engine_id)
+    if opts.punctuation_pauses is None:
+        return None
+    sr = _local_sample_rate(engine_id)
+    keys = _chapter_cache_keys(chapter, sr or 0, engine_id,
+                               _voice_resolver(default_voice, voice_map), cache_dir,
+                               lexicon=lexicon, language=language, opts=opts,
+                               voice_map=voice_map, default_voice=default_voice,
+                               request_opts=request_opts)
+    split = _split_kwargs(opts)
+    store = _take_store(keys, cache_dir, sr or 0, engine_id)
+    plan = _chapter_take_plan(keys, opts=opts, lexicon=lexicon)
+    reused = _reused_takes(keys, plan, store, opts=opts, cache_dir=cache_dir) if sr else None
+    out = []
+    for index, (span, spoken, refs) in enumerate(zip(chapter.spans, keys.spans, plan)):
+        if not refs:
+            continue
+        shown = span_display_takes(span.text, spoken.text, lexicon=lexicon, **split)
+        for k, ref in enumerate(refs):
+            out.append(({"span": index, "take": k,
+                         "text": shown[k] if k < len(shown) else ref.text,
+                         "retake": ref.retake,
+                         "cached": reused[index][k] if reused is not None else None},
+                        ref))
+    return _TakeListing(takes=out, title=keys.title)
+
+
+def _script_chapter(req: AudiobookPreviewRequest):
+    """Chapter ``req.chapter_index`` of ``req.text`` as the render parses it;
+    400 for a script or chapter index with nothing."""
+    plan = parse_audiobook_script(req.text, default_voice=req.default_voice)
+    if not plan.chapters:
+        raise HTTPException(status_code=400, detail="no chapters parsed from the script")
+    n = len(plan.chapters)
+    if not (0 <= req.chapter_index < n):
+        raise HTTPException(status_code=400, detail=f"chapter_index out of range (0..{n - 1})")
+    return plan.chapters[req.chapter_index]
+
+
+async def _chapter_takes(chapter, req) -> tuple[_TakeListing | None, str]:
+    """``(the takes of chapter as _list_takes gives them, the cache dir)``,
+    read with ``req``'s voices, cast, language, lexicon and options — a
+    chapter preview's request, or a Stories chapter's."""
+    from core.config import OUTPUTS_DIR
+
+    cache_dir = os.path.join(OUTPUTS_DIR, LONGFORM_CACHE_SUBDIR)
+    os.makedirs(cache_dir, exist_ok=True)
+    takes = await asyncio.to_thread(
+        _list_takes, chapter, default_voice=req.default_voice,
+        language=_resolve_default_language(req.language, req.default_voice),
+        opts=_expressive_opts(req), voice_map=req.voice_map, lexicon=req.lexicon,
+        cache_dir=cache_dir)
+    return takes, cache_dir
+
+
+def _takes_reply(chapter, listing: _TakeListing | None) -> dict:
+    """``/audiobook/takes``' (and ``/longform/takes``') answer."""
+    return {"title": chapter.title, **_untitled(chapter), "phrases": listing is not None,
+            "takes": [entry for entry, _ref in listing.takes] if listing is not None else []}
+
+
+@router.post("/audiobook/takes")
+async def audiobook_takes(req: AudiobookPreviewRequest) -> dict:
+    """The phrase takes of one chapter, as a render or preview with the same
+    inputs cuts it (see :func:`_list_takes`): where each sentence of the
+    script is, so the app can ask for one again (``/audiobook/retake``).
+    ``phrases`` is false — and ``takes`` empty — without phrase-by-phrase
+    reading. Renders nothing."""
+    chapter = _script_chapter(req)
+    takes, _cache_dir = await _chapter_takes(chapter, req)
+    return _takes_reply(chapter, takes)
+
+
+@router.post("/audiobook/retake")
+async def audiobook_retake(req: AudiobookRetakeRequest) -> dict:
+    """Ask for one phrase take again ("retake this sentence"): a retake is
+    kept for that sentence where it is read — the sentences around it and
+    its chapter's title (``longform_render.take_anchor``), so the same
+    sentence read elsewhere keeps its take, and an edit around it keeps the
+    retake — and it keys that take, and its chapter, anew: the next render
+    or preview of the chapter synthesizes that take and reuses every other.
+    Returns the take as ``/audiobook/takes`` lists it, with the new count.
+    Renders nothing itself."""
+    takes, cache_dir = await _chapter_takes(_script_chapter(req), req)
+    return await _ask_again(req, takes, cache_dir)
+
+
+async def _ask_again(req, listing: _TakeListing | None, cache_dir: str) -> dict:
+    """Ask once more for the take at ``req.span`` / ``req.take`` of
+    ``listing`` (:func:`_list_takes`), where the chapter reads it: 400
+    without phrase-by-phrase reading, 404 for no take there, 409 when
+    ``req.phrase`` says that take now reads something else, 500 when the
+    retake cannot be saved."""
+    from services.longform_render import bump_retake, take_anchor
+
+    if listing is None:
+        raise HTTPException(status_code=400,
+                            detail="retakes need sentence-by-sentence reading")
+    found = next(((at, entry, ref) for at, (entry, ref) in enumerate(listing.takes)
+                  if entry["span"] == req.span and entry["take"] == req.take), None)
+    if found is None:
+        raise HTTPException(status_code=404, detail="no take at that span and take index")
+    at, entry, ref = found
+    if req.phrase is not None and " ".join(req.phrase.split()) != " ".join(entry["text"].split()):
+        raise HTTPException(status_code=409,
+                            detail="the take at that position says something else now")
+    anchor = take_anchor([take.text for _entry, take in listing.takes], at, listing.title)
+    try:
+        count = await asyncio.to_thread(bump_retake, cache_dir, ref, anchor)
+    except (OSError, ValueError):
+        logger.warning("Could not save a retake", exc_info=True)
+        raise HTTPException(status_code=500, detail="the retake could not be saved")
+    return {**entry, "retake": count, "cached": False}
 
 
 def _untitled(chapter) -> dict:
@@ -1670,14 +2232,23 @@ def _local_sample_rate(engine_id: str) -> int | None:
 
 
 def _chapter_cache_state(chapter, *, decision, default_voice, language, opts, voice_map,
-                         lexicon, cache_dir) -> tuple[str | None, bool | None, list]:
+                         lexicon, cache_dir, takes: dict | None = None,
+                         listing: _CacheListing | None = None
+                         ) -> tuple[str | None, bool | None, list]:
     """``(cache key, cached, names)`` of one chapter, looked up exactly as
     :func:`_run_chapter` would: the remote cache when the job would run
     remotely, else the local chapter cache through :func:`_chapter_cache_keys`.
     ``names`` lists every key its audio may be cached under, the legacy ones
     too — a book rendered before the current key recorded one of those.
     Renders and loads nothing; ``cached`` is ``None`` when the local engine's
-    sample rate is unknown until its model loads."""
+    sample rate is unknown until its model loads.
+
+    ``takes`` (a dict the caller owns) receives, for a chapter rendered here
+    sentence by sentence and not cached whole, how many phrase takes a render
+    of it reads (``total``) and how many of those it would reuse
+    (``cached``, :func:`_reused_takes`, from ``listing`` when given) — so the
+    app can tell a chapter that only joins its takes again from one that
+    renders some."""
     from services.longform_render import wav_is_complete
     from services.tts_backend import active_backend_id
 
@@ -1700,6 +2271,12 @@ def _chapter_cache_state(chapter, *, decision, default_voice, language, opts, vo
                                request_opts=request_opts)
     cached = any(os.path.exists(path) and wav_is_complete(path)
                  for path in dict.fromkeys((keys.wav_path, *keys.legacy_paths)))
+    if takes is not None and not cached and opts.punctuation_pauses is not None:
+        store = _take_store(keys, cache_dir, sr, engine_id)
+        plan = _chapter_take_plan(keys, opts=opts, lexicon=lexicon)
+        reused = _reused_takes(keys, plan, store, opts=opts, cache_dir=cache_dir,
+                               listing=listing)
+        takes.update(total=sum(map(len, reused)), cached=sum(map(sum, reused)))
     return _cache_name(keys.wav_path), cached, keys.names
 
 
@@ -1725,7 +2302,11 @@ async def audiobook_outline(req: AudiobookOutlineRequest) -> dict:
     (the last book holds another version of it, or none), or ``not_rendered``.
     ``cached`` is the cache lookup itself (``None`` when it cannot be told
     without loading the engine) and ``in_book`` whether the last book holds
-    this version (``None`` without a book that recorded its chapters)."""
+    this version (``None`` without a book that recorded its chapters). A
+    chapter rendered here sentence by sentence and not cached whole adds
+    ``takes``: ``{"total", "cached"}``, how many phrase takes it reads and
+    how many of them a render would reuse (all of them: it only joins them
+    again)."""
     from core.config import OUTPUTS_DIR
     from services import gpu_gateway
 
@@ -1740,22 +2321,27 @@ async def audiobook_outline(req: AudiobookOutlineRequest) -> dict:
     if book is not None:
         keys = [c.get("key") for c in book.get("chapters") or [] if isinstance(c, dict)]
         book_keys = {k for k in keys if isinstance(k, str)} if any(keys) else None
+    takes: list[dict] = [{} for _ in plan.chapters]
+    listing = _CacheListing(cache_dir)
 
     def check() -> list:
         return [_chapter_cache_state(
             chapter, decision=decision, default_voice=req.default_voice,
             language=resolved_lang, opts=opts, voice_map=req.voice_map,
-            lexicon=req.lexicon, cache_dir=cache_dir) for chapter in plan.chapters]
+            lexicon=req.lexicon, cache_dir=cache_dir, takes=counts, listing=listing)
+            for chapter, counts in zip(plan.chapters, takes)]
 
     chapters = []
-    for chapter, (key, cached, names) in zip(plan.chapters, await asyncio.to_thread(check)):
+    for chapter, (key, cached, names), counts in zip(plan.chapters, await asyncio.to_thread(check),
+                                                     takes):
         # A book rendered before the current keys recorded a legacy one: the
         # same audio, so the chapter has not changed since it.
         in_book = None if book_keys is None or key is None else not book_keys.isdisjoint(names)
         status = ("rendered" if in_book or (in_book is None and cached)
                   else "changed" if in_book is False else "not_rendered")
         chapters.append({"title": chapter.title, **_untitled(chapter), "status": status,
-                         "cached": cached, "in_book": in_book})
+                         "cached": cached, "in_book": in_book,
+                         **({"takes": counts} if counts else {})})
     return {"chapters": chapters, "book": book is not None}
 
 
@@ -1903,6 +2489,9 @@ async def _render_longform_sse(
     voice_lease = voice_leases.VoiceFileLease()
     # With the speech check on, its recognizer loads once for the whole book.
     check_lease = recognizer_lease(checking=opts.verify_speech)
+    # The chapters it has finished stay until the mux has read them: another
+    # render's pruning walks past them.
+    chapter_hold = CacheHold()
     try:
         resolved_lang = _resolve_default_language(language, default_voice)
         operation = "audiobook" if job_type == "audiobook" else "longform"
@@ -1973,6 +2562,7 @@ async def _render_longform_sse(
                              **build_failure(e, stage="audiobook_chapter",
                                              include_diagnostic=False)})
                 continue
+            chapter_hold.add(wav_path)
             chapter_files.append(wav_path)
             chapter_timing = load_chapter_timeline(wav_path)
             rendered_timing.append((chapter, dur, chapter_timing, _cache_name(wav_path)))
@@ -2182,6 +2772,7 @@ async def _render_longform_sse(
     finally:
         voice_lease.release()
         check_lease.release()
+        chapter_hold.release()
 
 
 def _write_book_timeline(out_path: str, out_name: str, chapters: list, **kwargs) -> bool:
@@ -2455,27 +3046,34 @@ class LongformRenderRequest(ExpressiveMixin):
     project_id: str | None = Field(default=None, max_length=64)
 
 
+def _story_chapter(chapter: LongformChapter, index: int = 0):
+    """Chapter ``index`` of a posted plan as the render reads it, or ``None``
+    when it holds nothing to render: a span is kept if it has text to speak
+    or a pause to render (pause-only spans carry the silence between lines)."""
+    from services.audiobook import Chapter, Span
+
+    spans = [Span(voice_id=s.voice_id, text=(s.text or "").strip(),
+                  pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
+                  join=s.join, gain_db=s.gain_db or None)
+             for s in chapter.spans if ((s.text and s.text.strip()) or s.pause_ms_after > 0)]
+    if not spans:
+        return None
+    return Chapter(title=chapter.title or f"Chapter {index + 1}", spans=spans,
+                   untitled=not chapter.title)
+
+
 @router.post("/longform/render")
 async def longform_render(req: LongformRenderRequest, request: Request = None):
     """Render a pre-built chapter/span plan (the Stories Editor's compiled
     cast+lines) through the shared chapterized renderer — same resume, loudness,
     cover, metadata, and output formats as the Audiobook job."""
-    from services.audiobook import AudiobookPlan, Chapter, Span
+    from services.audiobook import AudiobookPlan
 
     if len(req.chapters) > _MAX_CHAPTERS:
         raise HTTPException(status_code=422, detail=f"too many chapters (max {_MAX_CHAPTERS})")
 
-    chapters = []
-    for i, c in enumerate(req.chapters):
-        # Keep a span if it has text to speak OR a pause to render (pause-only
-        # spans carry inter-line silence with empty text).
-        spans = [Span(voice_id=s.voice_id, text=(s.text or "").strip(),
-                      pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
-                      join=s.join, gain_db=s.gain_db or None)
-                 for s in c.spans if ((s.text and s.text.strip()) or s.pause_ms_after > 0)]
-        if spans:
-            chapters.append(Chapter(title=c.title or f"Chapter {i + 1}", spans=spans,
-                                    untitled=not c.title))
+    chapters = [chapter for chapter in (_story_chapter(c, i) for i, c in enumerate(req.chapters))
+                if chapter is not None]
     plan = AudiobookPlan(chapters=chapters)
     return StreamingResponse(
         _public_longform_stream(
@@ -2488,6 +3086,53 @@ async def longform_render(req: LongformRenderRequest, request: Request = None):
         ),
         media_type="text/event-stream",
     )
+
+
+class LongformTakesRequest(ExpressiveMixin):
+    """One chapter of a posted plan (one of ``/longform/render``'s
+    ``chapters``: a Stories chapter) with the inputs that render reads it
+    with — what ``/longform/takes`` lists the phrase takes of."""
+
+    chapter: LongformChapter
+    default_voice: str | None = None
+    language: str | None = None
+    lexicon: dict | None = None
+    voice_map: dict[str, str] | None = None
+
+
+class LongformRetakeRequest(LongformTakesRequest):
+    """``/longform/takes``' request plus the take to render anew, as
+    :class:`AudiobookRetakeRequest` names it."""
+
+    span: int = Field(ge=0)
+    take: int = Field(ge=0)
+    phrase: str | None = Field(default=None, max_length=2000)
+
+
+def _posted_chapter(req: LongformTakesRequest):
+    """``req.chapter`` as the render reads it; 400 when it has nothing to read."""
+    chapter = _story_chapter(req.chapter)
+    if chapter is None:
+        raise HTTPException(status_code=400, detail="nothing to read in this chapter")
+    return chapter
+
+
+@router.post("/longform/takes")
+async def longform_takes(req: LongformTakesRequest) -> dict:
+    """``/audiobook/takes`` for a chapter of a posted plan (Stories): its
+    phrase takes as ``/longform/render`` cuts them, for "retake this
+    sentence" (``/longform/retake``). Renders nothing."""
+    chapter = _posted_chapter(req)
+    takes, _cache_dir = await _chapter_takes(chapter, req)
+    return _takes_reply(chapter, takes)
+
+
+@router.post("/longform/retake")
+async def longform_retake(req: LongformRetakeRequest) -> dict:
+    """``/audiobook/retake`` for a chapter of a posted plan (Stories): the
+    next ``/longform/render`` renders that take anew and reuses every other."""
+    takes, cache_dir = await _chapter_takes(_posted_chapter(req), req)
+    return await _ask_again(req, takes, cache_dir)
 
 
 # ── Durable resume: interrupted longform renders ────────────────────────────

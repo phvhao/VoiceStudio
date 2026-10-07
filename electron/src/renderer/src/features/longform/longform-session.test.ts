@@ -2,13 +2,16 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const fetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api/client', () => ({ apiFetch: fetchMock }));
 import {
+  audiobookRetakeChapter,
   editLongform,
   longformSession,
   renderLongform,
   renderBody,
   chapterPreviewBody,
   clearLongformDraftForReset,
+  passageContext,
   stopLongform,
+  storyRetakeChapter,
 } from './longform-session';
 const eventResponse = (events: object[]) =>
   new Response(events.map((e) => 'data: ' + JSON.stringify(e) + '\n\n').join(''));
@@ -241,6 +244,79 @@ it('chapter preview uses the same synthesis inputs as the full book', () => {
     lexicon: { SQL: 'sequel' },
   });
   expect(preview).not.toHaveProperty('cover_path');
+});
+
+it('retakes an Audiobook sentence in the chapter around it, asked with its preview request', () => {
+  const script = '# One\r\nFirst.\r\n# Empty\r\n# Two\r\nSecond. Third.';
+  const draft = { ...longformSession.state.drafts.audiobook, script, voice: 'narrator' };
+  // The editor's offsets index its text, line breaks as `\n`.
+  const text = script.replaceAll('\r\n', '\n');
+  expect(audiobookRetakeChapter(draft, text.indexOf('Third'))).toEqual({
+    api: 'audiobook',
+    // "Empty" renders nothing, so "Two" is the plan's second chapter.
+    body: chapterPreviewBody(draft, 1),
+    index: 1,
+    sources: [{ id: 'script', text, from: text.indexOf('# Two'), to: text.length, headings: true }],
+  });
+  expect(audiobookRetakeChapter(draft, text.indexOf('# Empty') + 3)).toBeNull();
+});
+
+it('sends a passage with the chapter it is read in, so it reads the book’s own takes', () => {
+  const script = 'Intro line.\r\n# One\r\nYes.\r\n\r\nNo.\r\n# Two\r\nYes.';
+  const text = script.replaceAll('\r\n', '\n');
+  const one = text.slice(text.indexOf('# One'), text.indexOf('# Two'));
+  const at = text.indexOf('No.');
+  expect(passageContext(script, at, at + 3)).toEqual({
+    chapter: one,
+    start: one.indexOf('No.'),
+    end: one.indexOf('No.') + 3,
+  });
+  // From its heading on, a passage is still read in its chapter.
+  expect(passageContext(script, text.indexOf('# Two'), text.length)).toEqual({
+    chapter: text.slice(text.indexOf('# Two')),
+    start: 0,
+    end: text.length - text.indexOf('# Two'),
+  });
+  expect(passageContext(script, 0, 5)).toEqual({ chapter: 'Intro line.\n', start: 0, end: 5 });
+  // Across chapters it is read on its own.
+  expect(passageContext(script, at, text.length)).toBeNull();
+});
+
+it('retakes a Stories sentence in its chapter, posted as the render posts that chapter', () => {
+  const draft = {
+    ...longformSession.state.drafts.stories,
+    voice: 'narrator',
+    globalSpeed: 1.1,
+    voiceCast: { Mara: 'actor' },
+    lines: [
+      { id: 'a', text: 'Opening line.', profileId: 'p1' },
+      { id: 'h', text: '# Part two', profileId: null },
+      { id: 'b', text: 'Part two opens. [voice:Mara] Her words.', profileId: 'p2' },
+      { id: 'c', text: '[pause 1s] After a pause.', profileId: null, speed: 1.2 },
+      { id: 'h2', text: '# Part three', profileId: null },
+      { id: 'd', text: 'Last.', profileId: null },
+    ],
+  };
+  const chapter = storyRetakeChapter(draft, 'c');
+  // The render's request, less what only the finished file reads.
+  const {
+    chapters,
+    format: _format,
+    metadata: _metadata,
+    loudness: _loudness,
+    cover_path: _cover,
+    ...inputs
+  } = renderBody('stories', draft) as ReturnType<typeof renderBody> & {
+    chapters: { spans: unknown[] }[];
+  };
+  expect(chapter?.api).toBe('longform');
+  // Its spans are the whole story's for that chapter: the pause leading line
+  // "c" still folds onto line "b".
+  expect(chapter?.body.chapter).toMatchObject({ spans: chapters[1].spans });
+  expect(chapter?.body).toEqual({ ...inputs, chapter: chapter?.body.chapter });
+  expect(chapter?.sources.map((source) => source.id)).toEqual(['b', 'c']);
+  expect(storyRetakeChapter(draft, 'a')?.sources.map((source) => source.id)).toEqual(['a']);
+  expect(storyRetakeChapter(draft, 'h')).toBeNull();
 });
 
 it('sends identical explicit production overrides to preview and full render', () => {

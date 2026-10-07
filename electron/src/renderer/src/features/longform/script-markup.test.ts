@@ -17,6 +17,7 @@ import {
   insertToken,
   normalizeNewlines,
   pauseMs,
+  passageBounds,
   pauseToken,
   previewPassage,
   pronounceSelection,
@@ -397,6 +398,14 @@ describe('previewPassage', () => {
     const start = text.indexOf('Back');
     expect(previewPassage(text, start, text.length)).toBe('Back to narration.');
   });
+
+  it('is the selection, or the paragraph around a caret, as passageBounds places it', () => {
+    const caret = book.indexOf('still');
+    const [from, to] = passageBounds(book, caret, caret);
+    expect(book.slice(from, to)).toBe('Second paragraph, still Mara.');
+    const start = book.indexOf('First');
+    expect(passageBounds(book, start, start + 5)).toEqual([start, start + 5]);
+  });
 });
 
 describe('pronunciation overrides', () => {
@@ -614,7 +623,13 @@ describe('[volume] passages', () => {
   it('wraps a selection so the render moves exactly the wrapped words', () => {
     const plain = 'Normal… a whisper then on.';
     const from = plain.indexOf('a whisper');
-    const edit = wrapSelection(plain, from, from + 'a whisper '.length, volumeToken(-6), '[/volume]');
+    const edit = wrapSelection(
+      plain,
+      from,
+      from + 'a whisper '.length,
+      volumeToken(-6),
+      '[/volume]',
+    );
     expect(edit.text).toBe(line);
     expect(spans(edit.text).map((span) => [span.text, span.gain_db])).toEqual([
       ['Normal…', undefined],

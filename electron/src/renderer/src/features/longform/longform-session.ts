@@ -19,12 +19,15 @@ import { queryClient } from '@/lib/query';
 import { cachedTtsLanguagesSupported } from '@/lib/language-options';
 import { tr } from '@/lib/i18n-text';
 import { consumeLongformStream } from '@shared/utils/longformStream';
+import { isChapterLine } from '@shared/utils/storyExport';
 import { storyToSpans } from '@shared/utils/storyToSpans';
 import { beginAppActivity } from '@/lib/app-activity';
 import { publicFailureFromEvent, type PublicFailure } from '@/lib/api/failure';
 import { chapterLevels, type VoiceLevels } from './auto-levels';
 import { scriptSize } from './story-clear';
+import { normalizeNewlines } from './script-markup';
 import { scriptOutline } from './script-outline';
+import type { RetakeChapter } from './take-retake';
 import { ProjectMissingError, projectLibrary, type LongformProjectMeta } from './project-library';
 export type Mode = 'stories' | 'audiobook';
 export interface Character {
@@ -672,7 +675,8 @@ export function bookLanguageTag(language: string): string {
   return LANG_CODES.find((entry) => entry.label === language)?.code ?? '';
 }
 
-export function renderBody(mode: Mode, draft: Draft) {
+/** What a render of `draft` reads its text with: the options, voices, cast and language. */
+function readingInputs(mode: Mode, draft: Draft) {
   const names = parseCastNames(
     mode === 'audiobook' ? draft.script : draft.lines.map((line) => line.text).join('\n'),
     draft.voiceCast,
@@ -688,13 +692,19 @@ export function renderBody(mode: Mode, draft: Draft) {
     '',
     ...names.map((name) => voiceGainKey(name)),
   ]);
-  const common = {
+  return {
     ...overridesToRequest(draft.overrides, draft.language),
     ...(voice_gains ? { voice_gains } : {}),
     default_voice: draft.voice,
     voice_map,
-    format: draft.format,
     language: draft.language,
+  };
+}
+
+export function renderBody(mode: Mode, draft: Draft) {
+  const common = {
+    ...readingInputs(mode, draft),
+    format: draft.format,
     metadata: { ...draft.metadata, title: draft.title },
     loudness: draft.loudness,
     cover_path: draft.cover?.path ?? null,
@@ -935,6 +945,75 @@ export function chapterPreviewBody(draft: Draft, chapter_index: number) {
 export function outlineRequest(draft: Draft) {
   const { chapter_index: _index, ...body } = chapterPreviewBody(draft, 0);
   return { ...body, output: draft.output || null };
+}
+
+/** Where a passage preview is read in its book: `/audiobook/preview`'s `context`. */
+export interface PassageContext {
+  /** The script text of the chapter the passage is part of, its `# Title` line included. */
+  chapter: string;
+  /** Where the passage starts and ends in that text. */
+  start: number;
+  end: number;
+}
+
+/**
+ * Where the passage `from…to` of the script is read: its chapter's text and
+ * its place in it. A passage preview sends it, so its sentences are the
+ * book's own takes there — a sentence the chapter said before it is the
+ * repeat it is in the book, and a retake asked for in the chapter is what
+ * plays. `null` when the passage runs across chapters, or reads none.
+ */
+export function passageContext(script: string, from: number, to: number): PassageContext | null {
+  const text = normalizeNewlines(script);
+  const chapter = scriptOutline(text).findLast((node) => node.start <= from);
+  if (!chapter || chapter.plan === null || to > chapter.end) return null;
+  return {
+    chapter: text.slice(chapter.start, chapter.end),
+    start: from - chapter.start,
+    end: to - chapter.start,
+  };
+}
+
+/**
+ * The Audiobook chapter at `offset` of the script, as "Retake this sentence"
+ * reaches it: the chapter preview's request, and its stretch of the script
+ * (offsets into the editor's text). `null` where nothing is read.
+ */
+export function audiobookRetakeChapter(draft: Draft, offset: number): RetakeChapter | null {
+  const text = normalizeNewlines(draft.script);
+  const chapter = scriptOutline(text).findLast((node) => node.start <= offset);
+  if (!chapter || chapter.plan === null) return null;
+  return {
+    api: 'audiobook',
+    body: chapterPreviewBody(draft, chapter.plan),
+    index: chapter.plan,
+    sources: [{ id: 'script', text, from: chapter.start, to: chapter.end, headings: true }],
+  };
+}
+
+/**
+ * The Stories chapter holding line `lineId`, as "Retake this sentence"
+ * reaches it: its lines, from the chapter line before it (or the story's
+ * start) to the next one, posted as the render posts that chapter. `null` on
+ * a chapter line, or in a chapter with nothing to read.
+ */
+export function storyRetakeChapter(draft: Draft, lineId: string): RetakeChapter | null {
+  const at = draft.lines.findIndex((line) => line.id === lineId);
+  if (at < 0 || isChapterLine(draft.lines[at].text)) return null;
+  let from = at;
+  while (from > 0 && !isChapterLine(draft.lines[from - 1].text)) from -= 1;
+  let to = at + 1;
+  while (to < draft.lines.length && !isChapterLine(draft.lines[to].text)) to += 1;
+  const lines = draft.lines.slice(from, to);
+  // A chapter starts over at every chapter line, so this one compiles alone
+  // exactly as it does inside the whole story.
+  const [chapter] = storyToSpans(lines, draft.cast, draft.globalSpeed);
+  if (!chapter) return null;
+  return {
+    api: 'longform',
+    body: { ...readingInputs('stories', draft), chapter },
+    sources: lines.map((line) => ({ id: line.id, text: normalizeNewlines(line.text) })),
+  };
 }
 
 /** Where the Contents outline keeps its answer to `request` (the request's JSON). */

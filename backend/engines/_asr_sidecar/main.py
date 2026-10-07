@@ -69,10 +69,17 @@ def _recv(stream):
 # services/asr_backend.py:_compute_type_candidates / _is_compute_type_error.
 # This sidecar runs in a child proc with a clean import path, so we duplicate a
 # tiny copy rather than cross-importing the heavy services package (#551).
+_GPU_ONLY_COMPUTE_TYPES = frozenset({"float16", "bfloat16", "int8_float16", "int8_bfloat16"})
+
+
 def _ct_candidates(device):
     override = os.environ.get("ASR_COMPUTE_TYPE")
-    if override:
+    if override and (device == "cuda" or override not in _GPU_ONLY_COMPUTE_TYPES):
         return [override]
+    if override:
+        # A GPU-only pin fails every CPU load: the CPU chain runs instead.
+        print(f"asr-sidecar: ASR_COMPUTE_TYPE={override} needs a GPU; loading on the CPU with int8",
+              file=sys.stderr, flush=True)
     return ["float16", "int8_float16", "int8"] if device == "cuda" else ["int8", "float32"]
 
 
@@ -111,10 +118,25 @@ def _get_model():
             # (#1529). CPU always works; say why in the sidecar log.
             print("asr-sidecar: device probe failed — using cpu", file=sys.stderr, flush=True)
             device = "cpu"
+        candidates = _ct_candidates(device)
+        if device == "cuda":
+            # A CUDA load that does not fit the VRAM left aborts this process
+            # natively (#723): the job fails, and so does every retry while
+            # the TTS model holds the card. Start at the first compute type
+            # that fits, or load on the CPU — the in-process engines' rule.
+            try:
+                from core.ctranslate2_vram import fitting_compute_types
+
+                fitting = fitting_compute_types(name, candidates, engine="faster-whisper-isolated")
+            except Exception:  # noqa: BLE001 — the preflight never blocks a load
+                fitting = candidates
+            if not fitting:
+                device, fitting = "cpu", _ct_candidates("cpu")
+            candidates = fitting
         # Degrade fp16 → int8 rather than crash on GPUs without efficient fp16
         # (older Maxwell/Pascal, GTX 16xx, CTranslate2/cuDNN mismatch) (#551).
         last_err = None
-        for compute in _ct_candidates(device):
+        for compute in candidates:
             try:
                 _model = WhisperModel(name, device=device, compute_type=compute)
                 break

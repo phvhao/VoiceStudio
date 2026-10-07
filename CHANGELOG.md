@@ -13,6 +13,7 @@ metadata and the backend fallback mirror it.
 - Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
 - Voices in a book come out at the same volume, and each voice can be turned up or down
 - Audiobooks get sections, a Contents panel, sentence-exact highlighting in the reader and an offline HTML export
+- Editing or retaking one sentence of a book renders just that sentence again; the rest of its chapter is reused
 
 ### Changed
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
@@ -80,6 +81,11 @@ metadata and the backend fallback mirror it.
 - Audiobook chapters rendered on a remote worker are watermarked once instead of twice, and turning the speech check on or off no longer renders them again
 - The speech check loads its speech recognizer once per render instead of before every sentence and is told the book's language: after the first sentence a check takes about 0.6 s instead of 4 s (faster-whisper large-v3, RTX 3060); the recognizer is released when the render ends or the memory it holds runs low, a hung check never stalls other renders, and a render trace shows its time
 - Audiobook and Stories say how many sentences the speech check could not check and why: no speech recognizer installed, or the installed one heard no words in them (as in a near-silent take), with the chapters to listen to
+- Clone reference transcription, dictation, the speech check, dub and batch no longer crash the backend loading faster-whisper on a nearly full GPU: like WhisperX, it steps down float16 → int8 or loads on the CPU (with int8, even when ASR_COMPUTE_TYPE pins a type only a GPU runs), also in its crash-isolated variant (#723)
+- The status bar shows speech recognition as loaded while the speech check holds the selected model, and Model Catalogue marks the model the speech check falls back to as In memory
+- Audiobook and Stories keep each sentence's take on its own: an edited word renders only the sentence that says it and a new pronunciation only the sentences it respells, Stop or a crash loses at most the sentence in progress, and Listen plays the takes the book reads there; chapters cached by earlier versions keep playing and render once more on their first edit
+- Changing a punctuation pause, trimming, the gap between paragraphs, voice leveling or a volume joins the sentences already rendered without rendering any, turning the speech check on only listens to them, and turning it off again reads each as first rendered; Pause at every comma renders only the sentences it cuts differently
+- Right-click a sentence in Audiobook or Stories (or open the card of a reaction, delivery or respelling in it) to Retake this sentence: only that take renders again (a remote worker reads it anew too), and only there (the same line elsewhere keeps its take); Audiobook plays its paragraph at once, and the Contents rail says how many sentences a changed chapter has left to render
 
 ## [0.5.7] — 2026-10-05
 

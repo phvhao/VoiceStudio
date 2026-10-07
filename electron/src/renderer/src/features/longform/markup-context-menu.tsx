@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ContextMenu } from '@base-ui/react/context-menu';
 import {
   AudioLinesIcon,
@@ -10,6 +10,7 @@ import {
   PauseIcon,
   PencilLineIcon,
   PlayIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   ScissorsIcon,
   SmileIcon,
@@ -61,6 +62,7 @@ import {
   type MarkupKind,
   type MarkupToken,
 } from './script-markup';
+import type { RetakeTarget } from './take-retake';
 import { voiceAccent } from './voice-palette';
 
 const POPUP =
@@ -385,11 +387,7 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
         </Submenu>
       )}
       {passage !== null && (
-        <Submenu
-          icon={<Volume2Icon />}
-          label={t('editor.change_volume')}
-          hint={gainText(passage)}
-        >
+        <Submenu icon={<Volume2Icon />} label={t('editor.change_volume')} hint={gainText(passage)}>
           <VolumeItems current={passage} choose={act.setVolume} />
         </Submenu>
       )}
@@ -427,6 +425,8 @@ function UnsupportedTagItems({ token, tools }: { token: MarkupToken; tools: TagT
  * markup the toolbar inserts, and — when the click lands on a tag — what the
  * tag card offers for it, in menu form. Chromium moves the caret to the
  * clicked spot before the menu opens, so the caret says what was clicked.
+ * With `retakes`, it offers to retake the sentence there (or the ones a
+ * selection reaches), looked up as the menu opens.
  */
 export function MarkupContextMenu({
   children,
@@ -448,18 +448,38 @@ export function MarkupContextMenu({
 }) {
   const { t } = useTranslation();
   const gainText = useVoiceGainText();
-  const { getTarget, headings = false, voiceCast, onVoiceCast } = tools;
+  const { getTarget, headings = false, voiceCast, onVoiceCast, retakes } = tools;
   // Only the markup this page reads is offered (`heading` stands for chapters).
   const reads = (kind: MarkupKind) => !tools.unsupported?.includes(kind);
   const [token, setToken] = useState<MarkupToken | null>(null);
   const [selection, setSelection] = useState(false);
+  // The takes a retake would ask for again, once found: none while looking.
+  const [retake, setRetake] = useState<RetakeTarget | null>(null);
+  // Where they could not be looked up (the backend did not answer): chosen
+  // anyway, the item looks again, and says why when it still cannot.
+  const [unfound, setUnfound] = useState<[number, number] | null>(null);
+  const finding = useRef<AbortController | null>(null);
+  useEffect(() => () => finding.current?.abort(), []);
   const unread = token && unsupportedKind(tools, token);
   const capture = () => {
     const element = getTarget()?.element;
     if (!element) return;
-    setSelection(element.selectionStart !== element.selectionEnd);
-    setToken(
-      tokenAround(element.value, element.selectionStart, element.selectionEnd, { headings }),
+    const { selectionStart: from, selectionEnd: to } = element;
+    setSelection(from !== to);
+    setToken(tokenAround(element.value, from, to, { headings }));
+    finding.current?.abort();
+    setRetake(null);
+    setUnfound(null);
+    if (!retakes) return;
+    const current = new AbortController();
+    finding.current = current;
+    void retakes.find(from, to, current.signal).then(
+      (target) => {
+        if (!current.signal.aborted) setRetake(target);
+      },
+      () => {
+        if (!current.signal.aborted) setUnfound([from, to]);
+      },
     );
   };
   const run = (make: (value: string, start: number, end: number) => MarkupEdit) => {
@@ -487,7 +507,12 @@ export function MarkupContextMenu({
 
   if (disabled) return <div className={className}>{children}</div>;
   return (
-    <ContextMenu.Root onOpenChange={(open) => onOpenChange?.(open)}>
+    <ContextMenu.Root
+      onOpenChange={(open) => {
+        if (!open) finding.current?.abort();
+        onOpenChange?.(open);
+      }}
+    >
       <ContextMenu.Trigger className={className} onContextMenu={capture}>
         {children}
       </ContextMenu.Trigger>
@@ -625,11 +650,24 @@ export function MarkupContextMenu({
                 }
               />
             )}
+            {(onListen || retakes) && <ContextMenu.Separator className={SEPARATOR} />}
             {onListen && (
-              <>
-                <ContextMenu.Separator className={SEPARATOR} />
-                <Item icon={<PlayIcon />} label={t('markup.preview')} onClick={onListen} />
-              </>
+              <Item icon={<PlayIcon />} label={t('markup.preview')} onClick={onListen} />
+            )}
+            {retakes && (
+              <Item
+                icon={<RefreshCwIcon />}
+                label={
+                  retake && retake.takes.length > 1
+                    ? t('editor.retake_sentences', { count: retake.takes.length })
+                    : t('editor.retake_sentence')
+                }
+                disabled={!retake && !unfound}
+                onClick={() => {
+                  if (retake) retakes.retake(retake);
+                  else if (unfound) retakes.retakeAt(...unfound);
+                }}
+              />
             )}
           </ContextMenu.Popup>
         </ContextMenu.Positioner>

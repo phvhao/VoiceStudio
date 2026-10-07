@@ -14,7 +14,8 @@ vi.mock('@/components/waveform-player', () => ({
   WaveformPlayer: ({ src }: { src: string }) => <audio data-testid="preview" src={src} />,
 }));
 import { usePerformanceProfile } from '@/hooks/use-performance-profile';
-import { BookOutline } from './book-outline';
+import { BookOutline, takesLeft } from './book-outline';
+import type { RetakenChapter } from './chapter-previews';
 import { blankLongformDraft, outlineRequest, type Draft } from './longform-session';
 
 const SCRIPT = '# One\nFirst words.\n## Part two\nMore words.\n# Empty\n# Two\nLast.';
@@ -38,7 +39,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function Harness({ initial = SCRIPT, output = '' }: { initial?: string; output?: string }) {
+function Harness({
+  initial = SCRIPT,
+  output = '',
+  retaken = null,
+}: {
+  initial?: string;
+  output?: string;
+  retaken?: RetakenChapter | null;
+}) {
   const [script, setScript] = useState(initial);
   const input = useRef<HTMLTextAreaElement>(null);
   const draft: Draft = { ...blankLongformDraft(), script, voice: 'narrator', output };
@@ -56,6 +65,7 @@ function Harness({ initial = SCRIPT, output = '' }: { initial?: string; output?:
         canPreview
         onBusy={() => {}}
         getTarget={() => input.current && { element: input.current, setText: setScript }}
+        retaken={retaken}
       />
     </QueryClientProvider>
   );
@@ -222,6 +232,65 @@ it('says why a chapter changed, and when its new audio is ready', async () => {
   );
   // The reason names the script and the settings, and what happens next.
   expect(t('book.hint_changed', { lng: 'en' })).toMatch(/script or settings.*render again/i);
+});
+
+it('says how many sentences a chapter not rendered as it is has left to render', async () => {
+  mock.api.mockImplementation(async () => ({
+    book: true,
+    chapters: [
+      // A pause changed: every take is rendered, the book only joins them.
+      {
+        title: 'One',
+        status: 'changed',
+        cached: false,
+        in_book: false,
+        takes: { total: 3, cached: 3 },
+      },
+      // One sentence edited (or retaken).
+      {
+        title: 'Two',
+        status: 'changed',
+        cached: false,
+        in_book: false,
+        takes: { total: 4, cached: 3 },
+      },
+    ],
+  }));
+  render(<Harness initial={'# One\nFirst.\n# Two\nLast.'} output="audiobook_b1.m4b" />);
+  const row = (title: string) =>
+    within(within(contents()).getByRole('button', { name: title }).parentElement!);
+  expect(await row('One').findByText(t('book.takes_ready'))).toHaveAttribute(
+    'title',
+    t('book.hint_takes_ready'),
+  );
+  expect(
+    row('Two').getByText(t('book.takes_to_render', { count: 1, number: '1' })),
+  ).toHaveAttribute('title', t('book.hint_takes_to_render'));
+  expect(t('book.takes_to_render', { count: 3, number: '3', lng: 'en' })).toBe(
+    '3 sentences to render',
+  );
+});
+
+it('leaves the take count out where the status says it all', () => {
+  expect(takesLeft('changed', { total: 4, cached: 3 })).toBe(1);
+  expect(takesLeft('not_rendered', { total: 4, cached: 4 })).toBe(0);
+  // Rendered as it is now; no take rendered yet; an older backend.
+  expect(takesLeft('rendered', { total: 4, cached: 3 })).toBeNull();
+  expect(takesLeft('not_rendered', { total: 4, cached: 0 })).toBeNull();
+  expect(takesLeft('changed', undefined)).toBeNull();
+});
+
+it('puts away the preview of a chapter a retake made out of date', async () => {
+  const view = render(<Harness />);
+  fireEvent.click(
+    screen.getByRole('button', { name: t('audiobook.preview_chapter', { title: 'Two' }) }),
+  );
+  expect(await screen.findByTestId('preview')).toBeInTheDocument();
+  // A retake in another chapter leaves it; one in "Two" (the plan's second) does not.
+  view.rerender(<Harness retaken={{ chapter: 0, id: 1 }} />);
+  expect(screen.getByTestId('preview')).toBeInTheDocument();
+  view.rerender(<Harness retaken={{ chapter: 1, id: 2 }} />);
+  expect(screen.queryByTestId('preview')).toBeNull();
 });
 
 it("labels the chapter preview with the outline's localized name", async () => {

@@ -22,12 +22,16 @@ reimplement it:
     spoken span's WAV is content-addressed under ``<cache_dir>/segments`` so
     editing one sentence re-renders one segment (not the chapter) and an
     interrupted chapter render resumes from its finished segments.
+  * ``take_identity`` / ``TakeCache`` — beneath that, with phrase-by-phrase
+    reading: each phrase take on its own under ``<cache_dir>/takes``, so a
+    span is assembled from its takes and only takes whose spoken text changed
+    render again; ``bump_retake`` asks for one take anew.
 
 The builders are pure (string/argv in, string/argv out) so they're unit tested
 without ffmpeg, torch, or a GPU; the cache helpers (``prune_cache_dir``,
-``SegmentCache``) touch only local files and import torch lazily. The impure
-ffmpeg run lives in the caller (the audiobook router today; the stories job
-tomorrow).
+``SegmentCache``, ``TakeCache``) touch only local files and import torch
+lazily. The impure ffmpeg run lives in the caller (the audiobook router today;
+the stories job tomorrow).
 """
 
 from __future__ import annotations
@@ -37,9 +41,11 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass
+import secrets
+import threading
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 from services.pronunciation import has_inline_overrides
 from services.text_normalization import changed_by_quote_and_caps_rules
@@ -108,14 +114,61 @@ def touch_cached_file(path: str) -> None:
     """Mark a cache entry as just used, so eviction keeps it longest.
 
     :func:`prune_cache_dir` evicts by modification time, so every reuse —
-    a chapter or a segment served from the cache — moves it to now. Without
-    this a book re-rendered again and again lost its oldest chapters first
-    while they were still in use. Best-effort.
+    a chapter, a segment or a take served from the cache — moves it to now.
+    Without this a book re-rendered again and again lost its oldest chapters
+    first while they were still in use. Best-effort.
     """
     try:
         os.utime(path, None)
     except OSError:
         pass
+
+
+#: Cache files a running render still needs, normalized, with how many
+#: holders each has (see :class:`CacheHold`).
+_HELD: dict[str, int] = {}
+_HELD_LOCK = threading.Lock()
+
+
+def _held_key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+class CacheHold:
+    """Keep cache files from eviction while a render still needs them.
+
+    A render prunes before it writes, so it never evicts its own audio — but
+    another render's pruning could drop the chapters this one finished and
+    has yet to mux, or the segments and takes a chapter it is rendering has
+    yet to read (an older take is the first to go). ``add`` each such file;
+    :meth:`release` (or the end of a ``with`` block) lets them go.
+    :func:`prune_cache_dir` walks past held files; they still count toward
+    the cache's size."""
+
+    def __init__(self) -> None:
+        self._keys: list[str] = []
+
+    def add(self, path: str) -> None:
+        key = _held_key(path)
+        with _HELD_LOCK:
+            _HELD[key] = _HELD.get(key, 0) + 1
+        self._keys.append(key)
+
+    def release(self) -> None:
+        with _HELD_LOCK:
+            for key in self._keys:
+                left = _HELD.get(key, 0) - 1
+                if left > 0:
+                    _HELD[key] = left
+                else:
+                    _HELD.pop(key, None)
+        self._keys.clear()
+
+    def __enter__(self) -> "CacheHold":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.release()
 
 
 def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[int, int]:
@@ -126,17 +179,21 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
     Recency is the file's mtime: a write sets it and every cache hit renews it
     (:func:`touch_cached_file`), so what a render keeps reusing stays and what
     an edit superseded goes first. Walks the whole tree, so chapter WAVs at the
-    root and segment WAVs under ``segments/`` share ONE byte budget — the cap
-    holds no matter which layer grew. Bookkeeping (including the voices-root
-    index needed to find legacy WAVs after a data-dir move) is counted but
-    never evicted. Metadata alone may exceed the budget. A WAV's timing sidecar
+    root, segment WAVs under ``segments/`` and phrase takes under ``takes/``
+    share ONE byte budget — the cap holds no matter which layer grew.
+    Bookkeeping (including the voices-root index needed to find legacy WAVs
+    after a data-dir move, and the retakes asked for) is counted but never
+    evicted. Metadata alone may exceed the budget. A WAV's timing sidecar
     (:func:`timeline_sidecar_path`) goes with it, and a sidecar whose WAV is
-    gone is removed — it describes audio that no longer exists. Best-effort:
+    gone is removed — it describes audio that no longer exists. Files a
+    running render holds (:class:`CacheHold`) are never evicted. Best-effort:
     returns ``(remaining_bytes, removed_count)`` (WAVs only) and never raises
     (a missing dir / unstattable file is just skipped). Call it *before*
     writing a job's files so the fresh ones are never the eviction target;
     it walks the disk, so an async caller runs it off the event loop.
     """
+    with _HELD_LOCK:
+        held = set(_HELD)
     entries: list[tuple[float, int, str]] = []
     sidecars: dict[str, int] = {}
     total = 0
@@ -167,6 +224,8 @@ def prune_cache_dir(cache_dir: str, max_bytes: int = _CACHE_MAX_BYTES) -> tuple[
     for _mtime, size, p in entries:
         if total <= max_bytes:
             break
+        if held and _held_key(p) in held:
+            continue
         try:
             os.remove(p)
             total -= size
@@ -207,13 +266,21 @@ def remove_timeline_sidecar(audio_path: str) -> None:
         pass
 
 
-def write_json_atomic(path: str, doc: dict) -> bool:
+def write_json_atomic(path: str, doc: dict, *, durable: bool = False) -> bool:
     """Write ``doc`` to ``path`` through a temp file + replace, so a reader
-    never sees half a file. Best-effort: ``False`` when it could not."""
+    never sees half a file. ``durable`` also flushes the file before the
+    rename and the folder after it, so a power-off cannot leave the name
+    holding an empty or torn file (``core.durable_io``) — for bookkeeping
+    nothing else could rebuild. Best-effort: ``False`` when it could not."""
+    from core.durable_io import flush_dir, flush_fd
+
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, separators=(",", ":"))
+            if durable:
+                f.flush()
+                flush_fd(f.fileno())
         os.replace(tmp, path)
     except (OSError, TypeError, ValueError):
         try:
@@ -221,6 +288,8 @@ def write_json_atomic(path: str, doc: dict) -> bool:
         except OSError:
             pass
         return False
+    if durable:
+        flush_dir(os.path.dirname(path))
     return True
 
 
@@ -748,17 +817,58 @@ class SegmentCache:
         )
         return os.path.join(self.dir, f"{key}.wav")
 
+    def _candidate_paths(self, span, nonce: int = 0) -> list:
+        """Where ``span``'s audio may be: its current key, then every legacy one."""
+        path = self._path(span, nonce)
+        paths = [path]
+        for sigs in (self.voice_sig, *self.legacy_voice_sigs):
+            legacy = self._path(span, nonce, sigs=sigs, extra_sig=self.legacy_extra_sig)
+            if legacy != path:
+                paths.append(legacy)
+        return paths
+
+    def paths(self, span, nonce: int = 0) -> list:
+        """Every file ``span``'s audio may be cached in: its current key, then
+        every legacy one — what a render holds while it may still read it."""
+        return self._candidate_paths(span, nonce)
+
+    def timing_at(self, span, nonce: int = 0) -> Optional[dict]:
+        """What is kept with ``span``'s cached segment, under its current key
+        or a legacy one, read from file headers and its sidecar alone —
+        nothing is loaded or moved: ``{"units": [[take, start, end], …],
+        "check": the speech check's record or None}``, or ``None`` without a
+        segment or with no take ranges for its audio."""
+        for path in self._candidate_paths(span, nonce):
+            if not os.path.isfile(path):
+                continue
+            frames = _wav_frames(path)
+            doc = read_json_file(timeline_sidecar_path(path)) if frames is not None else None
+            units = valid_segment_timing(doc, frames) if frames is not None else None
+            if units is None:
+                return None
+            return {"units": units, "check": valid_speech_check(doc.get("speech_check"))}
+        return None
+
     def _existing_path(self, span, nonce: int = 0) -> Optional[str]:
         """The file holding ``span``'s audio under the current key, adopting a
         legacy-keyed file into it when only that one exists."""
-        path = self._path(span, nonce)
+        path, *legacy = self._candidate_paths(span, nonce)
         if os.path.isfile(path):
             return path
-        for sigs in (self.voice_sig, *self.legacy_voice_sigs):
-            legacy = self._path(span, nonce, sigs=sigs, extra_sig=self.legacy_extra_sig)
-            if legacy != path and os.path.isfile(legacy):
-                return adopt_cached_file(legacy, path)
+        for old in legacy:
+            if os.path.isfile(old):
+                return adopt_cached_file(old, path)
         return None
+
+    def holds(self, span, nonce: int = 0, *, names: Optional[frozenset] = None) -> bool:
+        """Whether ``span``'s audio is cached, under its current key or a
+        legacy one — from the file names alone: nothing is loaded or moved.
+        ``names``, the segment folder's file names when the caller listed
+        them once, replaces a look at the disk per key."""
+        if names is not None:
+            return bool(names) and any(os.path.basename(path) in names
+                                       for path in self._candidate_paths(span, nonce))
+        return any(os.path.isfile(path) for path in self._candidate_paths(span, nonce))
 
     def load(self, span, nonce: int = 0):
         """Cached audio tensor for ``span``, or ``None`` (miss). A hit bumps
@@ -838,6 +948,501 @@ class SegmentCache:
             write_json_atomic(timeline_sidecar_path(self._path(span, nonce)), doc)
 
 
+# ── Take cache (one phrase take) ────────────────────────────────────────────
+#
+# With phrase-by-phrase reading every sentence or clause is its own engine
+# take, and each take is cached on its own the moment it finishes: a span is
+# assembled from its takes — trims, pauses and paragraph gaps applied then —
+# so an edit renders only the takes whose spoken text changed, a new pause
+# re-joins the takes already cached, and a stopped render loses at most the
+# take in progress. Same root, byte cap and eviction as the other layers.
+
+#: Phrase takes live in a subdirectory of the chapter cache dir.
+TAKE_SUBDIR = "takes"
+#: The retakes the user asked for (``POST /audiobook/retake``): one record
+#: per sentence retaken, kept with where it is read (:func:`take_anchor`).
+#: Bookkeeping: never evicted.
+RETAKES_FILE = "retakes.json"
+#: The retakes as they were before the last one was asked for: read when
+#: :data:`RETAKES_FILE` cannot be, so one torn write never loses them all.
+RETAKES_BACKUP = "retakes.prev.json"
+RETAKES_VERSION = 2
+#: Retakes kept at most; the ones asked for longest ago go first.
+_MAX_RETAKES = 10_000
+#: The takes on each side of a retaken take its record keeps, nearest first.
+ANCHOR_TAKES = 3
+#: Where a chapter starts and ends, among a take's neighbours.
+_CHAPTER_START, _CHAPTER_END = "<", ">"
+_TAKE_ID_RE = re.compile(r"^[0-9a-f]{20}$")
+#: A take's mark among a retake's neighbours, a chapter title's, a salt.
+_HEX12_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+@dataclass(frozen=True)
+class TakeRef:
+    """One take of a chapter: the text the engine is asked to say, who the
+    take is (:func:`take_identity`), which occurrence of that same take in
+    the chapter it is (0: the first), and the retake the user asked for of it
+    (:func:`bump_retake`): how many were asked for (``retake``) and the
+    ``salt`` that keys and seeds the last one (``""``: none). ``base`` is who
+    the take is as its first occurrence — what a retake is kept for, so the
+    retake stays with its sentence when a copy of it is added or removed
+    before it."""
+
+    text: str
+    identity: str
+    occurrence: int = 0
+    retake: int = 0
+    salt: str = ""
+    base: str = ""
+
+
+def take_identity(
+    text: str,
+    *,
+    voice_sig: str = "",
+    speed: Optional[float] = None,
+    take_sig: str = "",
+    occurrence: int = 0,
+) -> str:
+    """Who one phrase take is, whatever rate or engine it is cached for: the
+    exact text the engine is asked to say (normalized, the lexicon and the
+    script's ``[[word|respelling]]`` overrides applied), the voice it resolves
+    to (its signature, never the ``[voice:NAME]`` token — two names cast to
+    one profile read the same take), the speed, ``take_sig`` (the take-level
+    options and the language, see ``ExpressiveOptions.take_level_signature``)
+    and its ``occurrence`` among identical takes of its chapter, so every
+    repeat of a sentence is a take of its own. Nothing that only cuts, checks
+    or joins takes is in it: the lexicon reaches a take through its text
+    alone."""
+    payload = {
+        "take": 1,
+        "text": text or "",
+        "voice_sig": voice_sig or "",
+        "speed": speed,
+        "extra": take_sig or "",
+    }
+    if occurrence:
+        payload["occurrence"] = int(occurrence)
+    payload.update(_render_rule_markers([text]))
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    # Content-addressing only — not a security digest (see chapter_cache_key).
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
+
+
+def take_cache_key(identity: str, *, sample_rate: int, engine_id: str, salt: str = "",
+                   attempt: int = 0) -> str:
+    """Where take ``identity`` is cached for one engine at one rate. A retake
+    the user asked for has a slot of its own, keyed by its ``salt`` (with
+    ``identity`` the take's base), and so has each retake the speech check
+    rendered of a take (``attempt``): the take a render without the check
+    reads is never replaced by one the check chose."""
+    payload = {"take": identity, "sr": int(sample_rate), "engine": engine_id or ""}
+    if salt:
+        payload["salt"] = salt
+    if attempt:
+        payload["attempt"] = int(attempt)
+    raw = json.dumps(payload, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
+
+
+def _take_mark(text: str) -> str:
+    """A take as a retake's record names it: a digest of what it says, so the
+    record holds no script text."""
+    return hashlib.sha1((text or "").encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
+
+
+def take_anchor(texts: Sequence[str], index: int, title: Optional[str] = None) -> dict:
+    """Where take ``index`` of a chapter is read, as a retake of it is kept:
+    the takes before and after it (``texts`` say what the chapter's takes say,
+    in reading order; up to :data:`ANCHOR_TAKES` on each side, nearest first,
+    ending in ``"<"`` / ``">"`` where the chapter starts or ends sooner) and
+    its chapter's ``title`` (``None`` for an untitled chapter)."""
+    before = [_take_mark(text) for text in reversed(texts[max(0, index - ANCHOR_TAKES):index])]
+    if len(before) < ANCHOR_TAKES:
+        before.append(_CHAPTER_START)
+    after = [_take_mark(text) for text in texts[index + 1:index + 1 + ANCHOR_TAKES]]
+    if len(after) < ANCHOR_TAKES:
+        after.append(_CHAPTER_END)
+    return {"before": before, "after": after, "chapter": _take_mark(f"#{title}") if title else ""}
+
+
+def _anchor_score(record: dict, anchor: dict) -> Optional[tuple]:
+    """How much of where a retake was asked for (``record``) is still around a
+    take (``anchor``): its neighbours on each side and its chapter's title —
+    or ``None`` unless that is most of it and more than where a chapter
+    starts or ends, so the same sentence read elsewhere in the book (another
+    chapter, another book) never takes the retake, while an edit to a
+    neighbour or two keeps it. Else ``(agreeing, in place)``: the neighbours
+    and title that agree, then how many neighbours are where they were (the
+    same take as many takes away), which tells apart two copies of a
+    sentence read one after the other."""
+    before, after = set(record["before"]), set(record["after"])
+    same_before = before & set(anchor["before"])
+    same_after = after & set(anchor["after"])
+    titled = bool(record["chapter"]) and record["chapter"] == anchor["chapter"]
+    score = len(same_before) + len(same_after) + titled
+    evidence = len(before) + len(after) + bool(record["chapter"])
+    if score * 2 <= evidence:
+        return None
+    if not titled and not (same_before | same_after) - {_CHAPTER_START, _CHAPTER_END}:
+        return None
+    in_place = sum(1 for side in ("before", "after")
+                   for kept, now in zip(record[side], anchor[side]) if kept == now)
+    return score, in_place
+
+
+class Retakes:
+    """The retakes asked for in one cache (:func:`load_retakes`): the records,
+    oldest first — ``{"take": base, "salt", "count", "occurrence", "before",
+    "after", "chapter"}`` (:func:`take_anchor`) — and the ones of each take
+    base."""
+
+    def __init__(self, records: Sequence[dict] = ()) -> None:
+        self.records = list(records)
+        self.by_base: dict = {}
+        for number, record in enumerate(self.records):
+            self.by_base.setdefault(record["take"], []).append((number, record))
+
+    def __bool__(self) -> bool:
+        return bool(self.records)
+
+
+def _place_retakes(refs: list, retakes: Retakes, title: Optional[str]) -> dict:
+    """Which retake belongs to which of a chapter's takes (``refs``, in
+    reading order): ``{take's index: record}``. A record goes to the take of
+    its base whose surroundings agree with it most (:func:`_anchor_score`) —
+    on a tie the one with more neighbours in place, then the occurrence
+    nearest the one it was asked for, then the newest record; each take gets
+    one record at most, and each record one take."""
+    texts = [ref.text for ref in refs]
+    candidates = []
+    for at, ref in enumerate(refs):
+        records = retakes.by_base.get(ref.base)
+        if not records:
+            continue
+        anchor = take_anchor(texts, at, title)
+        for number, record in records:
+            score = _anchor_score(record, anchor)
+            if score is not None:
+                # Most agreement first, then the most neighbours in place,
+                # the nearest occurrence, the newest record.
+                agreeing, in_place = score
+                candidates.append((-agreeing, -in_place,
+                                   abs(ref.occurrence - record["occurrence"]), -number, at))
+    placed: dict = {}
+    taken: set = set()
+    for _agreeing, _in_place, _distance, newest, at in sorted(candidates):
+        if at in placed or -newest in taken:
+            continue
+        placed[at] = retakes.records[-newest]
+        taken.add(-newest)
+    return placed
+
+
+def chapter_takes(spans, units_by_span, *, voice_sig: dict, take_sig: str = "",
+                  retakes: Optional[Retakes] = None, title: Optional[str] = None) -> list:
+    """Every take of a chapter, by span, in reading order: ``[[TakeRef, …],
+    …]``. ``units_by_span[i]`` is span ``i``'s ``[(takes, pauses), …]`` as
+    synthesis cuts it (``services.audiobook.chapter_units``); ``voice_sig``
+    maps a span's ``voice_id or ""`` to its resolved voice's signature. A
+    take's occurrence counts the identical takes before it in the chapter,
+    wherever they are cached, so it never depends on what a render found.
+    ``retakes`` (:func:`load_retakes`) are placed on the takes they were
+    asked for, by where each is read (``title`` is the chapter's; ``None``
+    when it is untitled): a retake stays with its sentence when a copy of it
+    is added or removed before it, and never reaches the same sentence read
+    elsewhere."""
+    seen: dict = {}
+    flat: list = []  # (span index, TakeRef), in reading order
+    for index, (span, units) in enumerate(zip(spans, units_by_span)):
+        sig = voice_sig.get(span.voice_id or "", "")
+        speed = getattr(span, "speed", None)
+        for texts, _pauses in units:
+            for text in texts:
+                base = take_identity(text, voice_sig=sig, speed=speed, take_sig=take_sig)
+                occurrence = seen.get(base, 0)
+                seen[base] = occurrence + 1
+                identity = base if not occurrence else take_identity(
+                    text, voice_sig=sig, speed=speed, take_sig=take_sig, occurrence=occurrence)
+                flat.append((index, TakeRef(text, identity, occurrence, base=base)))
+    if retakes:
+        placed = _place_retakes([ref for _index, ref in flat], retakes, title)
+        for at, record in placed.items():
+            index, ref = flat[at]
+            flat[at] = (index, replace(ref, retake=record["count"], salt=record["salt"]))
+    out: list = [[] for _ in range(min(len(spans), len(units_by_span)))]
+    for index, ref in flat:
+        out[index].append(ref)
+    return out
+
+
+def passage_takes(alone: list, around: list, before: int) -> list:
+    """The takes of a passage read in its chapter: ``alone`` (by span, the
+    passage planned on its own by :func:`chapter_takes`) with each take the
+    chapter's own (``around``, the chapter planned with its retakes) where the
+    passage is read — ``before`` takes into the chapter, or one fewer when it
+    starts inside a take — so a sentence the chapter repeats is the
+    occurrence it is there, and a retake asked for in the chapter plays in
+    the passage. A take the chapter does not read at that place (a sentence
+    the passage starts or ends inside of) keeps its own."""
+    chapter = [ref for refs in around for ref in refs]
+    takes = [ref for refs in alone for ref in refs]
+
+    def agreeing(offset: int) -> int:
+        return sum(1 for j, ref in enumerate(takes)
+                   if 0 <= offset + j < len(chapter) and chapter[offset + j].base == ref.base)
+
+    offset = max((before, before - 1), key=agreeing)
+    out, j = [], 0
+    for refs in alone:
+        row = []
+        for ref in refs:
+            k = offset + j
+            row.append(chapter[k] if 0 <= k < len(chapter) and chapter[k].base == ref.base else ref)
+            j += 1
+        out.append(row)
+    return out
+
+
+_RETAKES_LOCK = threading.Lock()
+#: The retakes last read, per cache: the file read, with its stamp (mtime,
+#: size, file id — every save replaces the file, so a new id tells it apart
+#: even within one tick of the clock), and what it held.
+_RETAKES_MEMO: dict = {}
+_RETAKE_KEYS = ("take", "salt", "count", "occurrence", "before", "after", "chapter")
+
+
+def _retakes_path(cache_dir: str, name: str = RETAKES_FILE) -> str:
+    return os.path.join(cache_dir, TAKE_SUBDIR, name)
+
+
+def _marks(side, end: str) -> bool:
+    return (isinstance(side, list) and 0 < len(side) <= ANCHOR_TAKES
+            and all(isinstance(mark, str) and (mark == end or _HEX12_RE.fullmatch(mark))
+                    for mark in side))
+
+
+def _valid_retake(record) -> bool:
+    """Whether ``record`` is a retake as :func:`bump_retake` keeps one."""
+    if not isinstance(record, dict):
+        return False
+    take, salt, chapter = record.get("take"), record.get("salt"), record.get("chapter")
+    count, occurrence = record.get("count"), record.get("occurrence")
+    return (isinstance(take, str) and _TAKE_ID_RE.fullmatch(take) is not None
+            and isinstance(salt, str) and _HEX12_RE.fullmatch(salt) is not None
+            and type(count) is int and count > 0
+            and type(occurrence) is int and occurrence >= 0
+            and _marks(record.get("before"), _CHAPTER_START)
+            and _marks(record.get("after"), _CHAPTER_END)
+            and isinstance(chapter, str) and (chapter == "" or _HEX12_RE.fullmatch(chapter) is not None))
+
+
+def _valid_retakes(doc) -> Optional[list]:
+    """The retakes a retakes file holds, malformed ones left out; ``None``
+    when it is no retakes file at all (torn, not JSON). A file from before
+    retakes were kept with their sentences holds none that can be placed."""
+    if not isinstance(doc, dict):
+        return None
+    records = doc.get("retakes")
+    if doc.get("version") != RETAKES_VERSION or not isinstance(records, list):
+        return []
+    return [{key: record[key] for key in _RETAKE_KEYS}
+            for record in records if _valid_retake(record)][-_MAX_RETAKES:]
+
+
+def load_retakes(cache_dir: str) -> Retakes:
+    """The retakes asked for in this cache (:class:`Retakes`; empty when none
+    was). Read from :data:`RETAKES_FILE` or — when it cannot be read: a write
+    torn by a power-off, a damaged disk — from the copy kept before the last
+    retake, so one bad read never loses every retake. The object returned is
+    shared: read it, never change it."""
+    key = _retakes_path(cache_dir)
+    for path in (key, _retakes_path(cache_dir, RETAKES_BACKUP)):
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        stamp = (path, st.st_mtime_ns, st.st_size, st.st_ino)
+        memo = _RETAKES_MEMO.get(key)
+        if memo is not None and memo[0] == stamp:
+            return memo[1]
+        records = _valid_retakes(read_json_file(path))
+        if records is None:
+            continue
+        retakes = Retakes(records)
+        _RETAKES_MEMO[key] = (stamp, retakes)
+        return retakes
+    return Retakes()
+
+
+def bump_retake(cache_dir: str, ref: TakeRef, anchor: dict) -> int:
+    """Ask for take ``ref`` again where ``anchor`` (:func:`take_anchor`) says
+    it is read: its retake — the one ``ref.salt`` names, else a new one —
+    counts one more and gets a new salt, which keys and seeds the take anew,
+    so the next render or preview of its chapter synthesizes that take and
+    nothing else. Returns the new count. Saved durably, with the retakes as
+    they were kept as a copy (:func:`load_retakes`). Raises ``ValueError``
+    for a malformed take or anchor and ``OSError`` when it cannot be saved."""
+    record = {"take": ref.base or ref.identity, "salt": secrets.token_hex(6), "count": 1,
+              "occurrence": ref.occurrence,
+              **{key: anchor.get(key) for key in ("before", "after", "chapter")}}
+    path = _retakes_path(cache_dir)
+    with _RETAKES_LOCK:
+        before = load_retakes(cache_dir).records
+        records = [r for r in before if not (ref.salt and r["salt"] == ref.salt)]
+        if len(records) < len(before):
+            record["count"] = next(r["count"] for r in before if r["salt"] == ref.salt) + 1
+        if not _valid_retake(record):
+            raise ValueError("not a take and where it is read")
+        records = (records + [record])[-_MAX_RETAKES:]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # The retakes as they were go first: a write torn by a power-off
+        # then leaves them to read instead of none.
+        if before and not write_json_atomic(
+                _retakes_path(cache_dir, RETAKES_BACKUP),
+                {"version": RETAKES_VERSION, "retakes": before}, durable=True):
+            raise OSError("could not save the retake")
+        if not write_json_atomic(path, {"version": RETAKES_VERSION, "retakes": records},
+                                 durable=True):
+            raise OSError("could not save the retake")
+        _RETAKES_MEMO.pop(path, None)
+    return record["count"]
+
+
+def cuttable_takes(units, check, *, checking: bool) -> frozenset:
+    """The takes a segment cached whole (by a build before takes were kept)
+    can be cut into by its take ranges ``units`` (``[[take, start, end], …]``,
+    kept with it): every take with a range — none without ranges, nor, for a
+    segment rendered with the speech check (``checking``), when the check's
+    record (``check``) is missing or counts a retake, as that take may be one
+    the check chose, which a render without the check never reads. A cut take
+    keeps the trims that segment's joins gave it."""
+    if not units or (checking and (check is None or check.get("retaken"))):
+        return frozenset()
+    return frozenset(k for k, start, end in units if end > start)
+
+
+class TakeCache:
+    """Content-addressed store of phrase takes under ``cache_dir/takes``.
+
+    A take is kept as the engine returned it — before any trim or pause — so
+    every assembly-level change (pauses, trimming, gaps, leveling, volume)
+    joins the same takes again. ``voice_sig`` maps a span's ``voice_id or
+    ""`` to its resolved voice's signature (as :class:`SegmentCache`'s);
+    ``take_sig`` holds the take-level options and the language
+    (:func:`take_identity`). What the speech check found in a take is kept
+    next to it (:meth:`store_check`), with the retake it chose in a slot of
+    its own, so turning the check on listens only to takes it has not heard
+    and turning it off reads the takes as rendered. Load/store are
+    best-effort like :class:`SegmentCache`'s; directories are made on the
+    first store, so reading never creates any. ``hits``/``misses`` count a
+    chapter's takes as they are served."""
+
+    def __init__(self, cache_dir: str, *, sample_rate: int, engine_id: str,
+                 voice_sig: Optional[dict] = None, take_sig: str = "") -> None:
+        self.dir = os.path.join(cache_dir, TAKE_SUBDIR)
+        self.sample_rate = int(sample_rate)
+        self.engine_id = engine_id or ""
+        self.voice_sig = dict(voice_sig or {})
+        self.take_sig = take_sig or ""
+        self.retakes = load_retakes(cache_dir)
+        self.hits = 0
+        self.misses = 0
+
+    def plan(self, spans, units_by_span, *, title: Optional[str] = None) -> list:
+        """:func:`chapter_takes` with this cache's voices, options and retakes,
+        for a chapter titled ``title`` (``None``: untitled)."""
+        return chapter_takes(spans, units_by_span, voice_sig=self.voice_sig,
+                             take_sig=self.take_sig, retakes=self.retakes, title=title)
+
+    def path(self, ref: TakeRef, attempt: int = 0) -> str:
+        """Where ``ref`` is cached: a retake the user asked for under its
+        salt, a retake the speech check rendered (``attempt``) in its own
+        slot."""
+        key = take_cache_key((ref.base or ref.identity) if ref.salt else ref.identity,
+                             sample_rate=self.sample_rate, engine_id=self.engine_id,
+                             salt=ref.salt, attempt=attempt)
+        return os.path.join(self.dir, f"{key}.wav")
+
+    def has(self, ref: TakeRef) -> bool:
+        path = self.path(ref)
+        return os.path.isfile(path) and wav_is_complete(path)
+
+    def load(self, ref: TakeRef, attempt: int = 0):
+        """The cached take — or the speech check's retake ``attempt`` of it —
+        or ``None`` (missing, torn, unreadable, another rate or empty — a
+        clean miss). A hit is marked used for eviction. Only the take itself
+        counts toward ``hits`` / ``misses``."""
+        counted = not attempt
+        path = self.path(ref, attempt)
+        audio = None
+        if os.path.isfile(path) and wav_is_complete(path):
+            try:
+                from services.audio_io import load_audio
+
+                audio, sr = load_audio(path)
+                if int(sr) != self.sample_rate or audio.numel() == 0:
+                    audio = None
+            except Exception:
+                audio = None
+        if audio is None:
+            if counted:
+                self.misses += 1
+            return None
+        touch_cached_file(path)
+        if counted:
+            self.hits += 1
+        return audio
+
+    def reused(self, count: int) -> None:
+        """Count ``count`` takes served by a span cached whole (a segment
+        rendered before takes were kept)."""
+        self.hits += int(count)
+
+    def discount(self) -> None:
+        """Count the last :meth:`load` as a miss after all: the speech check
+        rendered that take again."""
+        self.hits -= 1
+        self.misses += 1
+
+    def store(self, ref: TakeRef, audio, attempt: int = 0) -> None:
+        """Persist a take the moment it finishes — or the speech check's retake
+        ``attempt`` of it. Durable, so a power-off never leaves a torn take
+        under its key. Best-effort."""
+        try:
+            from services.audio_io import atomic_save_wav
+
+            os.makedirs(self.dir, exist_ok=True)
+            path = self.path(ref, attempt)
+            # What the check found was about the old take.
+            remove_timeline_sidecar(path)
+            atomic_save_wav(path, audio, self.sample_rate, durable=True)
+        except Exception:
+            pass
+
+    def load_check(self, ref: TakeRef, *, samples: int) -> Optional[dict]:
+        """What the speech check found in the cached take
+        (:func:`valid_take_check`), or ``None``: never checked, or the
+        record is about another take (``samples`` is the take's length)."""
+        doc = read_json_file(timeline_sidecar_path(self.path(ref)))
+        if (not isinstance(doc, dict) or doc.get("version") != TIMELINE_VERSION
+                or doc.get("samples") != samples):
+            return None
+        return valid_take_check(doc.get("check"))
+
+    def store_check(self, ref: TakeRef, record: dict, *, samples: int) -> None:
+        """Keep what the speech check found in the take just cached or
+        reused — and which retake of it the check chose — in the take's
+        sidecar (:func:`timeline_sidecar_path`), so it is evicted with the
+        take. ``samples`` is the take's own length. Best-effort."""
+        check = valid_take_check(record)
+        if check is not None:
+            write_json_atomic(timeline_sidecar_path(self.path(ref)),
+                              {"version": TIMELINE_VERSION, "samples": int(samples),
+                               "check": check})
+
+
 # ── Speech-check results ────────────────────────────────────────────────────
 
 #: Phrases a stored speech-check result names at most (the app lists 50).
@@ -879,6 +1484,34 @@ def valid_speech_check(record) -> Optional[dict]:
             continue
         suspects.append({"text": item["text"][:300], "score": round(float(score), 2)})
     return {**counts, "suspect": suspects, "unavailable": record.get("unavailable") is True,
+            "no_recognizer": record.get("no_recognizer") is True}
+
+
+def valid_take_check(record) -> Optional[dict]:
+    """What the speech check found in one phrase take, as kept next to it in
+    the take cache, or ``None``.
+
+    ``{"heard", "score", "retaken", "attempt", "no_recognizer"}``: whether
+    the recognizer listened to the take, how closely what it heard matched
+    the text (0–1; ``None`` when not heard, or not told), how many retakes
+    the check rendered, which one it kept (``attempt``: 0 for the take
+    itself, else that retake, cached in a slot of its own), and — for a take
+    that went unheard — whether that was for want of an installed
+    recognizer. Checked on the way in: the record is only a file on disk."""
+    if not isinstance(record, dict) or not isinstance(record.get("heard"), bool):
+        return None
+    retaken = _count(record.get("retaken", 0))
+    attempt = _count(record.get("attempt", 0))
+    if retaken is None or attempt is None:
+        return None
+    score = record.get("score")
+    if score is not None:
+        if (not isinstance(score, (int, float)) or isinstance(score, bool)
+                or not math.isfinite(score)):
+            return None
+        # Not rounded: a take just under the match threshold stays under it.
+        score = min(1.0, max(0.0, float(score)))
+    return {"heard": record["heard"], "score": score, "retaken": retaken, "attempt": attempt,
             "no_recognizer": record.get("no_recognizer") is True}
 
 

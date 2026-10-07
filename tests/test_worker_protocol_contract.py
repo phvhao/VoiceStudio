@@ -152,6 +152,12 @@ def test_remote_model_cancel_is_a_required_worker_feature():
     assert "remote_model_cancel_v1" in REQUIRED_FEATURES
 
 
+def test_an_audiobook_chapters_takes_are_a_required_worker_feature():
+    """An older worker ignores a chapter's ``takes`` and returns the sentence
+    the user asked to retake, unchanged, as a success."""
+    assert "audiobook_takes_v1" in REQUIRED_FEATURES
+
+
 # ── Control / data plane separation ────────────────────────────────────────
 
 

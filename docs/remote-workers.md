@@ -197,7 +197,13 @@ Performance preset and watermarked once by the worker. The long-form speech
 check (Settings → Reading) is not run on a worker — it would need the worker's
 own recognizer and a longer budget — so a chapter rendered there is an
 unchecked render, cached as one: turning the check on or off reuses it rather
-than rendering the same audio again. A dub sends all fresh segments as one
+than rendering the same audio again. A worker renders whole chapters and keeps
+no per-sentence takes, so retaking one sentence (**Retake this sentence**;
+`POST /audiobook/retake`, `/longform/retake`) renders its chapter there
+again: the task names the retaken sentence, which the worker reads anew, and
+every take is seeded as this machine would seed it, so with a voice that pins
+its seed the other sentences come back as before. A dub sends all fresh
+segments as one
 coarse task and receives their WAVs in one result bundle; fitting, assembly and
 RVC still run on this machine. If a remote multi-unit render fails, its local
 fallback is reported once. ASR, diarization and translation also remain local. Dictation always
@@ -274,7 +280,9 @@ what is genuinely still in flight.
 **Version or feature mismatch.** Release numbers alone do not prove that a
 worker understands every additive command. Registration negotiates an explicit
 protocol range and declares named features for task inputs, progress leases,
-remote model downloads, and the voice-identity render pipeline. Durable
+remote model downloads, the voice-identity render pipeline, and the takes of
+an audiobook chapter (a retaken sentence a worker that ignored them would
+return unchanged). Durable
 enrollment changed the handshake from protocol v1 to v2, so that boundary is
 intentionally incompatible in either direction. A worker outside the supported
 protocol range, or one missing a required feature, is refused with

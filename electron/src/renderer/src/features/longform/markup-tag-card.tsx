@@ -16,6 +16,7 @@ import {
   PauseIcon,
   PlayIcon,
   RabbitIcon,
+  RefreshCwIcon,
   RemoveFormattingIcon,
   SearchIcon,
   SmileIcon,
@@ -76,6 +77,7 @@ import {
   type MarkupKind,
   type MarkupToken,
 } from './script-markup';
+import type { RetakeTools } from './take-retake';
 import { voiceAccent } from './voice-palette';
 import { VoicePicker } from './voice-picker';
 
@@ -107,6 +109,11 @@ export interface TagToolProps {
   defaultVoiceName?: string;
   /** Audition `from…to` of the script, such as one voice's part. */
   onListenRange?(from: number, to: number): void;
+  /**
+   * "Retake this sentence" (Audiobook and Stories, read sentence by
+   * sentence): the takes a stretch of the text reads, asked for again.
+   */
+  retakes?: RetakeTools;
   /**
    * Markup this page does not read (voice switches, delivery and volume on
    * Clone and Voice Design; `heading` for chapters): such a tag can only be
@@ -422,6 +429,32 @@ function Footer({ children, end }: { children?: ReactNode; end: ReactNode }) {
       {children}
       <span className="ms-auto flex">{end}</span>
     </div>
+  );
+}
+
+/**
+ * "Retake this sentence" on the card of a tag read inside a sentence — a
+ * reaction, a delivery or a respelling that came out wrong: that sentence is
+ * read anew and the rest of the chapter reused. Only where the page reads
+ * sentence by sentence.
+ */
+function RetakeButton({ token, tools, onDone }: Pick<BodyProps, 'token' | 'tools' | 'onDone'>) {
+  const { t } = useTranslation();
+  const { retakes } = tools;
+  if (!retakes) return null;
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      title={t('editor.retake_hint')}
+      onClick={() => {
+        retakes.retakeAt(token.start, token.end);
+        onDone();
+      }}
+    >
+      <RefreshCwIcon />
+      {t('editor.retake_sentence')}
+    </Button>
   );
 }
 
@@ -867,6 +900,7 @@ function PauseBody({ token, act, focusRef, onDone, remove }: BodyProps & { remov
 
 function ExpressionBody({
   token,
+  tools,
   act,
   focusRef,
   onDone,
@@ -924,12 +958,14 @@ function ExpressionBody({
           </div>
         ))}
       </div>
-      <Footer end={remove} />
+      <Footer end={remove}>
+        <RetakeButton token={token} tools={tools} onDone={onDone} />
+      </Footer>
     </>
   );
 }
 
-function DeliveryBody({ token, act, focusRef, onDone }: BodyProps) {
+function DeliveryBody({ token, tools, act, focusRef, onDone }: BodyProps) {
   const { t } = useTranslation();
   const kind = deliveryKind(token.text) ?? 'slow';
   const Icon = DELIVERY_ICONS[kind];
@@ -977,7 +1013,9 @@ function DeliveryBody({ token, act, focusRef, onDone }: BodyProps) {
             {t('context.remove_markup')}
           </Button>
         }
-      />
+      >
+        <RetakeButton token={token} tools={tools} onDone={onDone} />
+      </Footer>
     </>
   );
 }
@@ -1067,7 +1105,7 @@ function VolumeBody({ token, act, focusRef, onDone }: BodyProps) {
   );
 }
 
-function PronunciationBody({ token, act, focusRef, onDone }: BodyProps) {
+function PronunciationBody({ token, tools, act, focusRef, onDone }: BodyProps) {
   const { t } = useTranslation();
   const { word, respelling } = respellingParts(token);
   const [value, setValue] = useState(respelling);
@@ -1119,7 +1157,9 @@ function PronunciationBody({ token, act, focusRef, onDone }: BodyProps) {
             {t('context.keep_word')}
           </Button>
         }
-      />
+      >
+        <RetakeButton token={token} tools={tools} onDone={onDone} />
+      </Footer>
     </>
   );
 }

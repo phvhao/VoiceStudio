@@ -194,6 +194,36 @@ def test_outline_tells_which_chapters_changed_since_the_last_book(local_engine, 
     assert _outline(router, text=_SCRIPT, output="../audiobook_b1.m4b")["book"] is False
 
 
+_SENTENCES = ("The lighthouse keeper climbed the stairs every evening at dusk. "
+              "He carried a brass lantern that had belonged to his grandfather. "
+              "The wind howled outside the windows for the whole long night.")
+
+
+def test_outline_counts_the_takes_a_chapter_not_cached_whole_renders(local_engine, outputs):
+    """Read sentence by sentence, a chapter not cached whole says how many of
+    its takes a render would reuse: after a one-word edit all but one, after a
+    pause change all of them (it only joins them again)."""
+    router = local_engine
+    pauses = dict(_mod("services.chunked_tts").DEFAULT_PUNCTUATION_PAUSES)
+    epilogue = "Nobody in the village below ever asked him why he kept on climbing."
+    kw = {"text": f"# One\n{_SENTENCES}\n# Two\n{_SENTENCES}\n{epilogue}",
+          "punctuation_pauses": pauses}
+    assert [c["takes"] for c in _outline(router, **kw)["chapters"]] == [
+        {"total": 3, "cached": 0}, {"total": 4, "cached": 0}]
+    _render_like_the_book(router, router.AudiobookOutlineRequest(**kw), 0)
+    one, two = _outline(router, **kw)["chapters"]
+    # Cached whole: nothing to count. Chapter two opens with chapter one's
+    # three sentences, so only its last take is left to render.
+    assert one["cached"] is True and "takes" not in one
+    assert two["takes"] == {"total": 4, "cached": 3}
+    edited = {**kw, "text": kw["text"].replace("whole long night.", "whole night.", 1)}
+    assert _outline(router, **edited)["chapters"][0]["takes"] == {"total": 3, "cached": 2}
+    paused = {**kw, "punctuation_pauses": {**pauses, "sentence": 700}}
+    assert _outline(router, **paused)["chapters"][0]["takes"] == {"total": 3, "cached": 3}
+    # Read in paragraphs, a chapter has no takes kept one by one.
+    assert "takes" not in _outline(router, text=kw["text"])["chapters"][0]
+
+
 def test_outline_reads_the_remote_cache_when_the_job_runs_remotely(local_engine, outputs):
     router = local_engine
     remote = types.SimpleNamespace(remote=True)

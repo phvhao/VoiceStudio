@@ -43,6 +43,7 @@ import { reorder } from '@shared/utils/storyReorder';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupToolbar, type MarkupTarget } from './markup-toolbar';
 import { MarkupEditorTools } from './markup-editor-tools';
+import type { RetakeTools } from './take-retake';
 import { VOICE_ACCENTS } from './voice-palette';
 import type { Draft } from './longform-session';
 import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
@@ -53,6 +54,8 @@ interface Props {
   profilesLoading?: boolean;
   disabled: boolean;
   canSynthesize?: boolean;
+  /** "Retake this sentence" in each line, by its id (the story reads sentence by sentence). */
+  retakes?: { tools(lineId: string): RetakeTools };
   onChange: (patch: Partial<Draft>) => void;
   onBusy?: (busy: boolean) => void;
 }
@@ -235,6 +238,7 @@ export function StoryEditor({
   profilesLoading = false,
   disabled,
   canSynthesize = true,
+  retakes,
   onChange,
   onBusy,
 }: Props) {
@@ -743,6 +747,11 @@ export function StoryEditor({
               onVoiceGains={(voiceGains) => onChange({ voiceGains })}
               defaultVoiceName={defaultVoiceName}
               onChapter={() => addChapter(line.id)}
+              retakes={
+                retakes && storyVoicesReady({ ...draft, lines: [line] }, profiles)
+                  ? retakes.tools(line.id)
+                  : undefined
+              }
             >
               <MarkupTextarea
                 textareaRef={(node) => {

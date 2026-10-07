@@ -30,7 +30,11 @@ It is never picked by auto-detect — it's an explicit opt-in escape hatch.
 Same as faster-whisper: CUDA float16 or CPU int8 on macOS, Windows, and
 Linux. The sidecar picks cuda/cpu itself and walks the same
 float16 → int8_float16 → int8 degrade chain on GPUs without efficient fp16
-([#551](https://github.com/debpalash/VoiceStudio/issues/551)).
+([#551](https://github.com/debpalash/VoiceStudio/issues/551)). It also runs
+the same VRAM preflight before loading: with too little VRAM free it starts
+at a lighter compute type or loads on the CPU, instead of a load that would
+crash the sidecar again on every retry
+([#723](https://github.com/debpalash/VoiceStudio/issues/723)).
 
 ## Model selection
 
@@ -39,7 +43,9 @@ float16 → int8_float16 → int8 degrade chain on GPUs without efficient fp16
 - `ASR_MODEL_FW` — optional sidecar-only override; when set it wins over
   `ASR_MODEL_FASTER` for this engine. Default `large-v3`.
 - `ASR_COMPUTE_TYPE` — optional: pin the sidecar to one CTranslate2 compute
-  type instead of the automatic degrade chain.
+  type instead of the automatic degrade chain. A pin only a GPU runs
+  (float16, bfloat16, int8_float16, int8_bfloat16) gives way to int8 when the
+  sidecar loads on the CPU — too little free VRAM, or no CUDA GPU.
 
 Weights download on first load — see
 [downloading-models](../downloading-models.md).

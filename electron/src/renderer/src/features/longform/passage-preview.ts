@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiJson, describeError } from '@/lib/api/client';
 import { beginAppActivity } from '@/lib/app-activity';
+import { queryClient } from '@/lib/query';
 import {
   chapterPreviewBody,
   recognizerMissing,
   suspectPhrases,
   uncheckedPhrases,
   type Draft,
+  type PassageContext,
 } from './longform-session';
 
 /** No phrase the speech check could not listen to. */
@@ -15,7 +17,11 @@ const ALL_HEARD = { unchecked: 0, noRecognizer: false };
 /**
  * Audition a passage of the manuscript on the chapter-preview endpoint: the
  * passage is sent as a one-chapter script with the book's voices, cast,
- * lexicon and production settings, so it sounds as it will in the render.
+ * lexicon and production settings, so it sounds as it will in the render,
+ * and with where it is read (`passageContext`): read sentence by sentence,
+ * its takes are the book's own there — a repeated sentence the repeat it
+ * is, a retake the one asked for. Once it renders, the Contents rail counts
+ * again what its chapters have left to render.
  */
 export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void) {
   const [output, setOutput] = useState<string | null>(null);
@@ -30,7 +36,7 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
   const [empty, setEmpty] = useState(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
-  const preview = async (passage: string | null) => {
+  const preview = async (passage: string | null, context: PassageContext | null = null) => {
     if (controller.current) return;
     setEmpty(!passage);
     if (!passage) {
@@ -52,7 +58,10 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
         '/audiobook/preview',
         {
           method: 'POST',
-          body: JSON.stringify(chapterPreviewBody({ ...draft, script: passage }, 0)),
+          body: JSON.stringify({
+            ...chapterPreviewBody({ ...draft, script: passage }, 0),
+            ...(context ? { context } : {}),
+          }),
           signal: current.signal,
         },
       );
@@ -64,6 +73,7 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
           noRecognizer: recognizerMissing(result),
         });
       }
+      void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] });
     } catch (cause) {
       if (!current.signal.aborted) setError(describeError(cause));
     } finally {

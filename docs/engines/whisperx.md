@@ -44,9 +44,10 @@ abort — no Python exception, the whole backend goes down
 ([#723](https://github.com/debpalash/VoiceStudio/issues/723)). So before every
 load the engine checks free VRAM against per-compute-type budgets
 (float16 5.0 GB, int8_float16 3.5 GB, int8 3.0 GB, scaled down for smaller
-models) and degrades the compute type — or falls to CPU int8 — instead of
-starting a load that would kill the process. Disable with
-`OMNIVOICE_ASR_VRAM_PREFLIGHT=0`.
+models: about half for turbo, distil and medium) and degrades the compute
+type — or falls to CPU int8 — instead of starting a load that would kill the
+process. [faster-whisper](faster-whisper.md) and its crash-isolated variant
+run the same check. Disable with `OMNIVOICE_ASR_VRAM_PREFLIGHT=0`.
 
 Two more fallback chains run at load time:
 

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { EnginesResponse } from '@/lib/api/types';
 import { engineFamilyState } from '@/hooks/use-engines';
-import { resolveRemoteRuntime, resolveRuntimeHealth, sidebarToolState } from './status-runtime';
+import {
+  holdsSelectedAsrModel,
+  resolveRemoteRuntime,
+  resolveRuntimeHealth,
+  sidebarToolState,
+} from './status-runtime';
 
 describe('plain-language tool status', () => {
   it('never reports cached readiness when the backend is offline', () => {
@@ -15,6 +20,25 @@ describe('plain-language tool status', () => {
     expect(sidebarToolState('modelSettings.unavailable', true)).toBe('sidebarTools.checkSetup');
     expect(sidebarToolState('engineRuntime.working', true)).toBe('engineRuntime.working');
     expect(sidebarToolState('engineSidebar.inactive', true)).toBe('engineSidebar.inactive');
+  });
+});
+
+describe('speech recognizer residency', () => {
+  const selected = 'Systran/faster-whisper-large-v3';
+
+  it('counts the speech check holding the selected model as loaded', () => {
+    for (const id of ['asr', 'capture-asr', 'speech-check-asr']) {
+      expect(holdsSelectedAsrModel({ id, checkpoint: selected }, selected)).toBe(true);
+    }
+  });
+
+  it('ignores another model, another row, and an unknown selection', () => {
+    const fallback = { id: 'speech-check-asr', checkpoint: 'Systran/faster-whisper-small' };
+    expect(holdsSelectedAsrModel(fallback, selected)).toBe(false);
+    expect(holdsSelectedAsrModel({ id: 'tts', checkpoint: selected }, selected)).toBe(false);
+    expect(holdsSelectedAsrModel({ id: 'speech-check-asr', checkpoint: selected }, null)).toBe(
+      false,
+    );
   });
 });
 

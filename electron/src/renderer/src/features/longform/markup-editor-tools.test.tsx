@@ -8,6 +8,10 @@ import { MarkupEditorTools } from './markup-editor-tools';
 import { editTag } from './markup-tag-card';
 import { MarkupTextarea } from './markup-textarea';
 import { tokenAt } from './script-markup';
+import type { RetakeTools } from './take-retake';
+
+const toastMock = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: toastMock }));
 
 const profiles = [
   { id: 'p-hao', name: 'Hao PV' },
@@ -25,6 +29,7 @@ function Editor({
   onVoiceCast,
   onVoiceGains,
   onListenRange,
+  retakes,
 }: {
   initial: string;
   loading?: boolean;
@@ -35,6 +40,7 @@ function Editor({
   onVoiceCast?: (cast: Record<string, string>) => void;
   onVoiceGains?: (gains: VoiceGains) => void;
   onListenRange?: (from: number, to: number) => void;
+  retakes?: RetakeTools;
 }) {
   const [text, setText] = useState(initial);
   const [voiceCast, setVoiceCast] = useState(cast);
@@ -62,6 +68,7 @@ function Editor({
       }}
       defaultVoiceName="Narrator"
       onListenRange={onListenRange}
+      retakes={retakes}
     >
       <MarkupTextarea
         textareaRef={input}
@@ -361,6 +368,41 @@ describe('tag card', () => {
     expect(within(unknown).getByText(/read aloud as written/)).toBeVisible();
     fireEvent.click(within(unknown).getByRole('button', { name: 'Remove tag' }));
     expect(script().value).toBe('Hi there');
+  });
+
+  it('retakes the sentence a reaction, a delivery or a respelling sits in', async () => {
+    const text =
+      'He laughed. [laughter] Then he [slow]stopped[/slow]. Say [[gif|jiff]] now. [pause 1s]';
+    const retakes = { find: vi.fn(), retake: vi.fn(), retakeAt: vi.fn() };
+    render(<Editor initial={text} retakes={retakes} />);
+    focus();
+    for (const [n, tag] of ['[laughter]', '[/slow]', '[[gif|jiff]]'].entries()) {
+      clickAt(text.indexOf(tag) + 2);
+      fireEvent.click(
+        within(await card(tag)).getByRole('button', { name: 'Retake this sentence' }),
+      );
+      // Looked up and asked for (or said why not) by the page's tools.
+      expect(retakes.retakeAt).toHaveBeenCalledTimes(n + 1);
+      expect(retakes.retakeAt).toHaveBeenLastCalledWith(
+        text.indexOf(tag),
+        text.indexOf(tag) + tag.length,
+      );
+      await waitFor(noCard);
+    }
+    // A pause sits between sentences: its card retakes none.
+    clickAt(text.indexOf('[pause 1s]') + 2);
+    expect(
+      within(await card('[pause 1s]')).queryByRole('button', { name: 'Retake this sentence' }),
+    ).toBeNull();
+  });
+
+  it('offers no retake without takes', async () => {
+    render(<Editor initial="Oh [laughter] well" />);
+    focus();
+    clickAt(6);
+    expect(
+      within(await card('[laughter]')).queryByRole('button', { name: 'Retake this sentence' }),
+    ).toBeNull();
   });
 });
 

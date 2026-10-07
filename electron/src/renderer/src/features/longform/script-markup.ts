@@ -427,14 +427,8 @@ const speaks = (text: string) =>
   );
 const VOICE_TOKEN_RE = /\[voice:([^\][]*)\]/g;
 
-/**
- * The text to audition for a selection: the selected text, or the paragraph
- * around a bare caret. Chapter headings are dropped (a preview renders one
- * chapter), and the `[voice:NAME]` in effect where the passage starts is
- * carried in front of it, so a line inside a character's part is heard in
- * that character's voice. `null` when there is nothing to speak.
- */
-export function previewPassage(text: string, start: number, end: number): string | null {
+/** Where the passage to audition for a selection is: the selection, or the paragraph around a bare caret. */
+export function passageBounds(text: string, start: number, end: number): [number, number] {
   let [from, to] = clampRange(text, start, end);
   if (from === to) {
     const before = [...text.slice(0, from).matchAll(BLANK_LINE_RE)].pop();
@@ -442,6 +436,19 @@ export function previewPassage(text: string, start: number, end: number): string
     const after = new RegExp(BLANK_LINE_RE.source).exec(text.slice(to));
     to = after ? to + after.index : text.length;
   }
+  return [from, to];
+}
+
+/**
+ * The text to audition for a selection: the selected text, or the paragraph
+ * around a bare caret (`passageBounds`). Chapter headings are dropped (a
+ * preview renders one chapter), and the `[voice:NAME]` in effect where the
+ * passage starts is carried in front of it, so a line inside a character's
+ * part is heard in that character's voice. `null` when there is nothing to
+ * speak.
+ */
+export function previewPassage(text: string, start: number, end: number): string | null {
+  const [from, to] = passageBounds(text, start, end);
   const raw = text.slice(from, to);
   const passage = raw.replace(HEADING_RE, '').trim();
   if (!speaks(passage)) return null;

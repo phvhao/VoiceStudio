@@ -188,8 +188,14 @@ def _render(tmp_path, chapter, opts, calls=None):
     return path, cached
 
 
-def test_segment_cache_keeps_phrase_timing_and_old_segments_fall_back_to_spans(
+def test_phrase_takes_keep_exact_timing_and_old_segments_fall_back_to_spans(
         tmp_path, unmarked):
+    import shutil
+
+    import soundfile as sf
+
+    lr = importlib.import_module("services.longform_render")
+    router = importlib.import_module("api.routers.audiobook")
     chapter = Chapter(title="C", spans=[Span(voice_id=None, text="One. Two three."),
                                         Span(voice_id="B", text="Four five.")])
     phrases = ExpressiveOptions(punctuation_pauses=tuple(sorted(_PAUSES.items())))
@@ -197,21 +203,27 @@ def test_segment_cache_keeps_phrase_timing_and_old_segments_fall_back_to_spans(
     fresh, _ = _render(tmp_path, chapter, phrases, calls)
     first = load_chapter_timeline(fresh)
     assert first is not None and all(s["units"] for s in first["spans"])
-    seg_dir = tmp_path / SEGMENT_SUBDIR
-    sidecars = sorted(seg_dir.glob("*.timeline.json"))
-    assert len(sidecars) == 2 and len(list(seg_dir.glob("*.wav"))) == 2
+    # Every phrase take is kept on its own; no span is stored whole as well.
+    assert len(list((tmp_path / lr.TAKE_SUBDIR).glob("*.wav"))) == len(calls) == 3
+    assert not (tmp_path / SEGMENT_SUBDIR).exists()
 
-    # Leveling keys the chapter, never a take: re-assembled from cached
-    # segments, the phrases are where they were.
+    # Leveling keys the chapter, never a take: re-assembled from the cached
+    # takes, the phrases are exactly where they were.
     leveled, cached = _render(tmp_path, chapter, dataclass_replace(phrases, level_voices=True), calls)
     assert not cached and len(calls) == 3
     assert load_chapter_timeline(leveled)["spans"] == first["spans"]
 
-    # A segment cached before timing was kept still hits, timed as a whole.
-    for sidecar in sidecars:
-        sidecar.unlink()
-    gained, _ = _render(tmp_path, chapter, dataclass_replace(phrases, voice_gains=(("B", 3.0),)),
-                        calls)
+    # A span cached whole before takes were kept still hits: timed by its
+    # sidecar, or as a whole without one.
+    shutil.rmtree(tmp_path / lr.TAKE_SUBDIR)
+    gains = dataclass_replace(phrases, voice_gains=(("B", 3.0),))
+    keys = router._chapter_cache_keys(chapter, SR, "eng", _resolve, str(tmp_path), opts=gains)
+    old = lr.SegmentCache(str(tmp_path), sample_rate=SR, engine_id="eng",
+                          voice_sig=keys.voice_sigs, extra_sig=keys.seg_extra_sig)
+    rendered, _rate = sf.read(fresh, dtype="float32", always_2d=True)
+    for span, item in zip(keys.spans, first["spans"]):
+        old.store(span, torch.from_numpy(rendered[item["start"]:item["end"]].T.copy()))
+    gained, _ = _render(tmp_path, chapter, gains, calls)
     assert len(calls) == 3
     spans = load_chapter_timeline(gained)["spans"]
     assert [s["units"] for s in spans] == [None, None]

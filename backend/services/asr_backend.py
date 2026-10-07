@@ -34,6 +34,7 @@ import threading
 import time
 import weakref
 from urllib.parse import urlsplit
+from core import ctranslate2_vram
 from utils.containment import contain_system_exit
 
 from abc import ABC, abstractmethod
@@ -250,15 +251,25 @@ async def run_transcribe_guarded(executor, fn, *, what: str = "ASR",
     return result
 
 
+#: CTranslate2 compute types only a GPU runs: a CPU load refuses them.
+_GPU_ONLY_COMPUTE_TYPES = frozenset({"float16", "bfloat16", "int8_float16", "int8_bfloat16"})
+
+
 def _compute_type_candidates(device: str) -> list[str]:
     """Per-device compute_type fallback chain. int8 is supported by every
     CTranslate2 CUDA+CPU build; float16/int8_float16 only on GPUs with efficient
     fp16 — so degrade rather than crash (#551). Honors an ASR_COMPUTE_TYPE env
-    override (power users on exotic hardware can pin int8/float32)."""
+    override (power users on exotic hardware can pin int8/float32) — except a
+    GPU-only pin on the CPU (a load moved there for want of free VRAM, after
+    an out-of-memory error, or on a computer without a CUDA GPU), which would
+    fail every load: the CPU chain runs instead. Keep in lockstep with the
+    crash-isolated sidecar's ``_ct_candidates``."""
     import os
     override = os.environ.get("ASR_COMPUTE_TYPE")
-    if override:
+    if override and (device == "cuda" or override not in _GPU_ONLY_COMPUTE_TYPES):
         return [override]
+    if override:
+        logger.warning("ASR_COMPUTE_TYPE=%s needs a GPU; loading on the CPU with int8", override)
     return ["float16", "int8_float16", "int8"] if device == "cuda" else ["int8", "float32"]
 
 
@@ -673,7 +684,42 @@ def forced_align(segments: list, audio, language_code: str, device: str | None =
     return segments
 
 
-class WhisperXBackend(ASRBackend):
+class _CTranslate2Whisper(ASRBackend):
+    """The VRAM preflight of the engines that load Whisper through
+    CTranslate2 (whisperx, faster-whisper) — #723: on a card the TTS model
+    fills, a CUDA load that does not fit aborts the whole process natively (no
+    Python exception, "Can't reach the local backend" in the UI), so each load
+    picks its compute type against the VRAM free right before it starts
+    (``core.ctranslate2_vram``, shared with the crash-isolated sidecar).
+    Opt-out: OMNIVOICE_ASR_VRAM_PREFLIGHT=0."""
+
+    _model_name: str | None = None
+
+    @staticmethod
+    def _free_vram_gb():
+        """Device-wide free VRAM in GB (counts other processes), or None."""
+        return ctranslate2_vram.free_vram_gb()
+
+    def _fitting_compute_types(self, compute_types) -> list[str]:
+        """``compute_types`` (a CUDA chain, best first) from the first that
+        fits the free VRAM; ``[]`` when none does and the model belongs on
+        the CPU."""
+        return ctranslate2_vram.fitting_compute_types(
+            self._model_name, compute_types, engine=self.id, free_vram=self._free_vram_gb)
+
+    def _degrade_for_vram(self, device: str, compute_type: str) -> tuple[str, str]:
+        """Downgrade the CUDA compute type (or fall to CPU int8) when free
+        VRAM can't hold the model — preventing the un-catchable native OOM
+        abort (#723)."""
+        if device != "cuda":
+            return device, compute_type
+        ladder = ctranslate2_vram.CUDA_LADDER
+        chain = ladder[ladder.index(compute_type):] if compute_type in ladder else (compute_type,)
+        fitting = self._fitting_compute_types(chain)
+        return (device, fitting[0]) if fitting else ("cpu", "int8")
+
+
+class WhisperXBackend(_CTranslate2Whisper):
     id = "whisperx"
     display_name = "WhisperX (faster-whisper + wav2vec2 forced alignment)"
     # CTranslate2 backend: CUDA fp16 or CPU int8 (see _pick_device). ROCm not
@@ -696,75 +742,6 @@ class WhisperXBackend(ASRBackend):
         # answers True there, and CTranslate2 has no HIP backend (#1529).
         if _ctranslate2_cuda_ok():
             return "cuda", "float16"
-        return "cpu", "int8"
-
-    # Peak VRAM (GB) to load *and transcribe* whisper large-v3 per CTranslate2
-    # compute type (weights + encoder/decoder workspace, with headroom). #723:
-    # on an 8 GB card with the TTS model resident, loading fp16 large-v3 dies
-    # as a *native* CUDA OOM abort — the process is killed, no Python
-    # exception ever fires, and the UI reports "Can't reach the local
-    # backend". The only defense is to never start that load, so the device
-    # pick is re-checked against actually-free VRAM right before loading.
-    _CUDA_VRAM_BUDGET_GB = {"float16": 5.0, "int8_float16": 3.5, "int8": 3.0}
-
-    #: Budget multiplier by model size (budgets above are for large-v3).
-    _MODEL_VRAM_SCALE = (
-        ("large", 1.0), ("turbo", 0.55), ("medium", 0.5),
-        ("small", 0.25), ("base", 0.15), ("tiny", 0.1),
-    )
-
-    @staticmethod
-    def _free_vram_gb():
-        """Device-wide free VRAM in GB (counts other processes), or None."""
-        try:
-            import torch
-            if torch.cuda.is_available():
-                free, _total = torch.cuda.mem_get_info()
-                return free / 1024**3
-        except Exception:  # noqa: BLE001 — preflight must never block ASR
-            pass
-        return None
-
-    @classmethod
-    def _model_scale(cls, model_name: str) -> float:
-        name = (model_name or "").lower()
-        for key, scale in cls._MODEL_VRAM_SCALE:
-            if key in name:
-                return scale
-        return 1.0  # unknown → assume large
-
-    def _degrade_for_vram(self, device: str, compute_type: str) -> tuple[str, str]:
-        """Downgrade the CUDA compute type (or fall to CPU) if free VRAM can't
-        hold the model — preventing the un-catchable native OOM abort (#723).
-        Opt-out: OMNIVOICE_ASR_VRAM_PREFLIGHT=0."""
-        if device != "cuda" or os.environ.get(
-            "OMNIVOICE_ASR_VRAM_PREFLIGHT", "1"
-        ).strip().lower() in ("0", "false", "no"):
-            return device, compute_type
-        free = self._free_vram_gb()
-        if free is None:
-            return device, compute_type
-        scale = self._model_scale(self._model_name)
-        candidates = list(self._CUDA_VRAM_BUDGET_GB)
-        start = candidates.index(compute_type) if compute_type in candidates else 0
-        for ct in candidates[start:]:
-            if free >= self._CUDA_VRAM_BUDGET_GB[ct] * scale:
-                if ct != compute_type:
-                    logger.warning(
-                        "whisperx VRAM preflight: %.1f GB free < %.1f GB needed "
-                        "for %s %s — degrading to %s (#723)",
-                        free, self._CUDA_VRAM_BUDGET_GB[compute_type] * scale,
-                        self._model_name, compute_type, ct,
-                    )
-                return device, ct
-        logger.warning(
-            "whisperx VRAM preflight: %.1f GB free is too little for %s on CUDA "
-            "(needs ≥%.1f GB even at int8) — using CPU int8 instead. Free VRAM "
-            "(flush the TTS model, or close other GPU apps) for GPU-speed ASR, or "
-            "set OMNIVOICE_ASR_VRAM_PREFLIGHT=0 to skip this check. (#723)",
-            free, self._model_name,
-            self._CUDA_VRAM_BUDGET_GB["int8"] * scale,
-        )
         return "cpu", "int8"
 
     @classmethod
@@ -1133,7 +1110,7 @@ class WhisperXBackend(ASRBackend):
 # ── Faster-Whisper (cross-platform fallback) ────────────────────────────────
 
 
-class FasterWhisperBackend(ASRBackend):
+class FasterWhisperBackend(_CTranslate2Whisper):
     id = "faster-whisper"
     display_name = "Faster-Whisper (CTranslate2 — Linux/Windows/macOS)"
     # CTranslate2: CUDA or CPU (no upstream ROCm/HIP build — see WhisperX note).
@@ -1185,10 +1162,6 @@ class FasterWhisperBackend(ASRBackend):
         # answers True there, and CTranslate2 has no HIP backend (#1529).
         if _ctranslate2_cuda_ok():
             device, compute_type = "cuda", "float16"
-        logger.info(
-            "faster-whisper loading %s on %s (%s)",
-            self._model_name, device, compute_type,
-        )
         # Try the per-device compute_type chain (cuda: float16 → int8_float16 →
         # int8; cpu: int8 → float32). A GPU without efficient fp16 (older
         # Maxwell/Pascal, GTX 16xx, or a CTranslate2/cuDNN mismatch) raises a
@@ -1198,6 +1171,22 @@ class FasterWhisperBackend(ASRBackend):
         candidates = _compute_type_candidates(device)
         if compute_type in candidates:
             candidates = candidates[candidates.index(compute_type):]
+        self._fallback_reason = self._fallback_stage = None
+        if device == "cuda":
+            # #723: a CUDA load that does not fit the VRAM left raises nothing —
+            # CTranslate2 aborts the whole backend natively (a Clone reference
+            # transcription loading large-v3 in float16 with 0.8 GB free). Start
+            # at the first compute type that fits, or load on the CPU.
+            fitting = self._fitting_compute_types(candidates)
+            if not fitting:
+                device, fitting = "cpu", _compute_type_candidates("cpu")
+                self._fallback_reason = "Free GPU memory was too low to load the engine"
+                self._fallback_stage = "vram_preflight"
+            candidates = fitting
+        logger.info(
+            "faster-whisper loading %s on %s (%s)",
+            self._model_name, device, candidates[0],
+        )
         last_err: Exception | None = None
         while True:
             for ct in candidates:
@@ -3490,7 +3479,8 @@ def transcribe_reference(audio_path: str, *, release_after: bool = False) -> str
 # without ever unloading them.
 _check_backend: ASRBackend | None = None
 #: What ``_check_backend`` was built for: ``("selected", engine id, model)``
-#: or ``("fallback", snapshot)``.
+#: or ``("fallback", snapshot, model)``. The model comes last, named as Model
+#: Catalogue names it (the loaded-model list reports it as the checkpoint).
 _check_backend_key: tuple | None = None
 _check_lock = threading.Lock()
 #: How long a check waits while another holds the recognizer: several times a
@@ -3824,7 +3814,8 @@ def _check_with_fallback(backend: ASRBackend, source, language: str | None) -> s
     global _check_backend, _check_backend_key
     if not getattr(backend, "_reference_ephemeral", False):
         return _check_with(backend, source, language)
-    key = ("fallback", getattr(backend, "_model_name", None))
+    snapshot = getattr(backend, "_model_name", None)
+    key = ("fallback", snapshot, ctranslate2_vram.model_identity(snapshot) or None)
     if not _take_check_lock():
         _report_check_stalled()
         return ""

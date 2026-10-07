@@ -6,7 +6,9 @@ codes (``electron/src/shared/utils/languages.js``: "Arabic"/"ar", "Chinese
 Design list ("Standard Arabic"/"arb"), and region or script tags from API
 callers ("pt-BR"). Each engine reads one vocabulary. These helpers resolve every
 spelling, so an engine accepts each spelling of a language it speaks, receives
-it in its own vocabulary, and still refuses a language it cannot speak.
+it in its own vocabulary, and still refuses a language it cannot speak. The
+speech check's recognizer is told a language the same way
+(:func:`whisper_language`).
 
 Pure data at import: no model, torch or network import (only
 :func:`language_input_changed` reads the engine adapters it names).
@@ -81,7 +83,13 @@ def language_code(language: object) -> Optional[str]:
         return None
     from omnivoice.utils.lang_map import LANG_NAME_TO_ID
 
-    code = LANG_NAME_TO_ID.get(value) or PICKER_LANGUAGE_CODES.get(value, value)
+    return _base_code(value, LANG_NAME_TO_ID)
+
+
+def _base_code(value: str, names: dict) -> str:
+    """The base code a lowercased ``value`` names through ``names`` (OmniVoice's)
+    or the pickers' labels, else ``value`` itself."""
+    code = names.get(value) or PICKER_LANGUAGE_CODES.get(value, value)
     head = code.replace("_", "-").split("-", 1)[0].lower()
     if head.isascii() and head.isalpha() and len(head) in (2, 3):
         return head
@@ -160,6 +168,58 @@ def omnivoice_language(language: object, text: object = None) -> object:
         return same
     return next((member for member, macro in _SAME_LANGUAGE.items()
                  if macro == same and member in LANG_IDS), language)
+
+
+# ── What a speech recognizer is told ────────────────────────────────────────
+
+#: Whisper's language codes (faster-whisper, WhisperX and mlx-whisper share
+#: them). Cantonese (``yue``) is left out: only large-v3 knows it.
+WHISPER_LANGUAGES = frozenset({
+    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca",
+    "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr",
+    "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it",
+    "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv",
+    "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no",
+    "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn",
+    "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr",
+    "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh",
+})
+
+#: Whisper's own names for languages the pickers and OmniVoice name otherwise.
+_WHISPER_NAMES = {"faroese": "fo", "malagasy": "mg", "myanmar": "my", "nynorsk": "nn"}
+
+#: Codes Whisper spells its own way ("jw" for Javanese), and the varieties it
+#: transcribes as one language: every Pashto, and Chinese by its ISO 639-2
+#: code. Wider than :data:`_SAME_LANGUAGE` on purpose: a recognizer hears each
+#: variety, while a voice that speaks one does not speak the others.
+_WHISPER_SPELLING = {"jv": "jw", "zho": "zh", "pbt": "ps", "pbu": "ps", "pst": "ps"}
+
+
+def whisper_language(language: object) -> Optional[str]:
+    """``language`` as the Whisper code a speech recognizer is told, or None.
+
+    Reads every spelling :func:`language_code` reads ("Vietnamese", "pt-BR",
+    "Chinese (Simplified)", "arb") and Whisper's own names ("Myanmar"). None
+    for Auto, an unknown name, or a language Whisper does not know — the
+    recognizer then detects it. A code Whisper knows is kept (Nynorsk stays
+    "nn"); any other is read as the language it names (:data:`_SAME_LANGUAGE`)
+    in Whisper's spelling. Never raises.
+    """
+    if not isinstance(language, str):
+        return None
+    value = language.strip().lower()
+    if not value or value == "auto":
+        return None
+    try:
+        from omnivoice.utils.lang_map import LANG_NAME_TO_ID
+    except Exception:  # noqa: BLE001 — OmniVoice's names unknown here; codes still map
+        LANG_NAME_TO_ID = {}
+    code = _base_code(value, LANG_NAME_TO_ID)
+    code = _WHISPER_NAMES.get(code, code)
+    if code not in WHISPER_LANGUAGES:
+        code = _SAME_LANGUAGE.get(code, code)
+        code = _WHISPER_SPELLING.get(code, code)
+    return code if code in WHISPER_LANGUAGES else None
 
 
 # ── What an engine receives, for cache keys ─────────────────────────────────

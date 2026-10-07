@@ -359,7 +359,7 @@ def test_every_picker_language_whisper_knows_gets_its_code():
     speech = _mod("services.speech_verify")
     untold = {label for label in labels if speech.recognizer_language(label) is None}
     # Languages Whisper does not transcribe. A new picker label lands here
-    # only if Whisper lacks it too; else map it in speech_verify._NAME_ALIASES.
+    # only if Whisper lacks it too; else spell it in services.language_codes.
     assert untold == {"Kurdish", "Kyrgyz", "Samoan", "Scots Gaelic", "Xhosa", "Zulu"}
 
 

@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react';
 import { expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@/i18n';
 import { parseCastNames } from '@shared/utils/audiobookScript';
 import type { VoiceGains } from '@shared/utils/longformOverrides';
 import { MarkupContextMenu } from './markup-context-menu';
 import { MarkupTextarea } from './markup-textarea';
+import type { PlacedTake, RetakeTarget, RetakeTools } from './take-retake';
 
 function Editor({
   initial,
@@ -13,6 +14,7 @@ function Editor({
   onListenRange,
   onVoiceCast,
   onVoiceGains,
+  retakes,
   headings = false,
 }: {
   initial: string;
@@ -20,6 +22,7 @@ function Editor({
   onListenRange?: (from: number, to: number) => void;
   onVoiceCast?: (cast: Record<string, string>) => void;
   onVoiceGains?: (gains: VoiceGains) => void;
+  retakes?: RetakeTools;
   headings?: boolean;
 }) {
   const [text, setText] = useState(initial);
@@ -48,6 +51,7 @@ function Editor({
       }}
       onListen={onListen}
       onListenRange={onListenRange}
+      retakes={retakes}
     >
       <MarkupTextarea
         textareaRef={input}
@@ -211,4 +215,86 @@ it('wraps the selection in a [volume] step', async () => {
   const steps = await submenu('Quieter or louder');
   fireEvent.click(within(steps).getByRole('menuitem', { name: /A little louder/ }));
   expect(script().value).toBe('say [volume +3dB]softly[/volume] now');
+});
+
+/** A take the page found at `start…end` of the script. */
+const placed = (text: string, start: number, take = 0): PlacedTake => ({
+  span: 0,
+  take,
+  text,
+  retake: 0,
+  cached: true,
+  source: 'script',
+  start,
+  end: start + text.length,
+});
+
+it('retakes the sentence at the caret once the page has found it', async () => {
+  let found!: (target: RetakeTarget | null) => void;
+  const retakes = {
+    find: vi.fn(() => new Promise<RetakeTarget | null>((resolve) => (found = resolve))),
+    retake: vi.fn(),
+    retakeAt: vi.fn(),
+  };
+  const text = 'One sentence. Two sentence.';
+  render(<Editor initial={text} retakes={retakes} />);
+  rightClickAt(text.indexOf('Two') + 1);
+  const item = await screen.findByRole('menuitem', { name: 'Retake this sentence' });
+  // Still being looked up: nothing to retake yet.
+  expect(item).toHaveAttribute('aria-disabled', 'true');
+  expect(retakes.find).toHaveBeenCalledWith(15, 15, expect.any(AbortSignal));
+  const target = {
+    chapter: { api: 'audiobook' as const, body: {}, sources: [] },
+    takes: [placed('Two sentence.', 14, 1)],
+  };
+  await act(async () => found(target));
+  expect(item).not.toHaveAttribute('aria-disabled');
+  fireEvent.click(item);
+  expect(retakes.retake).toHaveBeenCalledWith(target);
+});
+
+it('counts the sentences a selection reaches, and stays off where there is none', async () => {
+  const text = 'One sentence. Two sentence.';
+  const takes = [placed('One sentence.', 0), placed('Two sentence.', 14, 1)];
+  const retakes = {
+    find: vi.fn(async (from: number) =>
+      from < 3 ? { chapter: { api: 'audiobook' as const, body: {}, sources: [] }, takes } : null,
+    ),
+    retake: vi.fn(),
+    retakeAt: vi.fn(),
+  };
+  render(<Editor initial={text} retakes={retakes} />);
+  rightClickAt(0, text.length);
+  expect(await screen.findByRole('menuitem', { name: 'Retake 2 sentences' })).toBeVisible();
+  fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  rightClickAt(text.length);
+  const item = await screen.findByRole('menuitem', { name: 'Retake this sentence' });
+  await waitFor(() => expect(retakes.find).toHaveBeenCalledTimes(2));
+  expect(item).toHaveAttribute('aria-disabled', 'true');
+});
+
+it('when the sentence could not be looked up, looks again when chosen instead of offering none', async () => {
+  const retakes = {
+    find: vi.fn(async () => {
+      throw new Error('the backend did not answer');
+    }),
+    retake: vi.fn(),
+    retakeAt: vi.fn(),
+  };
+  const text = 'One sentence. Two sentence.';
+  render(<Editor initial={text} retakes={retakes} />);
+  rightClickAt(text.indexOf('Two') + 1);
+  const item = await screen.findByRole('menuitem', { name: 'Retake this sentence' });
+  await waitFor(() => expect(item).not.toHaveAttribute('aria-disabled'));
+  fireEvent.click(item);
+  expect(retakes.retakeAt).toHaveBeenCalledWith(15, 15);
+  expect(retakes.retake).not.toHaveBeenCalled();
+});
+
+it('offers no retake on a page that keeps no takes', async () => {
+  render(<Editor initial="Plain text." onListen={vi.fn()} />);
+  rightClickAt(2);
+  await screen.findByRole('menuitem', { name: 'Listen' });
+  expect(screen.queryByRole('menuitem', { name: /Retake/ })).toBeNull();
 });

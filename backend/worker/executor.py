@@ -427,7 +427,7 @@ class TaskExecutor:
         """Render one chapter as one leased unit, matching local longform assembly."""
         spans = params.get("spans") or []
         voices = params.get("voices") or []
-        if not spans or len(voices) != len(spans):
+        if not spans or len(voices) != len(spans) or not _told_takes_valid(params, len(spans)):
             raise TaskFailure(WorkerError(
                 error_class=ErrorClass.TERMINAL,
                 code="INVALID_TASK_PARAMS",
@@ -475,8 +475,25 @@ class TaskExecutor:
 
         The worker never runs the speech check: the control plane asks it for
         an unchecked render and keys the result that way
-        (``api.routers.audiobook._remote_chapter_call``)."""
-        from services.audiobook import ExpressiveOptions, Span, segment_seed, synthesize_chapter
+        (``api.routers.audiobook._remote_chapter_call``).
+
+        Each take is seeded as the control plane seeds it
+        (``services.audiobook.take_seed_input``), so a chapter sounds the
+        same wherever it renders: read sentence by sentence, a repeat by its
+        occurrence in the chapter, and a take the task names otherwise
+        (``params["takes"]``: a retake the user asked for, salted anew; a
+        passage's sentence its chapter repeats) as it names it."""
+        import dataclasses
+
+        from services.audiobook import (
+            ExpressiveOptions,
+            Span,
+            chapter_units,
+            segment_seed,
+            synthesize_chapter,
+            take_seed_input,
+        )
+        from services.longform_render import chapter_takes
         from services.tts_backend import OmniVoiceBackend
 
         refs = params.get("ref_audio") or []
@@ -497,16 +514,24 @@ class TaskExecutor:
             extra.setdefault("guidance_scale", 2.0)
             for key in ("emo_vector", "emo_text", "emo_alpha"):
                 extra.pop(key, None)
-        occurrence = {"value": 0}
-        def synth(text, index, speed=None):
+        counter = {"value": 0}
+
+        def next_nonce() -> int:
+            # Vary repeated lines without phrase takes: every call its own.
+            if not opts.vary_repeats:
+                return 0
+            counter["value"] += 1
+            return counter["value"] - 1
+
+        def synth(text, index, speed=None, occurrence=None, retake=""):
             voice = voices[int(index)]
             base_seed = opts.seed if opts.seed is not None else voice.get("seed")
+            seed_text, nonce = take_seed_input(text, 0, next_nonce, occurrence=occurrence,
+                                               retake=retake, vary=opts.vary_repeats)
             seed = None
             if base_seed is not None:
                 import torch
-                nonce = occurrence["value"] if opts.vary_repeats else 0
-                occurrence["value"] += 1
-                seed = segment_seed(base_seed, text, nonce)
+                seed = segment_seed(base_seed, seed_text, nonce)
                 torch.manual_seed(seed)
             kwargs = {
                 "language": language,
@@ -531,12 +556,28 @@ class TaskExecutor:
                       gain_db=clamp_gain_db(row.get("gain_db")) or None)
                  for i, row in enumerate(rows)]
         sample_rate = int(getattr(backend, "sample_rate", 0) or 24_000)
+        takes = None
+        if opts.punctuation_pauses is not None:
+            # The chapter's takes as the control plane plans them: any two
+            # rows of one voice read a sentence as the same take.
+            sigs = {str(i): json.dumps(voice, sort_keys=True, default=str)
+                    for i, voice in enumerate(voices)}
+            join = opts.join_kwargs()
+            takes = chapter_takes(spans, chapter_units(
+                spans, lexicon=params.get("lexicon"), paragraph_gap_ms=join["paragraph_gap_ms"],
+                punctuation_pauses=join["punctuation_pauses"],
+                split_commas=join["split_commas"]), voice_sig=sigs)
+            for row, k, occurrence, salt in params.get("takes") or []:
+                if k >= len(takes[row]):
+                    raise ValueError("the task names a take its chapter does not have")
+                takes[row][k] = dataclasses.replace(takes[row][k], occurrence=occurrence,
+                                                    salt=salt)
         # A span's voice_id here is its row index, so voice leveling groups
         # spans by the voice name each row carries ('' = the default voice).
         audio, _duration = synthesize_chapter(
             spans, synth, sample_rate, lexicon=params.get("lexicon"),
             voice_names=[str(row.get("voice") or "") for row in rows],
-            timing=timing,
+            timing=timing, takes=takes,
             **opts.join_kwargs(),
         )
         return audio
@@ -1027,6 +1068,23 @@ def _budgets(assignment) -> tuple[float, float]:
         load or _FALLBACK_MODEL_LOAD_SECONDS,
         run or _FALLBACK_EXECUTION_SECONDS,
     )
+
+
+def _told_takes_valid(params: dict, spans: int) -> bool:
+    """Whether an audiobook task's ``takes`` — ``[[span, take, occurrence,
+    salt], …]``, the takes it says to read otherwise than this worker plans
+    them (``api.routers.audiobook._worker_takes``) — is well formed for a
+    chapter of ``spans`` rows. Absent is well formed: none."""
+    told = params.get("takes", [])
+    if not isinstance(told, list):
+        return False
+    for entry in told:
+        if not (isinstance(entry, list) and len(entry) == 4
+                and all(type(value) is int and value >= 0 for value in entry[:3])
+                and entry[0] < spans and isinstance(entry[3], str)
+                and len(entry[3]) <= 12 and all(c in "0123456789abcdef" for c in entry[3])):
+            return False
+    return True
 
 
 def default_input_dir() -> str:

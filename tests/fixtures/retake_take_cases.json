@@ -1,0 +1,67 @@
+[
+  {
+    "name": "an Audiobook chapter: markup, a respelling, a take of tags alone, repeats",
+    "script": "# Prologue\nA short opening paragraph that is long enough to stand on its own here.\n\n# Chapter One\nThe keeper climbed the stairs, as he did every single evening of 1999.\n[laughter]\n[sigh] He lit the [[lamp|lahmp]] and looked out over the restless grey sea.\n\n## The visitor\n[voice:Mara] “Who is there?” she asked. [pause 500ms] [slow]Nobody answered her at all, not even the gulls.[/slow]\nHe typed SQL into the old terminal, then spelled it: [spell]SOS[/spell], and waited a long time.\nAnh ấy nói rằng trời đã khuya lắm rồi, và biển vẫn còn động.\nThe same sentence closes the chapter, word for word.\nThe same sentence closes the chapter, word for word.",
+    "chapter_index": 1,
+    "lexicon": {"SQL": "sequel"},
+    "takes": [
+      [0, 0, "The keeper climbed the stairs, as he did every single evening of 1999."],
+      [0, 1, ""],
+      [0, 2, "He lit the lamp and looked out over the restless grey sea."],
+      [1, 0, "The visitor"],
+      [2, 0, "“Who is there?” she asked."],
+      [3, 0, "Nobody answered her at all, not even the gulls."],
+      [4, 0, "He typed SQL into the old terminal, then spelled it:"],
+      [5, 0, "S O S"],
+      [6, 0, ", and waited a long time."],
+      [6, 1, "Anh ấy nói rằng trời đã khuya lắm rồi, và biển vẫn còn động."],
+      [6, 2, "The same sentence closes the chapter, word for word."],
+      [6, 3, "The same sentence closes the chapter, word for word."]
+    ],
+    "placed": [
+      [0, 0, "script", 98, "The keeper climbed the stairs, as he did every single evening of 1999."],
+      [0, 1, "script", 169, "[laughter]"],
+      [0, 2, "script", 187, "He lit the [[lamp|lahmp]] and looked out over the restless grey sea."],
+      [1, 0, "script", 260, "The visitor"],
+      [2, 0, "script", 285, "“Who is there?” she asked."],
+      [3, 0, "script", 332, "Nobody answered her at all, not even the gulls."],
+      [4, 0, "script", 387, "He typed SQL into the old terminal, then spelled it:"],
+      [5, 0, "script", 447, "SOS"],
+      [6, 0, "script", 458, ", and waited a long time."],
+      [6, 1, "script", 484, "Anh ấy nói rằng trời đã khuya lắm rồi, và biển vẫn còn động."],
+      [6, 2, "script", 545, "The same sentence closes the chapter, word for word."],
+      [6, 3, "script", 598, "The same sentence closes the chapter, word for word."]
+    ]
+  },
+  {
+    "name": "a Stories chapter, posted as /longform/render posts it",
+    "chapter": {"title": "", "spans": [{"voice_id": "p1", "text": "The keeper climbed the stairs, as he did every single evening of his life.", "pause_ms_after": 0, "speed": null}, {"voice_id": "p1", "text": "[laughter]", "pause_ms_after": 1000, "speed": null}, {"voice_id": "p2", "text": "“Who is there?” she asked, holding the brass lantern up high.", "pause_ms_after": 0, "speed": 1.2}, {"voice_id": "p1", "text": "Nobody answered.", "pause_ms_after": 0, "speed": null}, {"voice_id": "Mara", "text": "I am here, she whispered into the dark of the night.", "pause_ms_after": 0, "speed": null}, {"voice_id": "p1", "text": "He spelled it out:", "pause_ms_after": 0, "speed": null, "join": "continue"}, {"voice_id": "p1", "text": "S O S", "pause_ms_after": 0, "speed": null, "join": "continue"}, {"voice_id": "p1", "text": ", then waited for a very long time.", "pause_ms_after": 0, "speed": null}]},
+    "lines": [
+      {"id": "a", "text": "The keeper climbed the stairs, as he did every single evening of his life.", "profileId": "p1"},
+      {"id": "b", "text": "[laughter]", "profileId": "p1"},
+      {"id": "c", "text": "[pause 1s] “Who is there?” she asked, holding the brass lantern up high.", "profileId": "p2", "speed": 1.2},
+      {"id": "d", "text": "Nobody answered. [voice:Mara] I am here, she whispered into the dark of the night.", "profileId": "p1"},
+      {"id": "e", "text": "He spelled it out: [spell]SOS[/spell], then waited for a very long time.", "profileId": "p1"}
+    ],
+    "takes": [
+      [0, 0, "The keeper climbed the stairs, as he did every single evening of his life."],
+      [1, 0, ""],
+      [2, 0, "“Who is there?” she asked, holding the brass lantern up high."],
+      [3, 0, "Nobody answered."],
+      [4, 0, "I am here, she whispered into the dark of the night."],
+      [5, 0, "He spelled it out:"],
+      [6, 0, "S O S"],
+      [7, 0, ", then waited for a very long time."]
+    ],
+    "placed": [
+      [0, 0, "a", 0, "The keeper climbed the stairs, as he did every single evening of his life."],
+      [1, 0, "b", 0, "[laughter]"],
+      [2, 0, "c", 11, "“Who is there?” she asked, holding the brass lantern up high."],
+      [3, 0, "d", 0, "Nobody answered."],
+      [4, 0, "d", 30, "I am here, she whispered into the dark of the night."],
+      [5, 0, "e", 0, "He spelled it out:"],
+      [6, 0, "e", 26, "SOS"],
+      [7, 0, "e", 37, ", then waited for a very long time."]
+    ]
+  }
+]

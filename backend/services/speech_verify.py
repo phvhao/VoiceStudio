@@ -25,6 +25,8 @@ import unicodedata
 from difflib import SequenceMatcher
 from typing import Callable, Optional
 
+from services.language_codes import whisper_language
+
 logger = logging.getLogger("omnivoice.speech_verify")
 
 #: Takes whose transcript matches the text less than this are retaken.
@@ -71,34 +73,6 @@ def checkable(text: str) -> bool:
     return len(comparable(text)) >= MIN_CHECK_CHARS
 
 
-#: Whisper's language codes (faster-whisper, WhisperX and mlx-whisper share
-#: them). Cantonese (``yue``) is left out: only large-v3 knows it.
-_WHISPER_LANGUAGES = frozenset({
-    "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca",
-    "cs", "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr",
-    "gl", "gu", "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it",
-    "ja", "jw", "ka", "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv",
-    "mg", "mi", "mk", "ml", "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no",
-    "oc", "pa", "pl", "ps", "pt", "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn",
-    "so", "sq", "sr", "su", "sv", "sw", "ta", "te", "tg", "th", "tk", "tl", "tr",
-    "tt", "uk", "ur", "uz", "vi", "yi", "yo", "zh",
-})
-#: Codes of the app's language table (OmniVoice's ISO 639 ids) that Whisper
-#: spells another way.
-_WHISPER_SPELLING = {
-    "arb": "ar", "cmn": "zh", "zho": "zh", "fil": "tl", "jv": "jw", "nb": "no",
-    "npi": "ne", "uzn": "uz", "ydd": "yi", "plt": "mg", "pbt": "ps", "pbu": "ps",
-    "pst": "ps",
-}
-#: Language names callers use that OmniVoice's table does not list: the
-#: long-form pickers' labels (``electron/src/shared/utils/languages.js``) and
-#: Whisper's own names.
-_NAME_ALIASES = {
-    "arabic": "ar", "chinese (simplified)": "zh", "chinese (traditional)": "zh",
-    "mandarin": "zh", "tagalog": "tl", "punjabi": "pa", "pashto": "ps",
-    "myanmar": "my", "haitian creole": "ht", "sundanese": "su", "malagasy": "mg",
-    "latin": "la", "faroese": "fo", "nynorsk": "nn",
-}
 #: The sample rate speech recognizers take.
 _RECOGNIZER_RATE = 16000
 
@@ -107,27 +81,12 @@ def recognizer_language(language: Optional[str]) -> Optional[str]:
     """The Whisper language code for a render's ``language`` — a name from
     the language picker ("Vietnamese") or an ISO code ("vi", "pt-BR") — or
     ``None`` for Auto, an unknown name or a language Whisper does not know:
-    the recognizer then detects it, as it did before. A recognizer is only
-    told a code its model knows (``services.asr_backend``), because a code it
-    does not know fails the transcription, and failed checks turn the check
-    off."""
-    if not isinstance(language, str):
-        return None
-    value = language.strip().lower()
-    if not value or value == "auto":
-        return None
-    try:
-        from omnivoice.utils.lang_map import LANG_NAME_TO_ID
-    except Exception:  # noqa: BLE001 — names unknown here; ISO codes still map
-        LANG_NAME_TO_ID = {}
-    code = LANG_NAME_TO_ID.get(value) or _NAME_ALIASES.get(value)
-    if code is None:
-        head = value.replace("_", "-").split("-", 1)[0]
-        if not (head.isascii() and head.isalpha() and len(head) in (2, 3)):
-            return None
-        code = head
-    code = _WHISPER_SPELLING.get(code, code)
-    return code if code in _WHISPER_LANGUAGES else None
+    the recognizer then detects it, as it did before. Read through the app's
+    one language vocabulary (``services.language_codes``). A recognizer is
+    only told a code its model knows (``services.asr_backend``), because a
+    code it does not know fails the transcription, and failed checks turn the
+    check off."""
+    return whisper_language(language)
 
 
 def _waveform_16k(audio, sample_rate: int):
@@ -226,6 +185,10 @@ class SpeechVerifier:
         #: recognizer installed (``True``), or one that heard no words, failed
         #: or was busy (``False``).
         self.no_recognizer = False
+        #: How closely the take the last :meth:`render` kept says its text
+        #: (``None``: it was not listened to) — kept with that take in the
+        #: long-form take cache.
+        self.last_score: Optional[float] = None
         self._failures = 0
 
     def may_answer(self) -> bool:
@@ -260,6 +223,7 @@ class SpeechVerifier:
         return match_score(text, heard)
 
     def render(self, text: str, take: Callable[[int], object]):
+        self.last_score = None
         audio = take(0)
         if self.unavailable or not checkable(text):
             return audio
@@ -275,6 +239,7 @@ class SpeechVerifier:
             candidate_score = self._score(text, candidate)
             if candidate_score is not None and candidate_score > best_score:
                 best, best_score = candidate, candidate_score
+        self.last_score = best_score
         if best_score < self.threshold:
             logger.info("speech check: still differs after %d retake(s) (%.2f): %r",
                         attempt, best_score, text[:120])
