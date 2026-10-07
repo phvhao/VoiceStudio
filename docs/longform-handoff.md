@@ -1,7 +1,8 @@
 # Bàn giao: nâng cấp Sách nói / Truyện (fork phvhao)
 
-Cập nhật: 2026-10-06 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
-`phvhao/VoiceStudio` trỏ cùng commit `d41e8765`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
+Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
+`phvhao/VoiceStudio` trỏ cùng commit `3ed6a2fc`). Bản cài đặt Windows cuối:
+`electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `3ed6a2fc`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
 
 ## Trạng thái nhanh
 
@@ -11,7 +12,9 @@ Cập nhật: 2026-10-06 · Nhánh `feat/longform-voice-preview-pronunciation` (
   language-picker, dub).
 - Một test luôn đỏ trên máy này do môi trường, không do thay đổi: `electron/src/main/backend-setup.test.ts`
   ("only ever names a uv that is really there", `OMNIVOICE_BUNDLED_UV` rỗng).
-- Repo gốc đã có thêm 4 commit (MCP generation budgets, PR #2612) chưa đồng bộ vào nhánh này.
+- Repo gốc có thêm commit (MCP generation budgets, PR #2612, có thể nhiều hơn) chưa đồng bộ vào nhánh này.
+- Sau phần tính năng là 6 đợt tối ưu theo bản rà soát đo đạc (xem mục "Đợt tối ưu"); mỗi đợt có kiểm tra
+  toàn bộ, review đối kháng và sửa lỗi trước khi commit.
 
 ## Các commit
 
@@ -28,6 +31,14 @@ Cập nhật: 2026-10-06 · Nhánh `feat/longform-voice-preview-pronunciation` (
 | `9d4e5a21` | Bảo mật: file tạm xuất HTML nằm trong thư mục dữ liệu app, không ở temp dùng chung |
 | `81fab8f1` | Thư viện sách/truyện, tag `[volume]`, HTML kiểu e-book, zoom, cột mục lục, hiệu năng trình đọc, Nhân bản/Thiết kế chèn pause |
 | `d41e8765` | Cài đặt kiểm tra chính tả, gợi ý `[` theo trang |
+| `2527aa7e`, `d8432cd1` | Tag bấm được ở Nhân bản/Thiết kế; ô chọn giọng sắp A–Z |
+| `52c8d89b`, `369b281b`, `aeaed18c` | Bỏ nháy đơn khi đọc; gộp câu ngắn (trong cùng dòng) chống méo giọng |
+| `9c9f08ab` | Tối ưu đợt 1: khóa cache đúng số bước, LRU, bớt dò, khởi động, xuất ACX, lưu file theo luồng |
+| `8d04d997` | Tối ưu đợt 2: một model nhận dạng giữ sẵn cho cả lần render; mã ngôn ngữ chung |
+| `b54c8175` | Tối ưu đợt 3: cache từng câu, "Tạo lại câu này", kiểm tra VRAM trước khi nạp Whisper |
+| `6c6525e3`, `9f13229b` | Đợt 4: nghe thử không khóa, tiến độ trong chương, bố cục Nhân bản, menu sửa chữ, quay lại/tới, nút báo thiếu gì, thẻ mô hình, Lồng tiếng dịch từng câu + co/giãn hai chiều |
+| `f1ec3cd3` | Đợt 5: 6 mẫu HTML + 14 phông OFL, Truyện xuất HTML, editor nhanh hơn, rà tiếng Việt |
+| `3ed6a2fc` | Đợt 6: bộ giải mã OmniVoice nhanh hơn 26–31% (CUDA), 35–39% (CPU) |
 
 ## Đã làm
 
@@ -78,13 +89,33 @@ Cập nhật: 2026-10-06 · Nhánh `feat/longform-voice-preview-pronunciation` (
 - Nhân bản và Thiết kế: menu Chèn có pause, tô màu tag, gợi ý `[` chỉ pause/âm thanh, tag không dùng được
   ở trang này bị gạch đỏ kèm giải thích.
 
+## Đợt tối ưu (số đo trên RTX 3060, Windows)
+
+| Hạng mục | Trước → sau |
+|---|---|
+| Sửa một từ rồi tạo lại (chương 12 đoạn) | 48 câu → 1 câu (~5,5 phút → ~7 s) |
+| Tạo lại sách 9–10 giờ sau khi sửa một câu (cache đầy) | 2,9–4,2 giờ GPU → 13–18 phút |
+| Đổi giọng một vai (vai 10% lời, sách 3 giờ) | ~3,8 giờ → ~0,4 giờ GPU |
+| Kiểm tra lời đọc, mỗi câu sau câu đầu | 3,96 s → 0,64 s |
+| Một bản thu 32 bước, giọng mẫu 15 s | 3,39 s → 2,49 s |
+| Gõ phím, kịch bản 150.000 ký tự | ~110 ms → ~10 ms (jsdom); 89–97 → ~26 ms (Chromium) |
+| `/api/settings/performance-profile` | 476 ms → 35 ms; CPU backend lúc rảnh −85% |
+| Lưu sách 400 MB | +1,22 GB RAM → +84 MB |
+
+Thay đổi hành vi cần biết: số bước theo mức hiệu năng (thanh trượt hiện số thực); seed cố định ở fp16 cho
+bản thu khác trước (`OMNIVOICE_PACKED_CFG=0` để trở lại); máy GPU từ xa phải chạy bản này; cache cũ vẫn dùng được.
+
 ## Chưa làm
 
 | Việc | Ghi chú |
 |---|---|
 | Kéo thả sắp xếp chương trong Mục lục | Đã nói để sau |
 | Karaoke khớp từng từ bằng ASR | Hiện từ được ước lượng trong từng câu (câu thì chính xác); có thể tận dụng bước kiểm tra lời đọc |
-| Gợi ý sửa chính tả khi chuột phải | Editor đã có menu chuột phải riêng; cần gộp vào |
+| Gợi ý chính tả trong menu riêng của editor markup | Ô nhập thường đã có (menu hệ thống); editor Sách nói/Truyện chưa |
+| Chuẩn hóa âm lượng Nhân bản/Thiết kế (Q4) | Chờ chọn mức chuẩn (đề xuất −20 dBFS) |
+| Tiêu đề trang Nhân bản bị cắt ở 900×700 khi mở khung mẫu giọng (vi/ru/uk) | Cần chọn cách xử lý |
+| Bật bộ giải mã mới cho ROCm/MPS/DirectML/torch.compile | Cần kiểm tra trên máy tương ứng (`OMNIVOICE_PACKED_CFG=1`) |
+| L1–L12 của bản rà soát (CUDA graph, FLAC cache, giới hạn cache…) | Để sau |
 | Lưu mức âm lượng đo được vào hồ sơ giọng | Chờ quyết định; chỉ để tham khảo, không thay cân bằng |
 | PR lên repo gốc | Chưa gửi |
 | Đồng bộ 4 commit mới của repo gốc | `git merge upstream/main`, chạy lại test rồi push |
