@@ -8,7 +8,9 @@ import { GithubStar } from './github-star';
 export function SupportShortcut() {
   const { t } = useTranslation();
   return (
-    <div className="flex shrink-0 items-center gap-2">
+    // A title bar too narrow for its screen's own title and controls keeps
+    // them, dropping these words first and these shortcuts last (titlebar-fit.ts).
+    <div className="flex shrink-0 items-center gap-2 group-data-[fit~=shortcuts]/titlebar:hidden">
       <Tooltip>
         <TooltipTrigger
           render={
@@ -20,8 +22,7 @@ export function SupportShortcut() {
           }
         >
           <GemIcon aria-hidden="true" className="size-3.5" />
-          {/* A narrow title bar keeps its room for the screen's own controls. */}
-          <span className="hidden text-xs font-semibold @5xl:inline">
+          <span className="text-xs font-semibold group-data-[fit~=labels]/titlebar:hidden">
             {t('supportPlans.get_pro')}
           </span>
           <ArrowUpRightIcon aria-hidden="true" className="size-3" />

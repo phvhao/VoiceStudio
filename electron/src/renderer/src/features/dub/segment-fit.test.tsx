@@ -64,6 +64,30 @@ it('flags possibly missing content with its reason and a Translate again action'
   ).toBe(true);
 });
 
+it('says why a translation stuck repeating one word is flagged, with Translate again', () => {
+  const again = vi.fn();
+  render(
+    <OmissionFlag
+      omission={{
+        reason: 'repeated',
+        ratio: 6.6,
+        source_sentences: 1,
+        target_sentences: 1,
+        repeats: 40,
+      }}
+      onTranslateAgain={again}
+    />,
+  );
+  const button = screen.getByRole('button', { name: 'segment.translate_again' });
+  expect(screen.getByText('segment.omission')).toBeTruthy();
+  expect(screen.getByTitle('segment.omission_repeated_title')).toBeTruthy();
+  expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent).toBe(
+    'segment.omission_repeated_title',
+  );
+  fireEvent.click(button);
+  expect(again).toHaveBeenCalledOnce();
+});
+
 it('offers Auto, Keep, Allow shrink and Allow stretch for a line', () => {
   const change = vi.fn();
   render(<VideoFitControl value="keep" onChange={change} />);

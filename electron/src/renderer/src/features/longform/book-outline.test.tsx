@@ -22,6 +22,18 @@ vi.mock('@/lib/api/client', () => ({
 vi.mock('@/components/waveform-player', () => ({
   WaveformPlayer: ({ src }: { src: string }) => <audio data-testid="preview" src={src} />,
 }));
+// A row writes its length once each time it renders: how many rows rendered.
+const rows = vi.hoisted(() => ({ rendered: 0 }));
+vi.mock('@shared/utils/audiobookScript', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/utils/audiobookScript')>();
+  return {
+    ...actual,
+    formatRuntimeClock: (seconds: number) => {
+      rows.rendered += 1;
+      return actual.formatRuntimeClock(seconds);
+    },
+  };
+});
 import { usePerformanceProfile } from '@/hooks/use-performance-profile';
 import { BookOutline, takesLeft } from './book-outline';
 import type { RetakenChapter } from './chapter-previews';
@@ -525,4 +537,38 @@ it('gives the focus to the row when a rename is cancelled or changes nothing', a
   fireEvent.keyDown(field(), { key: 'Enter' });
   await waitFor(() => expect(title()).toHaveFocus());
   expect(script().value).toBe(SCRIPT);
+});
+
+it('renders and moves only the row a keystroke changes', async () => {
+  mock.api.mockImplementation(async () => ({ book: false, chapters: [] }));
+  render(<Harness />);
+  const two = within(contents()).getByRole('button', { name: 'Two' });
+  await waitFor(() => expect(mock.api).toHaveBeenCalled());
+  rows.rendered = 0;
+  // Typing in chapter One moves every row after it in the text, not in the list.
+  fireEvent.change(script(), {
+    target: { value: SCRIPT.replace('First words.', 'First words, more.') },
+  });
+  expect(rows.rendered).toBe(1);
+  expect(within(contents()).getByRole('button', { name: 'Two' })).toBe(two);
+  // In a section: the section and its chapter.
+  rows.rendered = 0;
+  fireEvent.change(script(), {
+    target: { value: script().value.replace('More words.', 'More words, too.') },
+  });
+  expect(rows.rendered).toBe(2);
+});
+
+it('acts on a heading where it stands now, after typing above it', async () => {
+  render(<Harness initial={'# One\nFirst.\n# Two\nLast.'} />);
+  // The row of Two shows nothing new, so it does not render again.
+  fireEvent.change(script(), { target: { value: '# One\nFirst, and then more.\n# Two\nLast.' } });
+  await choose('Two', 'book.remove_heading');
+  await waitFor(() => expect(script().value).toBe('# One\nFirst, and then more.\nLast.'));
+  fireEvent.change(script(), { target: { value: '# A longer first\nFirst.\n# Two\nLast.' } });
+  await choose('Two', 'book.rename');
+  const field = screen.getByRole('textbox', { name: t('book.rename_title', { title: 'Two' }) });
+  fireEvent.change(field, { target: { value: 'Second' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+  await waitFor(() => expect(script().value).toBe('# A longer first\nFirst.\n# Second\nLast.'));
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TAGS } from '@shared/utils/constants';
 import { parseCastNames, validateScript } from '@shared/utils/audiobookScript';
 import { storyToSpans } from '@shared/utils/storyToSpans';
@@ -13,6 +13,8 @@ import {
   completeTag,
   deliveryKind,
   expressionGroups,
+  formatPauseSeconds,
+  formatSignedDb,
   insertChapter,
   insertToken,
   normalizeNewlines,
@@ -25,6 +27,7 @@ import {
   replaceRange,
   respellingParts,
   respellingRange,
+  secondsUnit,
   setRespelling,
   setVolume,
   tokenAt,
@@ -159,6 +162,30 @@ describe('pauses', () => {
       expect(pauseMs(token), token).toBe(spans(`Before ${token} after`)[0].pause_ms_after);
     }
     expect(pauseMs('[sigh]')).toBeNull();
+  });
+});
+
+describe('number formats', () => {
+  it('writes pauses and gains as the locale does, building one formatter for it', () => {
+    // The editors label pauses and volumes on every render.
+    const { NumberFormat } = Intl;
+    const made = vi.spyOn(Intl, 'NumberFormat').mockImplementation(function (locales, options) {
+      return new NumberFormat(locales, options);
+    });
+    try {
+      formatPauseSeconds(0, 'vi');
+      formatSignedDb(0, 'vi');
+      made.mockClear();
+      for (let round = 0; round < 3; round++) {
+        expect(formatPauseSeconds(1500, 'vi')).toMatch(/^1,5\sgiây$/);
+        expect(secondsUnit('vi')).toBe('giây');
+        expect(formatSignedDb(-1.5, 'vi')).toBe('-1,5');
+        expect(formatSignedDb(3, 'vi')).toBe('+3');
+      }
+      expect(made).not.toHaveBeenCalled();
+    } finally {
+      made.mockRestore();
+    }
   });
 });
 

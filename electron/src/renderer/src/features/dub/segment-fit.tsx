@@ -54,7 +54,9 @@ export function OmissionFlag({
           source: omission.source_sentences,
           target: omission.target_sentences,
         })
-      : t('segment.omission_short_title');
+      : omission.reason === 'repeated'
+        ? t('segment.omission_repeated_title')
+        : t('segment.omission_short_title');
   return (
     <div className="flex items-center gap-2 rounded-md border border-warning/20 bg-warning/5 p-1.5 text-xs">
       <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning">

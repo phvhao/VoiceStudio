@@ -1,5 +1,5 @@
 import { scriptChapters } from '@shared/utils/audiobookLyrics';
-import { scriptStats } from '@shared/utils/audiobookScript';
+import { AUDIOBOOK_WPM, scriptStats } from '@shared/utils/audiobookScript';
 import { normalizeNewlines, type MarkupEdit } from './script-markup';
 
 /**
@@ -58,58 +58,133 @@ function counted(text: string) {
   return { words, runtimeSec };
 }
 
-/** The chapters and sections of `script`, offsets into its newline-normalized text. */
-export function scriptOutline(script: string): OutlineChapter[] {
+/** A chapter as its own text reads it: offsets count from where that text starts. */
+interface ChapterShape extends Omit<OutlineChapter, 'plan'> {
+  /** Whether the render plans it: the parser drops a chapter with nothing to render. */
+  planned: boolean;
+}
+
+/** Chapter `slice` (opening with its `heading` line, `null` for the untitled opening). */
+function chapterShape(slice: string, heading: RegExpMatchArray | null): ChapterShape {
+  const lineEnd = heading ? heading[0].length : null;
+  const bodyStart = lineEnd ?? 0;
+  const sections: OutlineSection[] = [];
+  const marks = [...slice.slice(bodyStart).matchAll(SECTION_RE)];
+  marks.forEach((mark, index) => {
+    const at = bodyStart + (mark.index ?? 0);
+    const level = mark[2].length === 3 ? 3 : 2;
+    // A section runs over its own `###` subsections, to the next heading of its level or above.
+    const next = marks.slice(index + 1).find((later) => later[2].length <= level);
+    const sectionEnd = next ? bodyStart + (next.index ?? 0) : slice.length;
+    sections.push({
+      title: mark[3].trim(),
+      level,
+      start: at,
+      titleStart: at + mark[1].length,
+      lineEnd: at + mark[0].length,
+      end: sectionEnd,
+      ...counted(slice.slice(at, sectionEnd)),
+    });
+  });
+  return {
+    title: heading ? heading[2].trim() : null,
+    level: 1,
+    start: 0,
+    titleStart: heading ? heading[1].length : null,
+    lineEnd,
+    end: slice.length,
+    planned: scriptChapters(slice).length > 0,
+    sections,
+    ...counted(slice),
+  };
+}
+
+// A chapter reads the same wherever it stands — headings end chapters and
+// sections, and a chapter's words are its own — so chapters are kept by
+// their text: an edit reads again the one chapter it is in, not the book.
+// Two generations: reading another text in between (a passage, a story)
+// costs the book none of its chapters.
+let shapes = new Map<string, ChapterShape>();
+let olderShapes = new Map<string, ChapterShape>();
+// The last outlines read, newest first: the page, its Contents and a render
+// all read the same script.
+let outlines: { text: string; outline: readonly OutlineChapter[] }[] = [];
+
+/**
+ * The chapters and sections of `script`, offsets into its newline-normalized
+ * text. The outline is shared by every reader of the same script: never
+ * change it.
+ */
+export function scriptOutline(script: string): readonly OutlineChapter[] {
   const text = normalizeNewlines(script);
+  const known = outlines.find((entry) => entry.text === text);
+  if (known) return known.outline;
   const heads = [...text.matchAll(CHAPTER_RE)];
-  const raw: Array<{ match: RegExpMatchArray | null; start: number; end: number }> = [];
+  const raw: Array<{ heading: RegExpMatchArray | null; start: number; end: number }> = [];
   const firstHead = heads.length ? (heads[0].index ?? 0) : text.length;
   // Text before the first heading is a chapter when it holds anything.
-  if (text.slice(0, firstHead).trim()) raw.push({ match: null, start: 0, end: firstHead });
-  heads.forEach((match, index) => {
+  if (text.slice(0, firstHead).trim()) raw.push({ heading: null, start: 0, end: firstHead });
+  heads.forEach((heading, index) => {
     raw.push({
-      match,
-      start: match.index ?? 0,
+      heading,
+      start: heading.index ?? 0,
       end: index + 1 < heads.length ? (heads[index + 1].index ?? 0) : text.length,
     });
   });
+  const kept = new Map<string, ChapterShape>();
   let plan = 0;
-  return raw.map(({ match, start, end }) => {
+  const outline = raw.map(({ heading, start, end }): OutlineChapter => {
+    // A chapter's text opens with its heading line, or holds none: the text
+    // alone tells which.
     const slice = text.slice(start, end);
-    const lineEnd = match ? start + match[0].length : null;
-    const bodyStart = lineEnd ?? start;
-    const sections: OutlineSection[] = [];
-    const marks = [...text.slice(bodyStart, end).matchAll(SECTION_RE)];
-    marks.forEach((mark, index) => {
-      const at = bodyStart + (mark.index ?? 0);
-      const level = mark[2].length === 3 ? 3 : 2;
-      // A section runs over its own `###` subsections, to the next heading of its level or above.
-      const next = marks.slice(index + 1).find((later) => later[2].length <= level);
-      const sectionEnd = next ? bodyStart + (next.index ?? 0) : end;
-      sections.push({
-        title: mark[3].trim(),
-        level,
-        start: at,
-        titleStart: at + mark[1].length,
-        lineEnd: at + mark[0].length,
-        end: sectionEnd,
-        ...counted(text.slice(at, sectionEnd)),
-      });
-    });
-    // The parser drops a chapter with nothing to render; the plan's indexes skip it.
-    const planned = scriptChapters(slice).length > 0;
+    const shape =
+      kept.get(slice) ??
+      shapes.get(slice) ??
+      olderShapes.get(slice) ??
+      chapterShape(slice, heading);
+    kept.set(slice, shape);
+    const at = (offset: number | null) => (offset === null ? null : start + offset);
+    const { planned: _planned, ...node } = shape;
     return {
-      title: match ? match[2].trim() : null,
-      level: 1,
+      ...node,
       start,
-      titleStart: match ? start + match[1].length : null,
-      lineEnd,
+      titleStart: at(shape.titleStart),
+      lineEnd: at(shape.lineEnd),
       end,
-      plan: planned ? plan++ : null,
-      sections,
-      ...counted(slice),
+      // The plan's indexes skip a chapter with nothing to render.
+      plan: shape.planned ? plan++ : null,
+      sections: shape.sections.map((section) => ({
+        ...section,
+        start: start + section.start,
+        titleStart: at(section.titleStart),
+        lineEnd: at(section.lineEnd),
+        end: start + section.end,
+      })),
     };
   });
+  olderShapes = shapes;
+  shapes = kept;
+  outlines = [{ text, outline }, ...outlines.slice(0, 1)];
+  return outline;
+}
+
+/**
+ * The book's chapters, spoken words and estimated runtime — `scriptStats`'s
+ * figures — from its outline: each chapter counted on its own text, as the
+ * render reads it, so the Contents rows add up to it, and an edit recounts
+ * only the chapter it is in.
+ */
+export function outlineStats(outline: readonly OutlineChapter[]): {
+  chapters: number;
+  words: number;
+  runtimeSec: number;
+} {
+  const words = outline.reduce((sum, chapter) => sum + chapter.words, 0);
+  return {
+    chapters: Math.max(1, outline.filter((chapter) => chapter.title !== null).length),
+    words,
+    runtimeSec: words > 0 ? (words / AUDIOBOOK_WPM) * 60 : 0,
+  };
 }
 
 /** The node (chapter, or section inside it) holding `offset`. */

@@ -34,8 +34,9 @@ import { ProductionSettings } from './production-settings';
 import { PacingSettings, SpeechCheckReport } from './pacing-settings';
 import { BookOutline } from './book-outline';
 import { ContentsRail } from './contents-rail';
+import { outlineStats, scriptOutline } from './script-outline';
 import { useEditorZoom, useEditorZoomInput, zoomedText } from './editor-zoom';
-import { ExportHtmlButton } from './html-export';
+import { ExportHtmlButton } from './html-export-dialog';
 import { castVoice } from './cast-map';
 import { CastSettings, showsCastPanel } from './cast-settings';
 import { bookAutoLevels } from './auto-levels';
@@ -48,7 +49,7 @@ import {
 } from '@shared/utils/audiobookScript';
 import { BookSettings } from './book-settings';
 import { duplicateWords } from './book-options';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -59,13 +60,14 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { SyncedAudiobookPlayer } from './synced-audiobook-player';
-import { GeneratePanel } from './generate-panel';
+import { LongformGeneratePanel } from './generate-panel';
 import { generateBlockers } from './generate-blocker';
 import { LONGFORM_TARGET } from './generate-gates';
 import { EngineNotice } from '@/components/engine-notice';
 import { ValidationWarnings, type ScriptWarning } from './validation-warnings';
 import { getBridge } from '@/components/bridge';
 import { useProfiles } from '@/hooks/use-profiles';
+import { useSettledText } from '@/hooks/use-settled-text';
 import { apiJson, apiPath, describeError } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
@@ -80,8 +82,12 @@ import {
   resumeLongform,
   stopLongform,
   storyRetakeChapter,
-  useLongformSession,
   storiesImportEpoch,
+  useDraftField,
+  useLongformActive,
+  useLongformDraft,
+  useLongformState,
+  type Draft,
   type Mode,
 } from './longform-session';
 import { SAMPLE_AUDIOBOOK_SCRIPT } from '@shared/data/sampleAudiobook';
@@ -89,6 +95,23 @@ import { useTtsReadiness } from '@/hooks/use-tts-readiness';
 import { useReadingSettings } from '@/lib/reading-settings';
 /** Built once: the page re-renders on every keystroke in the script. */
 const BOOK_LANGUAGES = ['Auto', ...LANG_CODES.map((item) => item.label)];
+/** How long typing pauses before the script's warnings are read again. */
+const WARNINGS_DELAY_MS = 500;
+
+/**
+ * `next`, or the array equal to it item by item that this hook returned last:
+ * an array worked out anew on every keystroke keeps one identity while its
+ * items stay, so what it is passed to can skip rendering.
+ */
+function useSameArray<T extends readonly unknown[]>(next: T): T {
+  const [kept, setKept] = useState(next);
+  const same =
+    kept === next ||
+    (kept.length === next.length && kept.every((item, index) => Object.is(item, next[index])));
+  if (!same) setKept(next);
+  return same ? kept : next;
+}
+
 interface Recovery {
   job_id: string;
   /** `audiobook` or `story`. */
@@ -101,14 +124,26 @@ interface Recovery {
 }
 export function LongformPage({ mode }: { mode: Mode }) {
   const { t } = useTranslation();
-  const session = useLongformSession();
+  // The session a field at a time: a keystroke changes the draft alone.
+  const draft = useLongformDraft(mode);
+  const active = useLongformActive();
+  const renderError = useLongformState((session) => session.error);
+  const renderFailure = useLongformState((session) => session.failure);
+  const storageError = useLongformState((session) => session.storageError);
   const ttsOperation = mode === 'stories' ? 'longform' : 'audiobook';
   const ttsBlocker = useTtsReadiness(ttsOperation);
-  const draft = session.drafts[mode];
   const text =
     mode === 'audiobook' ? draft.script : draft.lines.map((line) => line.text).join('\n');
-  const names = useMemo(() => parseCastNames(text, draft.voiceCast), [text, draft.voiceCast]);
-  const stats = useMemo(() => scriptStats(text), [text]);
+  // One array while the script names the same voices, as most edits leave it.
+  const names = useSameArray(
+    useMemo(() => parseCastNames(text, draft.voiceCast), [text, draft.voiceCast]),
+  );
+  // A book is counted from its outline, as its Contents are: an edit counts
+  // again the one chapter it is in.
+  const stats = useMemo(
+    () => (mode === 'audiobook' ? outlineStats(scriptOutline(text)) : scriptStats(text)),
+    [mode, text],
+  );
   const statsLine = t('audiobook.stats', {
     chapters: stats.chapters,
     words: stats.words,
@@ -121,7 +156,9 @@ export function LongformPage({ mode }: { mode: Mode }) {
   const [importing, setImporting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [warningsDismissed, setWarningsDismissed] = useState(false);
+  // The script whose warnings were dismissed: they stay hidden until the
+  // script they describe changes.
+  const [warningsDismissedFor, setWarningsDismissedFor] = useState<string | null>(null);
   const [clearOpen, setClearOpen] = useState(false);
   const audiobookInput = useRef<HTMLTextAreaElement>(null);
   const [caret] = useState(() => createCaretSource());
@@ -129,16 +166,25 @@ export function LongformPage({ mode }: { mode: Mode }) {
   const editorFrame = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useEditorZoom();
   useEditorZoomInput(editorFrame);
-  const locked = !!session.active || importing;
+  const locked = !!active || importing;
   const scriptLines = scriptSize(mode, draft);
   const query = useQuery({
     queryKey: ['longform-recovery'],
     queryFn: ({ signal }) => apiJson<{ jobs: Recovery[] }>('/audiobook/jobs', { signal }),
   });
   useEffect(() => {
-    if (!session.active) void query.refetch();
-  }, [session.active]);
-  const set = (value: Parameters<typeof editLongform>[1]) => editLongform(mode, value);
+    if (!active) void query.refetch();
+  }, [active]);
+  const set = useCallback((value: Partial<Draft>) => editLongform(mode, value), [mode]);
+  // The script editor, for the tools that edit it: the toolbar, the contents.
+  const scriptTarget = useCallback(
+    () =>
+      audiobookInput.current && {
+        element: audiobookInput.current,
+        setText: (script: string) => set({ script }),
+      },
+    [set],
+  );
   const usable =
     mode === 'audiobook'
       ? draft.script.trim().length > 0
@@ -158,34 +204,39 @@ export function LongformPage({ mode }: { mode: Mode }) {
     () => names.filter((name) => !profiles.some((profile) => profile.id === name)),
     [names, profiles],
   );
+  // Hints about the script, not checks on it: read once typing pauses, and
+  // at once for a script replaced (another book, Clear, an import).
+  const settledScript = useSettledText(draft.script, WARNINGS_DELAY_MS);
   const warnings = useMemo(
     () =>
       mode === 'audiobook'
-        ? (validateScript(draft.script, {
+        ? (validateScript(settledScript, {
             mappedNames: Object.keys(draft.voiceCast).filter((name) =>
               Boolean(draft.voiceCast[name]),
             ),
             profileIds: profiles.map((profile) => profile.id),
           }) as ScriptWarning[])
         : [],
-    [draft.script, draft.voiceCast, mode, profiles],
+    [settledScript, draft.voiceCast, mode, profiles],
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // One preview (a passage, a chapter, a Stories line) renders at a time and
   // Generate waits for it; the editor, cast and settings stay open meanwhile.
   const previews = usePreviewLock();
-  const blockers = generateBlockers({
-    mode,
-    busyElsewhere: Boolean(session.active) && session.active !== mode,
-    importing,
-    previewing: previews.busy,
-    tts: ttsBlocker,
-    usable,
-    voicesReady,
-    defaultVoiceReady: Boolean(defaultVoice),
-    castReady,
-    duplicateLexicon: duplicateWords(draft.lexicon),
-  });
+  const blockers = useSameArray(
+    generateBlockers({
+      mode,
+      busyElsewhere: Boolean(active) && active !== mode,
+      importing,
+      previewing: previews.busy,
+      tts: ttsBlocker,
+      usable,
+      voicesReady,
+      defaultVoiceReady: Boolean(defaultVoice),
+      castReady,
+      duplicateLexicon: duplicateWords(draft.lexicon),
+    }),
+  );
   const needsDefaultVoice = blockers.includes('default_voice');
   const canPreview = ttsBlocker === null && voicesReady && !duplicateWords(draft.lexicon);
   // The engine, preset and reading a preview renders under: one rendered
@@ -248,22 +299,25 @@ export function LongformPage({ mode }: { mode: Mode }) {
     },
   });
   const canRetake = phrases && (mode === 'audiobook' ? canPreview : ttsBlocker === null);
-  const generatePanel = (
-    <GeneratePanel
-      mode={mode}
-      session={session}
-      blockers={blockers}
-      setup={{
-        engine: ttsBlocker,
-        usable,
-        voiceReady,
-        // The Cast panel lists these names; Stories reads a profile id inline as is.
-        casting: (mode === 'audiobook' ? names : inlineNames).length > 0,
-        castReady,
-      }}
-      onGenerate={() => void renderLongform(mode)}
-      onStop={stopLongform}
-    />
+  // The Cast panel lists these names; Stories reads a profile id inline as is.
+  const casting = (mode === 'audiobook' ? names : inlineNames).length > 0;
+  const setup = useMemo(
+    () => ({ engine: ttsBlocker, usable, voiceReady, casting, castReady }),
+    [ttsBlocker, usable, voiceReady, casting, castReady],
+  );
+  const generate = useCallback(() => void renderLongform(mode), [mode]);
+  // The same element while what it shows stays: typing leaves it be.
+  const generatePanel = useMemo(
+    () => (
+      <LongformGeneratePanel
+        mode={mode}
+        blockers={blockers}
+        setup={setup}
+        onGenerate={generate}
+        onStop={stopLongform}
+      />
+    ),
+    [mode, blockers, setup, generate],
   );
   const importFile = async (file: File) => {
     const importEpoch = storiesImportEpoch.current;
@@ -344,165 +398,18 @@ export function LongformPage({ mode }: { mode: Mode }) {
         </Link>
       </WorkspaceHeader>
       <div className="flex min-h-0 flex-1 @max-[40rem]:flex-col">
-        <SecondarySidebar
-          title={t(mode === 'stories' ? 'nav.stories' : 'audiobook.title')}
-          icon={mode === 'stories' ? AudioLinesIcon : BookOpenTextIcon}
-          size="wide"
-          variant="controls"
+        <BookSetup
+          mode={mode}
+          locked={locked}
+          names={names}
+          inlineNames={inlineNames}
+          needsDefaultVoice={needsDefaultVoice}
+          jobs={query.data?.jobs}
+          resumeBlocked={locked || ttsBlocker !== null || previews.busy}
+          onBusy={setImporting}
           footer={generatePanel}
           onCollapsedChange={setSidebarCollapsed}
-          className="space-y-3 [&>details]:rounded-xl [&>details]:border [&>details]:border-border/60 [&>details]:bg-muted/20 [&>details]:p-3 [&>section]:rounded-xl [&>section]:border [&>section]:border-border/60 [&>section]:bg-muted/20 [&>section]:p-3"
-        >
-          <div className="space-y-4 rounded-xl border border-border/60 bg-muted/20 p-3">
-            <label className="block space-y-2 text-xs font-medium text-muted-foreground">
-              <span className="flex items-center gap-2">
-                <BookOpenTextIcon className="size-4" aria-hidden="true" />
-                {t('audiobook.meta_title')}
-              </span>
-              <Input
-                value={draft.title}
-                spellCheck={false}
-                disabled={locked}
-                placeholder={t(mode === 'stories' ? 'stories.untitled' : 'audiobook.untitled')}
-                onChange={(e) => set({ title: e.target.value })}
-              />
-            </label>
-            <div
-              role="group"
-              aria-labelledby="longform-default-voice"
-              data-gate-target={LONGFORM_TARGET.defaultVoice}
-              data-attention={needsDefaultVoice ? '' : undefined}
-              className="-mx-1.5 space-y-1 rounded-lg p-1.5 data-attention:bg-amber-500/8 data-attention:ring-1 data-attention:ring-amber-500/60"
-            >
-              <h2
-                id="longform-default-voice"
-                className="flex items-center gap-2 text-xs font-medium text-muted-foreground"
-              >
-                <FingerprintIcon className="size-4 shrink-0" aria-hidden="true" />
-                {t('audiobook.default_voice')}
-              </h2>
-              <p
-                className={cn(
-                  'pb-1 text-[11px] leading-snug',
-                  needsDefaultVoice
-                    ? 'text-amber-600 dark:text-amber-400'
-                    : 'text-muted-foreground',
-                )}
-              >
-                {t(
-                  mode === 'audiobook'
-                    ? 'audiobook.default_voice_hint'
-                    : 'stories.default_voice_hint',
-                )}
-              </p>
-              <VoicePicker
-                value={draft.voice || null}
-                onChange={(voice) => set({ voice })}
-                profiles={profiles}
-                disabled={locked}
-                loading={profilesLoading}
-                attention={needsDefaultVoice}
-                aria-label={t('audiobook.default_voice')}
-              />
-              <ProfilesFailure query={profilesQuery} />
-            </div>
-            {mode === 'stories' && <StorySpeed draft={draft} disabled={locked} onChange={set} />}
-            <div className="space-y-2">
-              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <LanguagesIcon className="size-4" aria-hidden="true" />
-                {t('clone.language')}
-              </h2>
-              <EngineLanguagePicker
-                operation={ttsOperation}
-                value={draft.language}
-                options={BOOK_LANGUAGES}
-                disabled={locked}
-                onValueChange={(language) => set({ language })}
-              />
-            </div>
-            <div className="space-y-2">
-              <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                <FileAudioIcon className="size-4" aria-hidden="true" />
-                {t('audiobook.format')}
-              </h2>
-              <div className="flex gap-1 rounded-lg bg-background/40 p-1">
-                {(['m4b', 'mp3'] as const).map((format) => (
-                  <Button
-                    key={format}
-                    variant={draft.format === format ? 'secondary' : 'ghost'}
-                    disabled={locked}
-                    onClick={() => set({ format })}
-                  >
-                    {t('audiobook.format_' + format)}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
-          {mode === 'stories' && (
-            <StoryCast draft={draft} profiles={profiles} disabled={locked} onChange={set} />
-          )}
-          {showsCastPanel(mode, inlineNames, draft.voiceGains) && (
-            <CastSettings
-              title={mode === 'stories' ? t('stories.inline_voices') : undefined}
-              names={mode === 'audiobook' ? names : inlineNames}
-              voices={names}
-              cast={draft.voiceCast}
-              profiles={profiles}
-              disabled={locked}
-              loading={profilesLoading}
-              onChange={(voiceCast) => set({ voiceCast })}
-              voiceGains={draft.voiceGains}
-              onVoiceGains={(voiceGains) => set({ voiceGains })}
-              defaultVoiceName={defaultVoice?.name}
-              autoLevels={
-                draft.overrides.levelVoices !== false
-                  ? bookAutoLevels(draft.outputChapters)
-                  : undefined
-              }
-            />
-          )}
-          <PacingSettings
-            value={draft.overrides}
-            disabled={locked}
-            onChange={(overrides) => set({ overrides })}
-          />
-          <ProductionSettings
-            value={draft.overrides}
-            disabled={locked}
-            onChange={(overrides) => set({ overrides })}
-          />
-          <BookSettings
-            draft={draft}
-            disabled={locked}
-            pronunciation={mode === 'audiobook'}
-            onChange={set}
-            onBusy={setImporting}
-          />
-          {(query.data?.jobs || [])
-            .filter((job) => job.type === (mode === 'stories' ? 'story' : 'audiobook'))
-            .map((job) => (
-              <div key={job.job_id} className="space-y-2 border-t border-border/50 pt-4 text-xs">
-                <h2 className="font-medium">{t('audiobook.recovery_title')}</h2>
-                <p>{job.title || t('audiobook.untitled')}</p>
-                <p>
-                  {t('audiobook.recovery_progress', {
-                    done: job.chapters_done,
-                    total: job.total_chapters,
-                  })}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={locked || ttsBlocker !== null || previews.busy}
-                  // Into the book it belongs to, never the one that happens to be open.
-                  onClick={() => void resumeLongform(mode, job)}
-                >
-                  {t('common.resume')}
-                </Button>
-              </div>
-            ))}
-        </SecondarySidebar>
+        />
         <section className="flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col gap-4 px-6 py-5">
             <div className="flex items-center justify-between gap-3">
@@ -580,12 +487,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               >
                 <MarkupToolbar
                   className="shrink-0 rounded-none border-0 border-b border-border/50"
-                  getTarget={() =>
-                    audiobookInput.current && {
-                      element: audiobookInput.current,
-                      setText: (script) => set({ script }),
-                    }
-                  }
+                  getTarget={scriptTarget}
                   disabled={locked}
                   profiles={profiles}
                   loading={profilesLoading}
@@ -680,23 +582,13 @@ export function LongformPage({ mode }: { mode: Mode }) {
                       previews={previews}
                       retaken={retaken}
                       previewSettings={previewSettings}
-                      getTarget={() =>
-                        audiobookInput.current && {
-                          element: audiobookInput.current,
-                          setText: (script) => set({ script }),
-                        }
-                      }
+                      getTarget={scriptTarget}
                     />
                   )}
                 >
                   <MarkupEditorTools
                     className="flex min-h-96 min-w-0 flex-1 flex-col"
-                    getTarget={() =>
-                      audiobookInput.current && {
-                        element: audiobookInput.current,
-                        setText: (script) => set({ script }),
-                      }
-                    }
+                    getTarget={scriptTarget}
                     disabled={locked}
                     headings
                     profiles={profiles}
@@ -726,10 +618,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                       placeholder={t('audiobook.script_placeholder')}
                       disabled={locked}
                       onCaretChange={caret.set}
-                      onValueChange={(script) => {
-                        set({ script });
-                        if (warningsDismissed) setWarningsDismissed(false);
-                      }}
+                      onValueChange={(script) => set({ script })}
                     />
                   </MarkupEditorTools>
                 </ContentsRail>
@@ -764,16 +653,16 @@ export function LongformPage({ mode }: { mode: Mode }) {
             )}
             {/* Audiobook shows these in its editor's status bar. */}
             {mode === 'stories' && <p className="text-xs text-muted-foreground">{statsLine}</p>}
-            {!warningsDismissed && warnings.length > 0 && !session.active && (
+            {warningsDismissedFor !== settledScript && warnings.length > 0 && !active && (
               <ValidationWarnings
                 warnings={warnings}
-                onDismiss={() => setWarningsDismissed(true)}
+                onDismiss={() => setWarningsDismissedFor(settledScript)}
               />
             )}
-            {session.error && (
+            {renderError && (
               <PipelineFailure
-                failure={session.failure}
-                fallback={session.error}
+                failure={renderFailure}
+                fallback={renderError}
                 onDismiss={dismissLongformError}
               />
             )}
@@ -781,7 +670,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               <PipelineFailure fallback={localError} onDismiss={() => setLocalError(null)} />
             )}
             <EngineNotice operation={ttsOperation} />
-            {session.storageError && (
+            {storageError && (
               <div role="alert" className="text-sm text-destructive">
                 {t('common.error')}
                 <Link to="/settings/logs" className="ms-3 underline">
@@ -822,13 +711,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                         {t('audiobook.download_cues')}
                       </Button>
                     )}
-                    {mode === 'audiobook' && (
-                      <ExportHtmlButton
-                        draft={draft}
-                        disabled={exporting}
-                        onError={setLocalError}
-                      />
-                    )}
+                    <ExportHtmlButton draft={draft} mode={mode} disabled={exporting} />
                     <Button
                       variant="ghost"
                       size="sm"
@@ -864,6 +747,221 @@ export function LongformPage({ mode }: { mode: Mode }) {
     </div>
   );
 }
+
+/**
+ * The book's setup in the side column: its title, voices, language, format,
+ * cast and settings, and the renders it can resume, with Generate (`footer`)
+ * pinned under them. It reads the fields of the draft it shows itself, one
+ * at a time, so an edit to the script — every keystroke — renders none of
+ * it; and every change it makes is worked out from those fields as they are
+ * now, never from a copy of the draft an earlier render held.
+ */
+const BookSetup = memo(function BookSetup({
+  mode,
+  locked,
+  names,
+  inlineNames,
+  needsDefaultVoice,
+  jobs,
+  resumeBlocked,
+  onBusy,
+  footer,
+  onCollapsedChange,
+}: {
+  mode: Mode;
+  locked: boolean;
+  /** The script's voice names, in the order they take their colors. */
+  names: string[];
+  /** Stories: the names it reads inline that are no profile id. */
+  inlineNames: string[];
+  needsDefaultVoice: boolean;
+  /** Interrupted renders, of either mode (`GET /audiobook/jobs`). */
+  jobs: Recovery[] | undefined;
+  /** Why a render cannot resume now: locked, the engine, a preview. */
+  resumeBlocked: boolean;
+  onBusy(busy: boolean): void;
+  footer: ReactNode;
+  onCollapsedChange(collapsed: boolean): void;
+}) {
+  const { t } = useTranslation();
+  const title = useDraftField(mode, 'title');
+  const voice = useDraftField(mode, 'voice');
+  const language = useDraftField(mode, 'language');
+  const format = useDraftField(mode, 'format');
+  const voiceCast = useDraftField(mode, 'voiceCast');
+  const voiceGains = useDraftField(mode, 'voiceGains');
+  const overrides = useDraftField(mode, 'overrides');
+  const outputChapters = useDraftField(mode, 'outputChapters');
+  const metadata = useDraftField(mode, 'metadata');
+  const loudness = useDraftField(mode, 'loudness');
+  const cover = useDraftField(mode, 'cover');
+  const lexicon = useDraftField(mode, 'lexicon');
+  // Stories' speed and cast read and write its lines: there, the whole draft.
+  const story = useLongformState((session) => (mode === 'stories' ? session.drafts.stories : null));
+  const set = useCallback((value: Partial<Draft>) => editLongform(mode, value), [mode]);
+  const profilesQuery = useProfiles();
+  const { profiles, loading: profilesLoading } = profileListState(profilesQuery);
+  const defaultVoiceName = profiles.find((profile) => profile.id === voice)?.name;
+  const book = useMemo(
+    () => ({ metadata, loudness, cover, lexicon }),
+    [metadata, loudness, cover, lexicon],
+  );
+  const autoLevels = useMemo(
+    () => (overrides.levelVoices !== false ? bookAutoLevels(outputChapters) : undefined),
+    [overrides.levelVoices, outputChapters],
+  );
+  return (
+    <SecondarySidebar
+      title={t(mode === 'stories' ? 'nav.stories' : 'audiobook.title')}
+      icon={mode === 'stories' ? AudioLinesIcon : BookOpenTextIcon}
+      size="wide"
+      variant="controls"
+      footer={footer}
+      onCollapsedChange={onCollapsedChange}
+      className="space-y-3 [&>details]:rounded-xl [&>details]:border [&>details]:border-border/60 [&>details]:bg-muted/20 [&>details]:p-3 [&>section]:rounded-xl [&>section]:border [&>section]:border-border/60 [&>section]:bg-muted/20 [&>section]:p-3"
+    >
+      <div className="space-y-4 rounded-xl border border-border/60 bg-muted/20 p-3">
+        <label className="block space-y-2 text-xs font-medium text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <BookOpenTextIcon className="size-4" aria-hidden="true" />
+            {t('audiobook.meta_title')}
+          </span>
+          <Input
+            value={title}
+            spellCheck={false}
+            disabled={locked}
+            placeholder={t(mode === 'stories' ? 'stories.untitled' : 'audiobook.untitled')}
+            onChange={(e) => set({ title: e.target.value })}
+          />
+        </label>
+        <div
+          role="group"
+          aria-labelledby="longform-default-voice"
+          data-gate-target={LONGFORM_TARGET.defaultVoice}
+          data-attention={needsDefaultVoice ? '' : undefined}
+          className="-mx-1.5 space-y-1 rounded-lg p-1.5 data-attention:bg-amber-500/8 data-attention:ring-1 data-attention:ring-amber-500/60"
+        >
+          <h2
+            id="longform-default-voice"
+            className="flex items-center gap-2 text-xs font-medium text-muted-foreground"
+          >
+            <FingerprintIcon className="size-4 shrink-0" aria-hidden="true" />
+            {t('audiobook.default_voice')}
+          </h2>
+          <p
+            className={cn(
+              'pb-1 text-[11px] leading-snug',
+              needsDefaultVoice ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground',
+            )}
+          >
+            {t(
+              mode === 'audiobook' ? 'audiobook.default_voice_hint' : 'stories.default_voice_hint',
+            )}
+          </p>
+          <VoicePicker
+            value={voice || null}
+            onChange={(voice) => set({ voice })}
+            profiles={profiles}
+            disabled={locked}
+            loading={profilesLoading}
+            attention={needsDefaultVoice}
+            aria-label={t('audiobook.default_voice')}
+          />
+          <ProfilesFailure query={profilesQuery} />
+        </div>
+        {story && <StorySpeed draft={story} disabled={locked} onChange={set} />}
+        <div className="space-y-2">
+          <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <LanguagesIcon className="size-4" aria-hidden="true" />
+            {t('clone.language')}
+          </h2>
+          <EngineLanguagePicker
+            operation={mode === 'stories' ? 'longform' : 'audiobook'}
+            value={language}
+            options={BOOK_LANGUAGES}
+            disabled={locked}
+            onValueChange={(language) => set({ language })}
+          />
+        </div>
+        <div className="space-y-2">
+          <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <FileAudioIcon className="size-4" aria-hidden="true" />
+            {t('audiobook.format')}
+          </h2>
+          <div className="flex gap-1 rounded-lg bg-background/40 p-1">
+            {(['m4b', 'mp3'] as const).map((value) => (
+              <Button
+                key={value}
+                variant={format === value ? 'secondary' : 'ghost'}
+                disabled={locked}
+                onClick={() => set({ format: value })}
+              >
+                {t('audiobook.format_' + value)}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
+      {story && <StoryCast draft={story} profiles={profiles} disabled={locked} onChange={set} />}
+      {showsCastPanel(mode, inlineNames, voiceGains) && (
+        <CastSettings
+          title={mode === 'stories' ? t('stories.inline_voices') : undefined}
+          names={mode === 'audiobook' ? names : inlineNames}
+          voices={names}
+          cast={voiceCast}
+          profiles={profiles}
+          disabled={locked}
+          loading={profilesLoading}
+          onChange={(voiceCast) => set({ voiceCast })}
+          voiceGains={voiceGains}
+          onVoiceGains={(voiceGains) => set({ voiceGains })}
+          defaultVoiceName={defaultVoiceName}
+          autoLevels={autoLevels}
+        />
+      )}
+      <PacingSettings
+        value={overrides}
+        disabled={locked}
+        onChange={(overrides) => set({ overrides })}
+      />
+      <ProductionSettings
+        value={overrides}
+        disabled={locked}
+        onChange={(overrides) => set({ overrides })}
+      />
+      <BookSettings
+        draft={book}
+        disabled={locked}
+        pronunciation={mode === 'audiobook'}
+        onChange={set}
+        onBusy={onBusy}
+      />
+      {(jobs || [])
+        .filter((job) => job.type === (mode === 'stories' ? 'story' : 'audiobook'))
+        .map((job) => (
+          <div key={job.job_id} className="space-y-2 border-t border-border/50 pt-4 text-xs">
+            <h2 className="font-medium">{t('audiobook.recovery_title')}</h2>
+            <p>{job.title || t('audiobook.untitled')}</p>
+            <p>
+              {t('audiobook.recovery_progress', {
+                done: job.chapters_done,
+                total: job.total_chapters,
+              })}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={resumeBlocked}
+              // Into the book it belongs to, never the one that happens to be open.
+              onClick={() => void resumeLongform(mode, job)}
+            >
+              {t('common.resume')}
+            </Button>
+          </div>
+        ))}
+    </SecondarySidebar>
+  );
+});
 
 export function StoriesPage() {
   return <LongformPage key="stories" mode="stories" />;

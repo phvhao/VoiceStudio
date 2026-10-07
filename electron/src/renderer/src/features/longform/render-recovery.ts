@@ -152,6 +152,8 @@ export function draftFromRender(
     format: render.summary?.format === 'mp3' ? 'mp3' : 'm4b',
     output: render.output,
     outputScript: mode === 'audiobook' ? book : '',
+    // Rebuilt from the render's timeline, which its HTML book reads itself.
+    outputStory: null,
     outputChapters,
   };
 }

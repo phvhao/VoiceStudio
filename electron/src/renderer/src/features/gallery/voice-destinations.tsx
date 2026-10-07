@@ -2,7 +2,7 @@ import { Menu } from '@base-ui/react/menu';
 import { BookOpenIcon, EllipsisIcon, UsersIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { buttonVariants } from '@/components/ui/button';
-import { useLongformSession, type Mode } from '@/features/longform/longform-session';
+import { useLongformActive, type Mode } from '@/features/longform/longform-session';
 export function VoiceDestinations({
   disabled,
   onChoose,
@@ -11,7 +11,7 @@ export function VoiceDestinations({
   onChoose(target: Mode): void;
 }) {
   const { t } = useTranslation();
-  const production = useLongformSession().active;
+  const production = useLongformActive();
   return (
     <Menu.Root>
       <Menu.Trigger

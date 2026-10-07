@@ -59,6 +59,7 @@ GET /archetypes/{archetype_id}/preview/state
 GET /audio/{audio_id}.ogg
 GET /audio/{audio_id}.opus
 GET /audio/{audio_id}/quality
+GET /audiobook/export/html/templates
 GET /audiobook/export/html/{export_id}
 GET /audiobook/jobs
 GET /audiobook/sampling
@@ -118,6 +119,8 @@ GET /engines/tts
 GET /engines/{engine_id}/disk-usage
 GET /engines/{engine_id}/health
 GET /export/history
+GET /fonts
+GET /fonts/{font_id}/{file_name}
 GET /gallery/categories
 GET /gallery/voices
 GET /gallery/voices/{voice_id}
@@ -204,6 +207,7 @@ POST /archetypes/{archetype_id}/use
 POST /audiobook
 POST /audiobook/cover
 POST /audiobook/export/html
+POST /audiobook/export/html/preview
 POST /audiobook/import
 POST /audiobook/outline
 POST /audiobook/plan

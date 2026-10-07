@@ -14,6 +14,7 @@ App modules are resolved at call time: other suites reload them.
 from __future__ import annotations
 
 import asyncio
+import html
 import importlib
 import json
 import os
@@ -391,22 +392,25 @@ def test_html_export_zips_a_self_contained_page_and_the_audio(outputs, exports):
         assert sorted(archive.namelist()) == ["audio/audiobook_h1.m4a", "cover.png", "index.html"]
         assert archive.read("audio/audiobook_h1.m4a") == (outputs / name).read_bytes()
         page = archive.read("index.html").decode("utf-8")
-    # No network: no URL, no external resource of any kind.
-    assert not re.search(r"https?:|//[a-z]|@import|url\(", page, re.I)
+    # No network: no URL, no external resource of any kind but the fonts the
+    # page carries inside it.
+    bare = re.sub(r"url\(data:font/woff2;base64,[A-Za-z0-9+/=]*\)", "url(FONT)", page)
+    assert not re.search(r"https?:|//[a-z]|@import|url\((?!FONT\))", bare, re.I)
     assert 'src="audio/audiobook_h1.m4a"' in page and 'src="cover.png"' in page
-    assert '<html lang="vi" dir="ltr">' in page
+    assert '<html lang="vi" dir="ltr" data-template="classic"' in page
     # Book text is escaped everywhere it lands.
     assert "<title>My &lt;Book&gt; &amp; co</title>" in page and "A &lt;uthor&gt;" in page
     assert "alert(1)" in page and "<script>alert" not in page
     assert page.count("</script>") == 2  # the data block and the page script
-    data = _page_data(page)
-    chapter = data["chapters"][0]
-    assert chapter["title"] == "One " + _NASTY
-    assert [p["text"] for p in chapter["phrases"]][0] == "Hello " + _NASTY
-    assert chapter["sections"] == [{"title": "Part two", "level": 2, "start": 1.5, "phrase": 1}]
+    nasty = html.escape(_NASTY)
+    assert f"<h2>One {nasty}</h2>" in page and f">Hello {nasty}</span>" in page
+    # The section heading is read aloud: its phrase is the heading.
+    assert re.search(r'<h3 id="s-1-1"><span class="ph" data-s="1.5" data-e="2">Part two</span>'
+                     r"</h3>", page)
+    assert 'data-seek="1.5" data-target="s-1-1"' in page
     assert "secret-cache-key" not in page  # the cache key stays home
-    assert data["labels"]["play"] == "Phát" and data["labels"]["pause"] == "Pause"
-    assert "bogus" not in data["labels"] and "Mục lục" in page
+    assert _page_data(page)["labels"] == {"play": "Phát", "pause": "Pause"}
+    assert '"x"' not in page and "Mục lục" in page
 
 
 def test_html_export_estimates_a_timeline_for_a_book_without_one(outputs, exports):
@@ -415,10 +419,11 @@ def test_html_export_estimates_a_timeline_for_a_book_without_one(outputs, export
     got = _export(output=name, text=script, chapter_durations=[6.0, None, 2.0])
     with _zip(exports, got) as archive:
         assert "audio/audiobook_h2.mp3" in archive.namelist()
-        data = _page_data(archive.read("index.html").decode("utf-8"))
-    assert [(c["title"], c["start"], c["end"], c["precision"]) for c in data["chapters"]] == [
-        ("One", 0.0, 6.0, "chapter"), ("Three", 6.0, 8.0, "chapter")]
-    assert data["chapters"][0]["sections"][0]["title"] == "Sub"
+        page = archive.read("index.html").decode("utf-8")
+    # The chapter that failed is not in the file; the others are timed as wholes.
+    assert re.findall(r'<section class="chapter" id="chapter-\d" data-start="([\d.]+)" '
+                      r'data-title="([^"]+)" data-even>', page) == [("0", "One"), ("6", "Three")]
+    assert re.search(r'<h3 id="s-1-1"><span class="ph"[^>]*>Sub</span></h3>', page)
 
 
 def test_html_export_is_downloaded_once_and_leaves_no_copy_of_the_book(outputs, exports):
@@ -505,7 +510,7 @@ def test_html_export_tags_the_book_text_with_its_own_language(outputs, exports):
     with _zip(exports, got) as archive:
         page = archive.read("index.html").decode("utf-8")
     # The page's words are the app's; the book's text is in its own language.
-    assert '<html lang="ar" dir="rtl">' in page
+    assert '<html lang="ar" dir="rtl" ' in page
     assert '<main id="text" lang="en" dir="auto">' in page
     assert '<ol id="toc" lang="en" dir="auto">' in page
     got = _export(output=name, book_lang="not a tag!")
@@ -521,9 +526,8 @@ def test_html_export_names_an_untitled_chapter_in_the_app_language(outputs, expo
         page = archive.read("index.html").decode("utf-8")
     # The text before the first heading is the book's opening: named in the
     # app's words, not numbered, so "Two" is chapter 1.
-    chapters = _page_data(page)["chapters"]
-    assert [(c["title"], c["number"], c.get("intro")) for c in chapters] == [
-        ("Opening", None, True), ("Two", 1, None)]
+    assert 'data-title="Opening" data-app-title' in page
+    assert '<p class="label" lang="en" dir="ltr">Chương 1</p><h2>Two</h2>' in page
     # The page's title falls back to the first chapter the script titled.
     assert "<title>Two</title>" in page
     # Every chapter untitled (a Stories-like plan): numbered in the app's words.
@@ -555,7 +559,10 @@ def test_page_json_cannot_close_its_script_block():
     html_mod = _mod("services.audiobook_html")
     page = html_mod.render_page(title="t", timeline={"chapters": [{
         "title": "<!-- </script>", "start": 0, "end": 1, "precision": "phrase",
-        "phrases": [{"text": " &", "start": 0, "end": 1}]}]}, audio_src="audio/a.m4a")
+        "phrases": [{"text": " &", "start": 0, "end": 1}]}]}, audio_src="audio/a.m4a",
+        labels={"play": "<!-- </script>", "pause": "a &"})
     block = re.search(r'id="book-data">(.*?)</script>', page, re.S).group(1)
     assert "<" not in block and ">" not in block and "&" not in block and " " not in block
-    assert json.loads(block)["chapters"][0]["title"] == "<!-- </script>"
+    assert json.loads(block)["labels"] == {"play": "<!-- </script>", "pause": "a &"}
+    # The book's own text is set in the page itself, escaped.
+    assert "<h2>&lt;!-- &lt;/script&gt;</h2>" in page and "> &amp;</span>" in page

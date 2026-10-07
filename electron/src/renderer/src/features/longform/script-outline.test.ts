@@ -1,13 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { scriptChapters } from '@shared/utils/audiobookLyrics';
+import { scriptStats } from '@shared/utils/audiobookScript';
+import { SAMPLE_AUDIOBOOK_SCRIPT } from '@shared/data/sampleAudiobook';
 import {
   displayTitle,
   insertHeading,
   outlineNodeAt,
+  outlineStats,
   removeHeading,
   renameHeading,
   scriptOutline,
 } from './script-outline';
+
+// How many chapters the outline reads (each is parsed for the render's plan).
+const parsed = vi.hoisted(() => ({ chapters: 0 }));
+vi.mock('@shared/utils/audiobookLyrics', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/utils/audiobookLyrics')>();
+  return {
+    ...actual,
+    scriptChapters: (script: string) => {
+      parsed.chapters += 1;
+      return actual.scriptChapters(script);
+    },
+  };
+});
 
 const SCRIPT = [
   'An opening line.',
@@ -91,6 +107,86 @@ describe('scriptOutline', () => {
     );
     expect(outlineNodeAt(outline, SCRIPT.indexOf('First'))?.title).toBe('One');
     expect(outlineNodeAt(outline, 0)?.title).toBeNull();
+  });
+});
+
+// A book of the sample's chapters with an intro, sections and words that have
+// no spaces between them.
+const BOOK = [
+  'An intro before any heading, [pause 500ms] read as a chapter of its own.',
+  ...[1, 2, 3].map((n) =>
+    SAMPLE_AUDIOBOOK_SCRIPT.replace(/^# (.*)$/gm, `# $1 ${n}`).replace(
+      '[voice:Mara]',
+      `## Part ${n}\n[voice:Mara]`,
+    ),
+  ),
+  '# 第四章\n我爱你。你好吗？ [[gif|jiff]] สวัสดีครับ\n### Deeper\nlast words',
+].join('\n');
+
+/** The outline a fresh module reads, with nothing kept from earlier texts. */
+async function freshOutline(text: string) {
+  vi.resetModules();
+  return (await import('./script-outline')).scriptOutline(text);
+}
+
+describe('scriptOutline kept by chapter', () => {
+  beforeEach(() => {
+    parsed.chapters = 0;
+  });
+
+  it('reads every edit exactly as a fresh outline does', async () => {
+    const middle = (text: string, of: string) => text.indexOf(of) + Math.floor(of.length / 2);
+    const at = middle(BOOK, 'counting each step');
+    const edits = [
+      BOOK,
+      // Typing in a chapter, in a section, in the intro.
+      BOOK.slice(0, at) + 'x' + BOOK.slice(at),
+      BOOK.replace('## Part 2', '## Part 2b'),
+      BOOK.replace('An intro', 'A longer intro'),
+      // A heading added inside a chapter splits it; one removed joins two.
+      BOOK.replace('She climbed', '# Inserted\nShe climbed'),
+      BOOK.replace(/^# .* 2$/m, 'no longer a heading'),
+      // A line turned into a section, a chapter left with nothing to render.
+      BOOK.replace('At the top', '### At the top'),
+      BOOK.replace(/(# [^\n]* 3\n)[\s\S]*?(?=\n# )/, '$1[pause 1s]\n'),
+      // Windows line endings, a cut, nothing at all.
+      BOOK.replaceAll('\n', '\r\n'),
+      BOOK.slice(0, BOOK.length / 2),
+      '',
+      BOOK,
+    ];
+    for (const text of edits) expect(scriptOutline(text)).toEqual(await freshOutline(text));
+  });
+
+  it('reads again only the chapter an edit is in', () => {
+    scriptOutline(BOOK);
+    const at = BOOK.indexOf('counting each step');
+    parsed.chapters = 0;
+    const typed = BOOK.slice(0, at) + 'x' + BOOK.slice(at);
+    const outline = scriptOutline(typed);
+    expect(parsed.chapters).toBe(1);
+    // The same text again reads nothing, and is the same outline.
+    expect(scriptOutline(typed)).toBe(outline);
+    expect(parsed.chapters).toBe(1);
+    // Reading another text in between costs the book none of its chapters.
+    scriptOutline('# Another\ntext');
+    parsed.chapters = 0;
+    scriptOutline(typed.replace('counting', 'counted'));
+    expect(parsed.chapters).toBe(1);
+  });
+
+  it('counts the book as scriptStats does, from its chapters', () => {
+    for (const text of [
+      BOOK,
+      BOOK.replaceAll('\n', '\r\n'),
+      SAMPLE_AUDIOBOOK_SCRIPT,
+      'Prose with no heading at all.\n\nMore.',
+      '# Only a heading',
+      '[pause 1s] [voice:Mara]',
+      '   \n\t',
+      '',
+    ])
+      expect(outlineStats(scriptOutline(text))).toEqual(scriptStats(text));
   });
 });
 

@@ -383,6 +383,12 @@ class Span:
     #: rendered timeline only, for the reader's paragraphs — never by
     #: synthesis or a cache key. Emitted only when set.
     break_before: Optional[str] = None
+    #: The Stories character who says this span, ``{"name": …, "accent": …}``
+    #: — its name in the cast and its slot in the editor's colours; ``None``
+    #: for a line nobody is cast in and for every Audiobook span. Read by the
+    #: rendered timeline only, for the HTML book's turns — never by synthesis
+    #: or a cache key. Emitted only when set.
+    speaker: Optional[dict] = None
 
     def to_dict(self) -> dict:
         d = {"voice_id": self.voice_id, "text": self.text,
@@ -396,6 +402,8 @@ class Span:
             d["section_level"] = self.section_level
         if self.break_before:
             d["break_before"] = self.break_before
+        if self.speaker:
+            d["speaker"] = dict(self.speaker)
         return d
 
 
@@ -1409,7 +1417,9 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
     ``"break": "line" | "paragraph"`` (never the first of a chapter), from the
     plan's ``break_before`` and the line breaks inside its spans; an entry is
     cut where one starts inside it, its time shared by characters. Readers
-    that do not know the key show the text as before.
+    that do not know the key show the text as before. A phrase of a Stories
+    line cast to a character carries its span's ``speaker`` (``{"name",
+    "accent"}``), so the HTML book sets the story as turns.
     """
     from services.text_normalization import normalize_for_tts
     from services.voice_leveling import span_voice_name
@@ -1445,6 +1455,9 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
             pending = None
             if brk and phrases:
                 item["break"] = brk
+            speaker = getattr(spans[owner], "speaker", None)
+            if speaker:
+                item["speaker"] = dict(speaker)
             phrases.append(item)
             owners.append(owner)
 
@@ -1553,16 +1566,30 @@ def timeline_with_layout(timeline: dict, script: str) -> dict:
     time shared by characters, its sections' entry indices moved along. A
     timeline that has breaks already, and a chapter whose text the script no
     longer holds, come back as they are. Never changes ``timeline``."""
-    found = timeline.get("chapters") if isinstance(timeline, dict) else None
-    if not script or not isinstance(found, list):
+    if not script:
         return timeline
-    listed = [c.get("phrases") for c in found if isinstance(c, dict)]
-    if any(isinstance(p, dict) and "break" in p
-           for phrases in listed if isinstance(phrases, list) for p in phrases):
-        return timeline
+    return _laid_out(timeline, _plan_marks(parse_audiobook_script(script).chapters), ("break",))
+
+
+def timeline_with_turns(timeline: dict, chapters: list) -> dict:
+    """A story's timeline written before its phrases carried who says them
+    (``speaker``) and where each line starts (``break``), given the planned
+    chapters it was rendered from (``/longform/render``'s, their spans
+    carrying both): each chapter whose text is exactly the next planned
+    chapter's gets them — a phrase the speaker of the span it was read from —
+    as :func:`timeline_with_layout` gives a book its breaks. A timeline whose
+    phrases carry either already comes back as it is."""
+    return _laid_out(timeline, _plan_marks(chapters), ("break", "speaker"))
+
+
+def _plan_marks(chapters: list) -> list:
+    """Per planned chapter, what it shows character by character: its
+    characters without whitespace or tags, the break before each
+    (:func:`_shown_marks`, a span's ``break_before`` on its first) and who
+    says each (its span's ``speaker``)."""
     marks = []
-    for chapter in parse_audiobook_script(script).chapters:
-        keys, breaks = [], []
+    for chapter in chapters:
+        keys, breaks, speakers = [], [], []
         for span in chapter.spans:
             own, brks = _shown_marks(_written_overrides(span.text))
             if own and keys:
@@ -1570,7 +1597,22 @@ def timeline_with_layout(timeline: dict, script: str) -> dict:
             if own:
                 keys.append(own)
                 breaks.extend(brks)
-        marks.append(("".join(keys), breaks))
+                speakers.extend([getattr(span, "speaker", None)] * len(own))
+        marks.append(("".join(keys), breaks, speakers))
+    return marks
+
+
+def _laid_out(timeline: dict, marks: list, known: tuple) -> dict:
+    """``timeline`` with each chapter that is exactly the next of ``marks``
+    (:func:`_plan_marks`) given its breaks and speakers; as it is when a
+    phrase carries any of the ``known`` keys already."""
+    found = timeline.get("chapters") if isinstance(timeline, dict) else None
+    if not isinstance(found, list):
+        return timeline
+    listed = [c.get("phrases") for c in found if isinstance(c, dict)]
+    if any(isinstance(p, dict) and any(key in p for key in known)
+           for phrases in listed if isinstance(phrases, list) for p in phrases):
+        return timeline
     out, after = [], 0
     for chapter in found:
         phrases = chapter.get("phrases") if isinstance(chapter, dict) else None
@@ -1586,16 +1628,23 @@ def timeline_with_layout(timeline: dict, script: str) -> dict:
             out.append(chapter)
             continue
         after = match + 1
-        keys, breaks = marks[match]
+        keys, breaks, speakers = marks[match]
         laid, moved, at = [], [], 0
         for phrase in phrases:
-            pieces, at = (_cut_at_breaks(phrase["text"], keys, breaks, at)
-                          or ([[phrase["text"], None]], at))
+            cut = _cut_at_breaks(phrase["text"], keys, breaks, at)
+            where = at if cut is not None else None
+            pieces, at = cut or ([[phrase["text"], None]], at)
             moved.append(len(laid))
-            for text, s, e, brk in _timed_pieces(pieces, phrase["start"], phrase["end"]):
+            for (text, s, e, brk), (shown, _) in zip(
+                    _timed_pieces(pieces, phrase["start"], phrase["end"]), pieces):
                 item = {**phrase, "text": text, "start": round(s, 3), "end": round(e, 3)}
                 if brk and laid:
                     item["break"] = brk
+                if where is not None:
+                    speaker = speakers[where] if where < len(speakers) else None
+                    if speaker:
+                        item["speaker"] = dict(speaker)
+                    where += len("".join(shown.split()))
                 laid.append(item)
         doc = {**chapter, "phrases": laid}
         if isinstance(chapter.get("sections"), list):

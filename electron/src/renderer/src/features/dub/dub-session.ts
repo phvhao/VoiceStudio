@@ -126,10 +126,13 @@ export const DUB_VIDEO_FITS = ['keep', 'shrink', 'stretch'] as const;
 export type DubVideoFit = (typeof DUB_VIDEO_FITS)[number];
 /** Why a translation may have left part of its source out (backend omission check). */
 export interface DubOmission {
-  reason: 'short' | 'sentences';
+  /** `repeated`: one word or phrase repeated over and over in place of the rest. */
+  reason: 'short' | 'sentences' | 'repeated';
   ratio: number;
   source_sentences: number;
   target_sentences: number;
+  /** `repeated`: back-to-back copies of the repeated word or phrase. */
+  repeats?: number;
 }
 export interface AsrModelMissing {
   error: 'asr_model_missing';

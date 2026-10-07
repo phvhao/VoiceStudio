@@ -10,7 +10,7 @@ import {
   listLongformProjects,
   openLongformProject,
   renameLongformProject,
-  useLongformSession,
+  useLongformActive,
   type Mode,
 } from '../longform/longform-session';
 import type { LongformProjectMeta } from '../longform/project-library';
@@ -153,7 +153,7 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const session = useDubSession();
-  const longform = useLongformSession();
+  const longformActive = useLongformActive();
   const profiles = useProfiles();
   const deleteProfile = useDeleteProfile();
   const history = useHistory();
@@ -201,7 +201,7 @@ export function ProjectsPage() {
 
   const locked =
     busy ||
-    !!longform.active ||
+    !!longformActive ||
     !!session.recovery ||
     !['idle', 'editing', 'done'].includes(session.phase);
   const act = async (work: () => Promise<void>) => {

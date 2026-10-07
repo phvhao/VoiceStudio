@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
   BookPlusIcon,
   EllipsisIcon,
@@ -94,6 +95,31 @@ const MENU_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-3 py-2 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50';
 
 /**
+ * What a row does, by its place in the outline: chapter `chapter`, and
+ * `section` of it (-1: the chapter itself). Each acts on the outline as it
+ * is when used — never as it was when the row last rendered, which an edit
+ * elsewhere in the script moved on since — so the rows can skip rendering
+ * while nothing they show changes.
+ */
+interface RowActions {
+  reveal(chapter: number, section: number): void;
+  rename(chapter: number, section: number): void;
+  /** Close the rename field with `title` (Enter), or with nothing done (`null`: Escape). */
+  stopRenaming(chapter: number, section: number, title: string | null): void;
+  /** The rename field lost the focus. */
+  leaveRename(): void;
+  /** Whether the row's title takes the focus back (its rename field just closed). */
+  takeFocus(chapter: number, section: number): boolean;
+  addTitle(chapter: number): void;
+  addChapter(chapter: number): void;
+  addSection(chapter: number, section: number): void;
+  removeHeading(chapter: number, section: number): void;
+  render(chapter: number): void;
+}
+
+const rowKey = (chapter: number, section: number) => `${chapter}.${section}`;
+
+/**
  * The book's table of contents, a rail inside the Audiobook editor: chapters
  * and their sections, each with its length and — for chapters — whether its
  * audio is rendered for the script and settings as they are now, or changed
@@ -135,10 +161,9 @@ export function BookOutline({
   className?: string;
 }) {
   const { t, i18n } = useTranslation();
+  const language = i18n.resolvedLanguage || i18n.language;
   const spellcheck = useScriptSpellcheck();
   const queryClient = useQueryClient();
-  const formatCount = (value: number) =>
-    value.toLocaleString(i18n.resolvedLanguage || i18n.language);
   const outline = useMemo(() => scriptOutline(draft.script), [draft.script]);
   const request = JSON.stringify(outlineRequest(draft));
   const [settled, setSettled] = useState(request);
@@ -167,29 +192,10 @@ export function BookOutline({
     outline,
     settings: previewSettings,
   });
-  const [renaming, setRenaming] = useState<number | null>(null);
+  // The row being renamed, by its place (`rowKey`).
+  const [renaming, setRenaming] = useState<string | null>(null);
   // The row whose title takes the focus back once its rename field is gone.
-  const refocus = useRef<number | null>(null);
-
-  /** Make an edit in the editor, which then has the focus; false when there is none to make. */
-  const edit = (make: (text: string) => MarkupEdit | null) => {
-    const target = getTarget();
-    if (!target || disabled) return false;
-    const result = make(target.element.value);
-    if (result) applyMarkupEdit(target, () => result);
-    return result !== null;
-  };
-  /** Close the rename field; unless an edit took the focus, its row's title gets it back. */
-  const stopRenaming = (start: number, edited = false) => {
-    if (!edited) refocus.current = start;
-    setRenaming(null);
-  };
-  const reveal = (node: OutlineNode) => {
-    const element = getTarget()?.element;
-    if (!element) return;
-    revealOffset(element, node.titleStart ?? node.start);
-    onReveal?.();
-  };
+  const refocus = useRef<string | null>(null);
   const chapterCount = outline.filter((chapter) => chapter.title !== null).length;
   // Only the text before the first heading has no title: the intro when
   // chapters follow it, else the book's one chapter (no heading at all).
@@ -203,167 +209,120 @@ export function BookOutline({
     ? undefined
     : outline.find((chapter) => chapter.plan === preview.output?.index);
 
-  const row = (node: OutlineNode, chapter: OutlineChapter) => {
-    const title = titleOf(node);
-    const state = node.level === 1 && chapter.plan !== null ? statuses?.[chapter.plan] : undefined;
-    const left = state ? takesLeft(state.status, state.takes) : null;
-    const editing = renaming === node.start && node.title !== null;
-    const actions: NodeAction[] = [];
-    if (node.title !== null)
-      actions.push({
-        key: 'rename',
-        icon: <PencilLineIcon />,
-        label: t('book.rename'),
-        run: () => setRenaming(node.start),
-      });
-    else
-      actions.push({
-        key: 'title',
-        icon: <PencilLineIcon />,
-        label: t('book.add_title'),
+  // The rows act through `actions`, which read what they act on from here
+  // when used: the outline, the editor and the preview of the latest render.
+  const latest = useRef({ outline, getTarget, disabled, chapterCount, titleOf, preview, onReveal });
+  useLayoutEffect(() => {
+    latest.current = { outline, getTarget, disabled, chapterCount, titleOf, preview, onReveal };
+  });
+  const actions = useMemo<RowActions>(() => {
+    const find = (chapter: number, section: number) => {
+      const owner = latest.current.outline[chapter];
+      const node = section < 0 ? owner : owner?.sections[section];
+      return owner && node ? { owner, node } : null;
+    };
+    /** Make an edit in the editor, which then has the focus; false when there is none to make. */
+    const edit = (make: (text: string) => MarkupEdit | null) => {
+      const target = latest.current.getTarget();
+      if (!target || latest.current.disabled) return false;
+      const result = make(target.element.value);
+      if (result) applyMarkupEdit(target, () => result);
+      return result !== null;
+    };
+    return {
+      reveal(chapter, section) {
+        const found = find(chapter, section);
+        const element = latest.current.getTarget()?.element;
+        if (!found || !element) return;
+        revealOffset(element, found.node.titleStart ?? found.node.start);
+        latest.current.onReveal?.();
+      },
+      rename: (chapter, section) => setRenaming(rowKey(chapter, section)),
+      stopRenaming(chapter, section, title) {
+        const found = find(chapter, section);
+        const edited =
+          title !== null &&
+          found !== null &&
+          edit((text) => renameHeading(text, found.node.start, title));
+        // Unless an edit took the focus, the row's title gets it back.
+        if (!edited) refocus.current = rowKey(chapter, section);
+        setRenaming(null);
+      },
+      leaveRename: () => setRenaming(null),
+      takeFocus(chapter, section) {
+        if (refocus.current !== rowKey(chapter, section)) return false;
+        refocus.current = null;
+        return true;
+      },
+      addTitle(chapter) {
+        const found = find(chapter, -1);
+        const titled = latest.current.chapterCount > 0;
         // A `# ` heading above the intro, its title selected to type over.
-        run: () =>
+        if (found)
           edit((text) =>
             insertHeading(
               text,
-              node.start,
+              found.node.start,
               1,
-              chapterCount > 0 ? t('book.intro_heading') : t('audiobook.chapter_n', { n: 1 }),
+              titled ? t('book.intro_heading') : t('audiobook.chapter_n', { n: 1 }),
             ),
-          ),
-      });
-    actions.push(
-      {
-        key: 'chapter',
-        icon: <BookPlusIcon />,
-        label: t('book.add_chapter'),
+          );
+      },
+      addChapter(chapter) {
+        const found = find(chapter, -1);
+        const n = latest.current.chapterCount + 1;
         // A new chapter goes after this whole chapter, sections included.
-        run: () =>
-          edit((text) =>
-            insertHeading(text, chapter.end, 1, t('audiobook.chapter_n', { n: chapterCount + 1 })),
-          ),
+        if (found)
+          edit((text) => insertHeading(text, found.owner.end, 1, t('audiobook.chapter_n', { n })));
       },
-      {
-        key: 'section',
-        icon: <HeadingIcon />,
-        label: t('book.add_section'),
-        run: () =>
+      addSection(chapter, section) {
+        const found = find(chapter, section);
+        if (found)
           edit((text) =>
-            insertHeading(text, node.end, node.level === 3 ? 3 : 2, t('book.new_section')),
-          ),
+            insertHeading(
+              text,
+              found.node.end,
+              found.node.level === 3 ? 3 : 2,
+              t('book.new_section'),
+            ),
+          );
       },
-    );
-    if (node.title !== null)
-      actions.push({
-        key: 'remove',
-        icon: <Trash2Icon />,
-        label: t('book.remove_heading'),
-        run: () => edit((text) => removeHeading(text, node.start)),
-      });
+      removeHeading(chapter, section) {
+        const found = find(chapter, section);
+        if (found) edit((text) => removeHeading(text, found.node.start));
+      },
+      render(chapter) {
+        const found = find(chapter, -1);
+        if (found?.owner.plan != null)
+          void latest.current.preview.render(found.owner.plan, latest.current.titleOf(found.owner));
+      },
+    };
+    // `t` changes with the language, and the menu actions name what they add in it.
+  }, [t]);
+  const canRender = !disabled && canPreview && !previews.busy;
+  const row = (node: OutlineNode, chapter: OutlineChapter, at: number, section: number) => {
+    const state = section < 0 && chapter.plan !== null ? statuses?.[chapter.plan] : undefined;
     return (
-      <div
-        className={cn(
-          'group flex min-w-0 items-center gap-1 rounded-md py-0.5 ps-1 pe-0.5 hover:bg-muted/50',
-          node.level === 2 && 'ps-4',
-          node.level === 3 && 'ps-7',
-        )}
-      >
-        {/* The title takes the row's width; its length and status sit on a
-            line of their own under it, so a narrow rail still shows it. */}
-        <div className="min-w-0 flex-1">
-          {editing ? (
-            <Input
-              autoFocus
-              spellCheck={spellcheck}
-              defaultValue={node.title ?? ''}
-              aria-label={t('book.rename_title', { title })}
-              className="h-7 w-full text-sm"
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  // Handled: it ends the rename, not the contents around it.
-                  event.preventDefault();
-                  stopRenaming(node.start);
-                }
-                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
-                const value = event.currentTarget.value;
-                stopRenaming(
-                  node.start,
-                  edit((text) => renameHeading(text, node.start, value)),
-                );
-              }}
-              onBlur={() => setRenaming(null)}
-            />
-          ) : (
-            <button
-              ref={(element) => {
-                if (!element || refocus.current !== node.start) return;
-                refocus.current = null;
-                element.focus();
-              }}
-              type="button"
-              className={cn(
-                'block w-full truncate rounded-sm px-1 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-                node.level === 1 ? 'text-sm font-medium' : 'text-[13px] text-foreground/85',
-                node.title === null && 'text-muted-foreground italic',
-              )}
-              title={title}
-              onClick={() => reveal(node)}
-            >
-              {title}
-            </button>
-          )}
-          <p
-            data-slot="outline-meta"
-            className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1 text-[11px] text-muted-foreground tabular-nums"
-          >
-            <span>
-              {t('book.node_meta', {
-                count: node.words,
-                words: formatCount(node.words),
-                runtime: formatRuntimeClock(node.runtimeSec),
-              })}
-            </span>
-            {node.level === 1 &&
-              (chapter.plan === null ? (
-                <StatusBadge className={STATUS_CLASSES.not_rendered}>
-                  {t('book.status_empty')}
-                </StatusBadge>
-              ) : (
-                state && (
-                  <StatusBadge
-                    className={STATUS_CLASSES[state.status]}
-                    title={t(statusHint(state.status, state.cached))}
-                  >
-                    {t(STATUS_LABELS[state.status][0])}
-                  </StatusBadge>
-                )
-              ))}
-            {left !== null && (
-              <span
-                data-slot="outline-takes"
-                title={t(left ? 'book.hint_takes_to_render' : 'book.hint_takes_ready')}
-              >
-                {left
-                  ? t('book.takes_to_render', { count: left, number: formatCount(left) })
-                  : t('book.takes_ready')}
-              </span>
-            )}
-          </p>
-        </div>
-        {node.level === 1 && chapter.plan !== null && (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            disabled={disabled || !canPreview || previews.busy}
-            aria-label={t('audiobook.preview_chapter', { title })}
-            title={t('book.render_chapter')}
-            onClick={() => void preview.render(chapter.plan as number, title)}
-          >
-            <PlayIcon />
-          </Button>
-        )}
-        <NodeMenu label={t('book.more', { title })} disabled={disabled} actions={actions} />
-      </div>
+      <OutlineRow
+        chapter={at}
+        section={section}
+        title={titleOf(node)}
+        heading={node.title}
+        level={node.level}
+        words={node.words}
+        runtimeSec={node.runtimeSec}
+        plan={section < 0 ? chapter.plan : undefined}
+        status={state?.status}
+        cached={state?.cached}
+        left={state ? takesLeft(state.status, state.takes) : null}
+        editing={renaming === rowKey(at, section) && node.title !== null}
+        disabled={disabled}
+        canRender={canRender}
+        spellcheck={spellcheck}
+        t={t}
+        language={language}
+        actions={actions}
+      />
     );
   };
 
@@ -390,14 +349,17 @@ export function BookOutline({
       </div>
       {outline.length ? (
         <nav aria-label={t('book.contents')} className="min-h-0 flex-1 overflow-y-auto">
+          {/* Rows go by their place, not their offset into the text, which
+              every keystroke above them moves: typing re-renders the row it
+              changes, never the rows after it. */}
           <ol className="space-y-0.5">
-            {outline.map((chapter) => (
-              <li key={chapter.start}>
-                {row(chapter, chapter)}
+            {outline.map((chapter, at) => (
+              <li key={at}>
+                {row(chapter, chapter, at, -1)}
                 {chapter.sections.length > 0 && (
                   <ol>
-                    {chapter.sections.map((section) => (
-                      <li key={section.start}>{row(section, chapter)}</li>
+                    {chapter.sections.map((section, index) => (
+                      <li key={index}>{row(section, chapter, at, index)}</li>
                     ))}
                   </ol>
                 )}
@@ -414,6 +376,200 @@ export function BookOutline({
     </section>
   );
 }
+
+/**
+ * One row of the contents: a chapter (`section` -1) or a section of it, by
+ * its place. It shows only what its props say — never an offset into the
+ * text — so typing elsewhere leaves it as it is, and it skips rendering;
+ * its actions find the node they act on when used.
+ */
+const OutlineRow = memo(function OutlineRow({
+  chapter,
+  section,
+  title,
+  heading,
+  level,
+  words,
+  runtimeSec,
+  plan,
+  status,
+  cached,
+  left,
+  editing,
+  disabled,
+  canRender,
+  spellcheck,
+  t,
+  language,
+  actions,
+}: {
+  chapter: number;
+  section: number;
+  /** The name shown: the heading as the listener reads it, or the untitled opening's. */
+  title: string;
+  /** The heading as written; `null` for the untitled opening. */
+  heading: string | null;
+  level: 1 | 2 | 3;
+  words: number;
+  runtimeSec: number;
+  /** A chapter's index in the render's plan (`null`: nothing to render); none for a section. */
+  plan?: number | null;
+  status?: ChapterStatus;
+  cached?: boolean | null;
+  /** Its sentences left to render (`takesLeft`). */
+  left: number | null;
+  /** Its rename field is open. */
+  editing: boolean;
+  disabled: boolean;
+  /** Its chapter can render on its own now. */
+  canRender: boolean;
+  spellcheck: boolean;
+  /**
+   * The app's language: its words (`t`, another one in another language) and
+   * how the counts are written. Handed down from the contents, not
+   * subscribed to by each of hundreds of rows.
+   */
+  t: TFunction;
+  language: string;
+  actions: RowActions;
+}) {
+  const formatCount = (value: number) => value.toLocaleString(language);
+  const menu: NodeAction[] = [];
+  if (heading !== null)
+    menu.push({
+      key: 'rename',
+      icon: <PencilLineIcon />,
+      label: t('book.rename'),
+      run: () => actions.rename(chapter, section),
+    });
+  else
+    menu.push({
+      key: 'title',
+      icon: <PencilLineIcon />,
+      label: t('book.add_title'),
+      run: () => actions.addTitle(chapter),
+    });
+  menu.push(
+    {
+      key: 'chapter',
+      icon: <BookPlusIcon />,
+      label: t('book.add_chapter'),
+      run: () => actions.addChapter(chapter),
+    },
+    {
+      key: 'section',
+      icon: <HeadingIcon />,
+      label: t('book.add_section'),
+      run: () => actions.addSection(chapter, section),
+    },
+  );
+  if (heading !== null)
+    menu.push({
+      key: 'remove',
+      icon: <Trash2Icon />,
+      label: t('book.remove_heading'),
+      run: () => actions.removeHeading(chapter, section),
+    });
+  return (
+    <div
+      className={cn(
+        'group flex min-w-0 items-center gap-1 rounded-md py-0.5 ps-1 pe-0.5 hover:bg-muted/50',
+        level === 2 && 'ps-4',
+        level === 3 && 'ps-7',
+      )}
+    >
+      {/* The title takes the row's width; its length and status sit on a
+          line of their own under it, so a narrow rail still shows it. */}
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <Input
+            autoFocus
+            spellCheck={spellcheck}
+            defaultValue={heading ?? ''}
+            aria-label={t('book.rename_title', { title })}
+            className="h-7 w-full text-sm"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                // Handled: it ends the rename, not the contents around it.
+                event.preventDefault();
+                actions.stopRenaming(chapter, section, null);
+              }
+              if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+              actions.stopRenaming(chapter, section, event.currentTarget.value);
+            }}
+            onBlur={actions.leaveRename}
+          />
+        ) : (
+          <button
+            ref={(element) => {
+              if (element && actions.takeFocus(chapter, section)) element.focus();
+            }}
+            type="button"
+            className={cn(
+              'block w-full truncate rounded-sm px-1 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+              level === 1 ? 'text-sm font-medium' : 'text-[13px] text-foreground/85',
+              heading === null && 'text-muted-foreground italic',
+            )}
+            title={title}
+            onClick={() => actions.reveal(chapter, section)}
+          >
+            {title}
+          </button>
+        )}
+        <p
+          data-slot="outline-meta"
+          className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-1 text-[11px] text-muted-foreground tabular-nums"
+        >
+          <span>
+            {t('book.node_meta', {
+              count: words,
+              words: formatCount(words),
+              runtime: formatRuntimeClock(runtimeSec),
+            })}
+          </span>
+          {plan !== undefined &&
+            (plan === null ? (
+              <StatusBadge className={STATUS_CLASSES.not_rendered}>
+                {t('book.status_empty')}
+              </StatusBadge>
+            ) : (
+              status && (
+                <StatusBadge
+                  className={STATUS_CLASSES[status]}
+                  title={t(statusHint(status, cached ?? null))}
+                >
+                  {t(STATUS_LABELS[status][0])}
+                </StatusBadge>
+              )
+            ))}
+          {left !== null && (
+            <span
+              data-slot="outline-takes"
+              title={t(left ? 'book.hint_takes_to_render' : 'book.hint_takes_ready')}
+            >
+              {left
+                ? t('book.takes_to_render', { count: left, number: formatCount(left) })
+                : t('book.takes_ready')}
+            </span>
+          )}
+        </p>
+      </div>
+      {plan != null && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          disabled={!canRender}
+          aria-label={t('audiobook.preview_chapter', { title })}
+          title={t('book.render_chapter')}
+          onClick={() => actions.render(chapter)}
+        >
+          <PlayIcon />
+        </Button>
+      )}
+      <NodeMenu label={t('book.more', { title })} disabled={disabled} actions={menu} />
+    </div>
+  );
+});
 
 interface NodeAction {
   key: string;

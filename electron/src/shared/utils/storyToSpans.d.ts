@@ -1,7 +1,11 @@
 export function storyToSpans(
   tracks: { text: string; profileId?: string | null; character?: string; speed?: number | null }[],
-  cast: { id: string; profileId: string | null }[],
+  cast: { id: string; profileId: string | null; name?: string }[],
   globalSpeed?: number | null,
+  options?: {
+    /** Also say where each line starts and who says it (the render's plan). */
+    layout?: boolean;
+  },
 ): {
   title: string;
   spans: {
@@ -12,5 +16,9 @@ export function storyToSpans(
     join?: 'continue' | 'paragraph';
     /** A `[volume]` passage's gain in dB. */
     gain_db?: number;
+    /** `layout`: the span starts a new line of the story. */
+    break_before?: 'paragraph';
+    /** `layout`: the line's character, by name and cast slot (the editor's colour). */
+    speaker?: { name: string; accent: number };
   }[];
 }[];

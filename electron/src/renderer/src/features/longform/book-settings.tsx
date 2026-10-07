@@ -5,9 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiJson, describeError } from '@/lib/api/client';
-import { metadataFields, repeatedWords } from './book-options';
+import { metadataFields, repeatedWords, type BookOptions } from './book-options';
 import { LONGFORM_TARGET } from './generate-gates';
-import type { Draft } from './longform-session';
 export function BookSettings({
   draft,
   disabled,
@@ -15,10 +14,11 @@ export function BookSettings({
   onChange,
   onBusy,
 }: {
-  draft: Draft;
+  /** The book's options alone: the page passes these, not a whole draft it would have to keep current. */
+  draft: BookOptions;
   disabled: boolean;
   pronunciation: boolean;
-  onChange: (value: Partial<Draft>) => void;
+  onChange: (value: Partial<BookOptions>) => void;
   onBusy: (busy: boolean) => void;
 }) {
   const { t } = useTranslation();

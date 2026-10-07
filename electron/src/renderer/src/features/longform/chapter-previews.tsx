@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SquareIcon, XIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -178,21 +178,34 @@ export function useChapterPreview(
       onRendered?.();
     }
   };
-  return {
-    render,
-    pending,
-    progress,
-    output,
-    outdated,
-    error,
-    failure,
-    stop: () => controller.current?.abort(),
-    dismiss: () => {
-      setError(null);
-      setFailure(null);
-    },
-    close: () => setOutput(null),
-  };
+  // The same state while nothing about the preview changes — typing in the
+  // script changes none of it — and `render` always reads the latest draft.
+  const latestRender = useRef(render);
+  useLayoutEffect(() => {
+    latestRender.current = render;
+  });
+  const renderLatest = useCallback(
+    (chapter: number, label?: string) => latestRender.current(chapter, label),
+    [],
+  );
+  return useMemo(
+    () => ({
+      render: renderLatest,
+      pending,
+      progress,
+      output,
+      outdated,
+      error,
+      failure,
+      stop: () => controller.current?.abort(),
+      dismiss: () => {
+        setError(null);
+        setFailure(null);
+      },
+      close: () => setOutput(null),
+    }),
+    [renderLatest, pending, progress, output, outdated, error, failure],
+  );
 }
 
 /** Marks a preview its text or settings changed since: it no longer sounds like this. */
@@ -215,7 +228,7 @@ export function PreviewOutdated() {
  * does; without it, its name when it rendered, the render's title, or
  * "Chapter N" in the app's language for an untitled one.
  */
-export function ChapterPreview({
+export const ChapterPreview = memo(function ChapterPreview({
   preview,
   label,
 }: {
@@ -282,4 +295,4 @@ export function ChapterPreview({
       )}
     </>
   );
-}
+});

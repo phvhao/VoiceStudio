@@ -11,6 +11,7 @@ import { castVoice } from './cast-map';
 import { parseCastNames, scriptStats } from '@shared/utils/audiobookScript';
 import { LANG_CODES } from '@shared/utils/languages';
 import { restoreBookOptions, lexiconMap, type BookOptions } from './book-options';
+import { restoreHtmlDesign, type HtmlDesign } from './html-design';
 import { createCoalescedJsonStorage } from '@shared/utils/coalescedJsonStorage';
 import { Store } from '@tanstack/store';
 import { useStore } from '@tanstack/react-store';
@@ -103,6 +104,12 @@ export interface Draft extends BookOptions {
   language: string;
   output: string;
   outputScript: string;
+  /**
+   * A story's chapters as its render posted them (`/longform/render`), so its
+   * HTML book shows the lines that were read, not the ones edited since;
+   * null for a book, and for a render from before this was kept.
+   */
+  outputStory: StoryPlan | null;
   outputChapters: AudiobookRenderChapter[];
   outputCachedChapters: number;
   outputFailedChapters: number;
@@ -112,6 +119,8 @@ export interface Draft extends BookOptions {
    * a draft from before this was kept.
    */
   editedAt: number;
+  /** The book's look as a web page (Export HTML); null until one is picked. */
+  htmlExport: HtmlDesign | null;
 }
 /** What the progress panel tells a render's time left from (`renderTimeLeft`). */
 export interface RenderTiming {
@@ -163,10 +172,12 @@ export const blankLongformDraft = (): Draft => ({
   language: 'Auto',
   output: '',
   outputScript: '',
+  outputStory: null,
   outputChapters: [],
   outputCachedChapters: 0,
   outputFailedChapters: 0,
   editedAt: 0,
+  htmlExport: null,
 });
 /**
  * A stored draft as the editor can use it — the working copy in localStorage
@@ -203,6 +214,7 @@ export function restoreDraft(s: any): Draft | null {
     language: typeof s.language === 'string' ? s.language : 'Auto',
     output: typeof s.output === 'string' ? s.output : '',
     outputScript: typeof s.outputScript === 'string' ? s.outputScript : '',
+    outputStory: restoreStoryPlan(s.outputStory),
     outputChapters: Array.isArray(s.outputChapters)
       ? s.outputChapters.filter(
           (chapter: AudiobookRenderChapter) =>
@@ -212,6 +224,7 @@ export function restoreDraft(s: any): Draft | null {
     outputCachedChapters: typeof s.outputCachedChapters === 'number' ? s.outputCachedChapters : 0,
     outputFailedChapters: typeof s.outputFailedChapters === 'number' ? s.outputFailedChapters : 0,
     editedAt: Number.isFinite(s.editedAt) && s.editedAt > 0 ? s.editedAt : 0,
+    htmlExport: restoreHtmlDesign(s.htmlExport),
   };
 }
 const key = 'voicestudio.longform.v1';
@@ -242,7 +255,22 @@ export const longformSession = new Store<Session>({
   saving: { stories: 'idle', audiobook: 'idle' },
   saveError: { stories: null, audiobook: null },
 });
-export const useLongformSession = () => useStore(longformSession);
+/**
+ * One field of the session (`select`): the component renders again when that
+ * field changes, and only then — never for an edit elsewhere, such as each
+ * keystroke in a script. Select one field per call: what `select` returns is
+ * compared by identity, so an object or array built in it renders every time.
+ */
+export function useLongformState<T>(select: (session: Session) => T): T {
+  return useStore(longformSession, select);
+}
+/** The mode rendering now, if any: switching books, voices and drafts waits for it. */
+export const useLongformActive = () => useLongformState((session) => session.active);
+/** The open book of `mode`, as it is edited. */
+export const useLongformDraft = (mode: Mode) => useLongformState((session) => session.drafts[mode]);
+/** One field of the open book of `mode`: an edit to another field leaves it as it is. */
+export const useDraftField = <K extends keyof Draft>(mode: Mode, field: K): Draft[K] =>
+  useLongformState((session) => session.drafts[mode][field]);
 /** Fences document imports that finish after a new dub replaces the Stories draft. */
 export const storiesImportEpoch = { current: 0 };
 const patch = (value: Partial<Session>) => longformSession.setState((s) => ({ ...s, ...value }));
@@ -539,10 +567,15 @@ export interface RenderOutput {
 
 type OutputDetails = Pick<
   Draft,
-  'outputScript' | 'outputChapters' | 'outputCachedChapters' | 'outputFailedChapters'
+  | 'outputScript'
+  | 'outputStory'
+  | 'outputChapters'
+  | 'outputCachedChapters'
+  | 'outputFailedChapters'
 >;
 const outputDetails = (draft: Draft): OutputDetails => ({
   outputScript: draft.outputScript,
+  outputStory: draft.outputStory,
   outputChapters: draft.outputChapters,
   outputCachedChapters: draft.outputCachedChapters,
   outputFailedChapters: draft.outputFailedChapters,
@@ -596,6 +629,7 @@ export async function openLongformProject(id: string, render?: RenderOutput): Pr
         output: render.output,
         ...(kept ?? {
           outputScript: '',
+          outputStory: null,
           outputChapters: render.chapters ?? [],
           outputCachedChapters: 0,
           outputFailedChapters: 0,
@@ -704,6 +738,24 @@ function readingInputs(mode: Mode, draft: Draft) {
   };
 }
 
+/** A story's chapters as `/longform/render` reads them. */
+export type StoryPlan = ReturnType<typeof storyToSpans>;
+
+/** A kept story plan, checked: chapters of spans, each with its text; else null. */
+function restoreStoryPlan(value: unknown): StoryPlan | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  const valid = value.every(
+    (chapter) =>
+      chapter &&
+      typeof chapter.title === 'string' &&
+      Array.isArray(chapter.spans) &&
+      chapter.spans.every(
+        (span: unknown) => span && typeof (span as { text?: unknown }).text === 'string',
+      ),
+  );
+  return valid ? (value as StoryPlan) : null;
+}
+
 export function renderBody(mode: Mode, draft: Draft) {
   const common = {
     ...readingInputs(mode, draft),
@@ -716,7 +768,9 @@ export function renderBody(mode: Mode, draft: Draft) {
     ? { ...common, text: draft.script, lexicon: lexiconMap(draft.lexicon) }
     : {
         ...common,
-        chapters: storyToSpans(draft.lines, draft.cast, draft.globalSpeed),
+        // With each line's start and character: the timeline carries them
+        // for the HTML book's turns (display only, no cache key reads them).
+        chapters: storyToSpans(draft.lines, draft.cast, draft.globalSpeed, { layout: true }),
       };
 }
 export async function renderLongform(mode: Mode, resumeId?: string) {
@@ -753,6 +807,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
     ) {
       throw new Error(tr('languagePicker.chooseSupported'));
     }
+    const posted = resumeId ? null : renderBody(mode, draft);
     const response = await apiFetch(
       resumeId
         ? '/audiobook/resume/' + encodeURIComponent(resumeId)
@@ -766,7 +821,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
           ? {}
           : {
               body: JSON.stringify({
-                ...renderBody(mode, draft),
+                ...posted,
                 ...(draft.projectId ? { project_id: draft.projectId } : {}),
               }),
               headers: { 'Content-Type': 'application/json' },
@@ -876,6 +931,7 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
             updateDraft(mode, {
               output: event.output,
               outputScript: mode === 'audiobook' && !resumeId ? draft.script : '',
+              outputStory: posted && 'chapters' in posted ? posted.chapters : null,
               outputChapters: outputChapters.map((chapter) => ({ ...chapter })),
               outputCachedChapters: Number(event.cached_chapters) || 0,
               outputFailedChapters: failed,
@@ -1019,8 +1075,9 @@ export function storyRetakeChapter(draft: Draft, lineId: string): RetakeChapter 
   while (to < draft.lines.length && !isChapterLine(draft.lines[to].text)) to += 1;
   const lines = draft.lines.slice(from, to);
   // A chapter starts over at every chapter line, so this one compiles alone
-  // exactly as it does inside the whole story.
-  const [chapter] = storyToSpans(lines, draft.cast, draft.globalSpeed);
+  // exactly as it does inside the whole story (its lines' starts and
+  // characters too, which no take reads).
+  const [chapter] = storyToSpans(lines, draft.cast, draft.globalSpeed, { layout: true });
   if (!chapter) return null;
   return {
     api: 'longform',

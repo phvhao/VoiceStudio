@@ -314,7 +314,7 @@ can run slightly ahead of or behind the voice.
 **Export HTML** saves the book as a web page: a ZIP holding `index.html`, the
 audio (`.m4a` for an M4B book, so every browser plays it) and the cover. Unpack
 it and open `index.html` in any browser, offline — the page makes no network
-request and loads no web font. It reads like an e-book: a title block with the
+request: the fonts it uses travel inside it. It reads like an e-book: a title block with the
 author, narrator and cover; chapters with a "Chapter N" label and their title,
 sections as subheadings, and the text in the script's own paragraphs and line
 breaks, justified (without automatic hyphenation) in a serif reading font. Text
@@ -331,7 +331,39 @@ and the speed; **?** lists the keys (**Space**, **←/→**, **Shift+←/→** f
 chapters). Printing gives the text alone. Its labels are in the app's language.
 The reader in the app justifies its text the same way. A book rendered before
 the timeline kept line and paragraph breaks takes them from the script it was
-rendered from, when the script still holds that text.
+rendered from, when the script still holds that text; where only whole
+chapters were timed, the highlight moves sentence by sentence.
+
+**Export HTML** first opens a design dialog with a live preview of the first
+chapter (as on a desktop or a phone) and six templates over the same page:
+
+| Template | Looks like |
+| --- | --- |
+| Classic | Serif type on cream paper, a drop cap, wide book margins |
+| Modern | Clean sans-serif type, airy spacing, the contents as cards with each chapter's length |
+| Magazine | Big headlines, each chapter's first sentence as its standfirst, a pull quote |
+| Cinematic | Dark by default, bright text, a strong highlight, the cover full-width behind the title |
+| Kids | Large rounded letters, bright colours, big play buttons |
+| Script | One block per line with the character's name in its colour, like a screenplay |
+
+Quick options change the accent colour (one of the template's, a preset or
+your own — the page keeps it readable on every theme), the body and heading
+fonts, whether voice (Audiobook) or character (Stories) names show beside the
+text, and how chapters are numbered (Chapter 1, 1, I, or none). The book keeps
+its design with its project, and the reader in the app sets the book's text in
+the body font it chose. The fonts are bundled with the app — Literata, Noto
+Serif, Lora, EB Garamond, Source Serif 4, Playfair Display, Be Vietnam Pro,
+Inter, Montserrat, Lexend, Nunito, Baloo 2, Patrick Hand and JetBrains Mono,
+each with every Vietnamese letter, under the SIL Open Font License — and the
+page carries only the two the design names; **System fonts** carries none,
+for the smallest file.
+
+Stories export the same way, in the Script template unless you pick another:
+each line is a block of its own, named after its character in the colour the
+Stories editor gives it. The page shows the lines the story was rendered from,
+even after you edit it. A story rendered before renders recorded who reads
+each line takes the lines and characters from the story as it stands, when it
+still holds that text.
 
 ## Recovering an interrupted audiobook
 

@@ -73,7 +73,7 @@ export function App() {
         start: t('transcriptions.capture'),
         stop: t('clone.stop_recording'),
         settings: t('nav.settings'),
-        exit: t('crash.field_exit'),
+        exit: t('app.quit', { app: t('app.name') }),
       })
       .catch(() => {});
   }, [t]);

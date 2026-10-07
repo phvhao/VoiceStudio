@@ -167,12 +167,24 @@ def _data(page: str) -> dict:
     return json.loads(block)
 
 
-def test_page_data_keeps_breaks_and_names_the_opening():
+def _section(page: str, number: int) -> str:
+    """Chapter ``number``'s ``<section>`` as the page sets it."""
+    start = page.index(f'id="chapter-{number}"')
+    return page[page.rindex("<section", 0, start):page.index("</section>", start)]
+
+
+def _without_fonts(page: str) -> str:
+    """The page without its embedded fonts (base64 can hold anything)."""
+    return re.sub(r"url\(data:font/woff2;base64,[A-Za-z0-9+/=]*\)", "url(FONT)", page)
+
+
+def test_page_sets_breaks_and_names_the_opening():
     ab = _mod("services.audiobook")
     html_mod = _mod("services.audiobook_html")
     timeline = html_mod.estimated_timeline(
         "x", "Before any heading.\n# Chương 1\nOne.\nTwo.\n\nThree.", duration=10.0)
-    data = _data(_page(timeline, labels={"intro": "Mở đầu", "chapter_n": "Chương {n}"}))
+    labels = {"intro": "Mở đầu", "chapter_n": "Chương {n}"}
+    data = html_mod.page_timeline(timeline, labels)
     opening, first = data["chapters"]
     assert (opening["title"], opening["number"], opening["intro"]) == ("Mở đầu", None, True)
     assert "Chapter" not in json.dumps(data["chapters"])
@@ -180,6 +192,15 @@ def test_page_data_keeps_breaks_and_names_the_opening():
     assert [(p["text"], p.get("break")) for p in first["phrases"]] == [
         ("One.", None), ("Two.", "line"), ("Three.", "paragraph")]
     assert ab.TIMELINE_VERSION == 1  # readers that ignore "break" still read it
+    # The page sets the text itself: its lines and paragraphs, the opening
+    # without a heading, the chapter under its own.
+    page = _page(timeline, labels=labels)
+    assert "<header" not in _section(page, 1)
+    one = _section(page, 2)
+    assert "<h2>Chương 1</h2>" in one and 'class="label"' not in one
+    assert re.search(r'<p class="lead"><span class="ph" data-s="[\d.]+" data-e="[\d.]+">One\.</span>'
+                     r'<br><span class="ph"[^>]*>Two\.</span></p><p><span class="ph"[^>]*>Three\.'
+                     r"</span></p>", one)
 
 
 def test_page_is_a_self_contained_escaped_book():
@@ -190,11 +211,13 @@ def test_page_is_a_self_contained_escaped_book():
                     {"text": "Bye", "start": 1, "end": 2, "break": "paragraph"}],
         "sections": []}]},
         title=nasty, author=nasty, narrator=nasty, labels={"settings": "<b>S</b>"})
-    # No network: no URL or external resource; one script block of data, one of code.
-    assert not re.search(r"https?:|//[a-z]|@import|url\(", page, re.I)
+    # No network: no URL or external resource but the fonts it carries; one
+    # script block of data, one of code.
+    bare = _without_fonts(page)
+    assert not re.search(r"https?:|//[a-z]|@import|url\((?!FONT\))", bare, re.I)
     assert page.count("</script>") == 2 and "<img src=x" not in page
     assert "&lt;b&gt;S&lt;/b&gt;" in page and "<b>S</b>" not in page
-    assert _data(page)["chapters"][0]["phrases"][1]["break"] == "paragraph"
+    assert re.search(r'<p><span class="ph"[^>]*>Bye</span></p>', page)
     # Contents, reading settings, player bar and shortcuts help.
     for marker in ('<nav class="toc" id="toc-panel"', 'id="toc"', 'id="settings"',
                    'data-pref="theme" data-value="sepia"', 'data-pref="align" data-value="start"',
@@ -210,15 +233,15 @@ def test_page_typesets_justified_paragraphs_and_prints_clean():
     css = page[page.index("<style>"):page.index("</style>")]
     assert "text-align:justify;text-justify:inter-word;text-align-last:start" in css
     assert "hyphens:manual" in css and "hyphens:auto" not in css
-    assert ":root[data-align=start] main p{text-align:start}" in css
+    assert ":root[data-align=start] .chapter>p{text-align:start}" in css
     assert '"Noto Serif"' in css and "@media print" in css
     printed = css[css.index("@media print"):]
     assert ".player" in printed and "display:none" in printed
     # Settings persist per browser, and a blocked storage never breaks the page.
     js = page[page.index("<script>"):]
     assert js.count("localStorage") == 2 and js.count("try {") >= 2
-    # Paragraphs and line breaks come from the timeline.
-    assert "brk === 'paragraph'" in js and "brk === 'line'" in js
+    # The words of each phrase the page sets are timed by the script.
+    assert "querySelectorAll('.ph')" in js and "data-s" in js and "data-e" in js
 
 
 def test_page_labels_match_what_the_app_sends():
@@ -257,8 +280,9 @@ def test_export_gives_an_old_timeline_the_script_paragraphs(outputs):
     got = asyncio.run(router.audiobook_export_html(router.AudiobookHtmlExportRequest(
         output=name, text="# One\nA.\n\nB.")))
     with zipfile.ZipFile(outputs / "data" / "html_exports" / f"{got['id']}.zip") as archive:
-        data = _data(archive.read("index.html").decode("utf-8"))
-    assert [p.get("break") for p in data["chapters"][0]["phrases"]] == [None, "paragraph"]
+        page = archive.read("index.html").decode("utf-8")
+    assert re.search(r'<p class="lead"><span class="ph"[^>]*>A\.</span></p>'
+                     r'<p><span class="ph"[^>]*>B\.</span></p>', _section(page, 1))
 
 
 def _css(page: str) -> str:
@@ -283,9 +307,8 @@ def test_a_book_without_headings_is_one_chapter_not_an_opening():
     # Without a book title, it is numbered in the app's words.
     (lone,) = html_mod.page_timeline(timeline, labels)["chapters"]
     assert (lone["title"], lone["number"], lone.get("app_title")) == ("Chương 1", None, True)
-    # The page skips the heading of every headless chapter, the opening too.
-    js = _js(_page(timeline))
-    assert "if (!chapter.headless)" in js and "if (!chapter.intro)" not in js
+    # The page sets no heading for a headless chapter, the opening too.
+    assert "<header" not in _section(_page(timeline), 1)
     opening = html_mod.page_timeline({"chapters": [
         {"title": "Chapter 1", "untitled": True}, {"title": "One"}]}, labels)["chapters"][0]
     assert opening["intro"] is opening["headless"] is opening["app_title"] is True
@@ -293,37 +316,43 @@ def test_a_book_without_headings_is_one_chapter_not_an_opening():
 
 def test_print_resets_every_theme_token_over_any_theme():
     """A theme picked in the menu (or Auto in a dark OS) must not print pale
-    text: the print reset is as specific as every theme rule and resets every
-    token they set."""
-    css = re.sub(r"/\*.*?\*/", "", _css(_page(None)), flags=re.S)
-    screen, printed = css[:css.index("@media print")], css[css.index("@media print"):]
-    selectors, body = re.search(r"([^{}]*)\{([^}]*--fg:#000[^}]*)\}", printed).groups()
-    selectors = [s.strip() for s in selectors.split(",")]
-    themes = re.findall(r"(:root[^{]*)\{(--bg:[^}]*)\}", screen)
-    assert len(themes) >= 3
-    for selector, declarations in themes:
-        # `:root[data-theme=…]` and `:root:not([data-theme])` are (0,2,0).
-        wanted = ":root[data-theme]" if "data-theme=" in selector else selector.strip()
-        assert wanted in selectors, (wanted, selectors)
-        for token in re.findall(r"(--[\w-]+):", declarations):
-            if token not in ("--scale", "--bar-h", "--player-h"):
-                assert token + ":" in body, (selector, token)
+    text, in any template: the print reset is as specific as every theme rule
+    and resets every token they set."""
+    templates = _mod("services.book_templates")
+    for template in templates.TEMPLATES:
+        design = templates.resolve(template)
+        css = re.sub(r"/\*.*?\*/", "", _css(_page(None, design=design)), flags=re.S)
+        screen, printed = css[:css.index("@media print")], css[css.index("@media print"):]
+        selectors, body = re.search(r"([^{}]*)\{([^}]*--fg:#000[^}]*)\}", printed).groups()
+        selectors = [s.strip() for s in selectors.split(",")]
+        themes = re.findall(r"(:root[^{]*)\{(--bg:[^}]*)\}", screen)
+        assert len(themes) >= 3
+        for selector, declarations in themes:
+            # `:root[data-theme=…]` and `:root:not([data-theme])` are (0,2,0).
+            wanted = ":root[data-theme]" if "data-theme=" in selector else selector.strip()
+            assert wanted in selectors, (template, wanted, selectors)
+            for token in re.findall(r"(--[\w-]+):", declarations):
+                if token not in ("--scale", "--bar-h", "--player-h"):
+                    assert token + ":" in body, (template, selector, token)
 
 
 def test_app_words_inside_the_book_text_carry_the_app_language():
     page = _page({"chapters": [
-        {"title": "Chapter 1", "untitled": True, "precision": "chapter", "phrases": []},
-        {"title": "Một", "precision": "chapter", "phrases": []}]},
+        {"title": "Chapter 1", "untitled": True, "precision": "chapter",
+         "phrases": [{"text": "Hi.", "start": 0, "end": 1}]},
+        {"title": "Một", "precision": "chapter", "start": 1,
+         "phrases": [{"text": "Ừ.", "start": 1, "end": 2}]}]},
         lang="en", book_lang="vi", narrator="Mai")
     assert '<main id="text" lang="vi" dir="auto">' in page
     assert '<p lang="en" dir="ltr">Narrated by <bdi>Mai</bdi></p>' in page
-    js = _js(page)
-    for marker in ("appWords(el('p', 'label', label))", "appWords(el('p', 'note', L.estimated))",
-                   "if (chapter.app_title) appWords(openerTitle)",
-                   "if (chapter.app_title) appWords(button.lastChild)",
-                   "nowTitle.lang = shown && shown.appTitle ? root.lang : bookLang"):
-        assert marker in js, marker
-    assert [c.get("app_title") for c in _data(page)["chapters"]] == [True, None]
+    # The chapter label and the timing note are the app's words; so is the
+    # opening's name, in the contents and as the player names it.
+    assert '<p class="label" lang="en" dir="ltr">Chapter 1</p><h2>Một</h2>' in _section(page, 2)
+    assert '<p class="note" lang="en" dir="ltr">' in page
+    assert '<span class="t" lang="en" dir="ltr">Opening</span>' in page
+    assert 'data-title="Opening" data-app-title' in _section(page, 1)
+    assert "data-app-title" not in _section(page, 2)
+    assert "nowTitle.lang = shown && shown.appTitle ? root.lang : bookLang" in _js(page)
 
 
 def test_contents_drawer_follows_the_chapter_and_leaves_with_the_narrow_layout():
@@ -337,6 +366,18 @@ def test_contents_drawer_follows_the_chapter_and_leaves_with_the_narrow_layout()
     # Wide again (a tablet turned): no scrim left over the page, drawer closed.
     assert re.search(r"@media \(min-width:60\.01rem\)\{[^}]*\.scrim[^}]*display:none", css)
     assert "matchMedia('(min-width:60.01rem)')" in js and "setDrawer(false)" in js
+
+
+def test_no_name_in_the_page_script_is_both_a_function_and_a_variable():
+    """One scope: a `var` named like a function replaces it once its line
+    runs, so the function works as the page loads and fails on the first
+    click (the theme buttons did)."""
+    js = _js(_page(None))
+    # The script's own scope: what its function body declares at its first indent.
+    functions = set(re.findall(r"^  function (\w+)\(", js, re.M))
+    variables = set(re.findall(r"^  var (\w+)", js, re.M))
+    assert len(functions) > 20 and len(variables) > 20
+    assert not functions & variables
 
 
 def test_scrolling_the_contents_or_a_field_does_not_stop_the_follow():
@@ -354,3 +395,19 @@ def _cut_at_marks_only(monkeypatch):
     from services import chunked_tts
 
     monkeypatch.setattr(chunked_tts, "PHRASE_MIN_CHARS", 0)
+
+
+def test_a_word_that_is_also_an_abbreviation_can_end_a_sentence():
+    """ "no", "St" and "etc" end sentences as often as they abbreviate: the
+    estimated highlight and the pull quote lit two sentences as one."""
+    sentences = _mod("services.audiobook_html").sentences
+    assert sentences("She said no. Then he left.") == ["She said no.", "Then he left."]
+    assert sentences("Read No. 5 first. Then No. 6.") == ["Read No. 5 first.", "Then No. 6."]
+    assert sentences("He lives on Main St. The house is big.") == [
+        "He lives on Main St.", "The house is big."]
+    assert sentences("We met at St. Paul's. Then St. John came.") == [
+        "We met at St. Paul's.", "Then St. John came."]
+    assert sentences("Pens, ink, etc. Then we left.") == ["Pens, ink, etc.", "Then we left."]
+    # Titles never end one; "vs." sits between two names.
+    assert sentences("Dr. Who met Mr. Smith. It was Kramer vs. Kramer.") == [
+        "Dr. Who met Mr. Smith.", "It was Kramer vs. Kramer."]

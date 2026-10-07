@@ -91,10 +91,12 @@ def _fake_ffmpeg_factory(write_file: bool = True):
     """Return an async callable that mimics the ffmpeg invocation."""
     async def _runner(*cmd, **_):
         if write_file:
-            # Positional cmd ends with "<output>" "-y" — scan for an abs path arg.
+            # Positional cmd ends with "<output>" "-y" — scan for an abs path
+            # arg. os.path.isabs, not a leading "/": a Windows output path is
+            # "C:\...", and missing it left every export without its file.
             out = None
             for arg in reversed(cmd):
-                if isinstance(arg, str) and arg.startswith("/") and "." in Path(arg).name:
+                if isinstance(arg, str) and os.path.isabs(arg) and "." in Path(arg).name:
                     out = arg
                     break
             if out:

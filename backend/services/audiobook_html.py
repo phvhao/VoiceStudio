@@ -1,23 +1,34 @@
-"""A finished audiobook as a web page: ``index.html`` + its audio in a ZIP.
+"""A finished audiobook or story as a web page: ``index.html`` + its audio in a ZIP.
 
-The page is ONE self-contained file — inline CSS and script, no web fonts, no
-network request of any kind (local-first) — that plays ``audio/<book>.<ext>``
-beside it and reads like an e-book: a title block, a contents sidebar (a
-drawer on phones), chapters set in paragraphs, the phrase being read
+The page is ONE self-contained file — inline CSS and script, the fonts its
+design names embedded, no network request of any kind (local-first) — that
+plays ``audio/<book>.<ext>`` beside it and reads like an e-book: a title
+block, a contents sidebar (a drawer on phones), chapters set in paragraphs
+(a story's lines as turns with the character's name), the phrase being read
 highlighted and its word underlined, from the book's rendered timeline
 (:func:`services.audiobook.book_timeline`). A book rendered without one gets
 a timeline estimated from the script, chapter by chapter. Reading settings
 (text size, theme, alignment, following the voice) stay in the browser.
 
-Pure apart from :func:`write_export_zip`'s file I/O: no torch, no FastAPI.
+The text is set in the page itself, so it reads (and prints) without script
+and the export dialog previews it in a frame that runs none; the script only
+times each phrase's words and drives the player. The look is the book's
+design (:mod:`services.book_templates`): one of six templates over this one
+page, with its accent colour, fonts, names and chapter numbering.
+
+Pure apart from :func:`write_export_zip`'s file I/O and the font files the
+design embeds: no torch, no FastAPI.
 """
 from __future__ import annotations
 
 import html
 import json
 import os
+import re
 import zipfile
 from typing import Optional
+
+from services import book_fonts, book_templates
 
 #: The page's own words, in the app's language. The app sends them; these
 #: English defaults fill any it leaves out.
@@ -61,6 +72,29 @@ DEFAULT_LABELS = {
 _LABEL_MAX = 300
 SPEEDS = (0.75, 1, 1.25, 1.5, 1.75, 2)
 _BREAKS = ("line", "paragraph")
+#: A name a phrase's voice may carry that is a profile id, not a name to show.
+_ID_LIKE_RE = re.compile(r"^(?:[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}"
+                         r"|[0-9a-f]{12,64})$", re.I)
+#: The longest speaker or voice name shown.
+_NAME_MAX = 80
+#: A pull quote's length, in characters.
+_PULL_MIN, _PULL_MAX = 25, 220
+#: The phrases of a chapter the export dialog's preview shows.
+_PREVIEW_PHRASES = 60
+#: The longest first phrase a chapter sets as its standfirst.
+_STANDFIRST_MAX = 240
+#: Opening quote marks.
+_QUOTES = "\"'“‘«„"
+#: Where a sentence may end: its final marks and any closing quotes, then space.
+_SENTENCE_END_RE = re.compile("[.!?…]+[\"'”’»)\\]]*\\s+")
+#: Words a period follows without ending the sentence (lower case). Only
+#: words that never end one: "etc." often does, so it is not here.
+_ABBREVIATIONS = frozenset((
+    "mr", "mrs", "ms", "dr", "prof", "jr", "sr", "vs", "e.g", "i.e",
+    "tp", "ts", "ths", "gs", "pgs", "bs", "ks"))
+#: Words that are abbreviations only before a number ("No. 5"); a sentence
+#: may end in them ("She said no.").
+_NUMBER_ABBREVIATIONS = frozenset(("no", "nos", "vol", "pp"))
 
 
 def labels_for(given: Optional[dict]) -> dict:
@@ -94,9 +128,19 @@ def estimated_timeline(output: str, script: str, *,
     (``None`` for one that failed, so is not in the file); when it does not
     line up with the script, ``duration`` (the whole file) is shared by the
     chapters by their length in characters. ``None`` with neither."""
-    from services.audiobook import book_timeline, parse_audiobook_script
+    from services.audiobook import parse_audiobook_script
 
-    chapters = parse_audiobook_script(script).chapters
+    return estimated_plan_timeline(output, parse_audiobook_script(script).chapters,
+                                   chapter_durations=chapter_durations, duration=duration)
+
+
+def estimated_plan_timeline(output: str, chapters: list, *,
+                            chapter_durations: Optional[list] = None,
+                            duration: Optional[float] = None) -> Optional[dict]:
+    """:func:`estimated_timeline` for chapters already planned (a story's,
+    as ``/longform/render`` reads them)."""
+    from services.audiobook import book_timeline
+
     if not chapters:
         return None
     if chapter_durations is not None and len(chapter_durations) == len(chapters):
@@ -119,22 +163,67 @@ def chapter_title(chapter: dict, number: int, labels: dict) -> str:
 
 
 def page_timeline(timeline: Optional[dict], labels: Optional[dict] = None,
-                  book_title: str = "") -> dict:
+                  book_title: str = "", *, story: bool = False,
+                  voice_names: Optional[dict] = None) -> dict:
     """What the page reads from a book timeline: chapters with their phrases
-    (and where each starts a new line or paragraph) and sections, nothing
-    else (cache keys stay home).
+    (where each starts a new line or paragraph, and who says it) and
+    sections, and the people who speak; nothing else (cache keys stay home).
 
     The text before a book's first heading is its opening (``intro``): the
     page shows it without a heading, never as a made-up "Chapter 1", and the
     chapters after it are numbered from 1. A book with no heading at all has
     no opening: its one chapter is the book, without a heading either, and
     the player names it by ``book_title``. Such chapters are ``headless``; a
-    title in the app's words (a label, not the book's text) is ``app_title``."""
+    title in the app's words (a label, not the book's text) is ``app_title``.
+
+    ``people`` lists each voice or character once, in the order they are
+    first heard: ``{"name", "color"}`` (a palette slot). A story's phrases
+    name the character who says them (``speaker``: its name and its slot in
+    the Stories editor's colours); a book's, the ``[voice:NAME]`` reading
+    them (``voice``), shown as ``voice_names`` names it — a profile id with
+    no name to show is nobody. The book's default voice is nobody either.
+    Each phrase said by somebody carries ``who``, an index into ``people``."""
     labels = labels_for(labels)
     found = [c for c in (timeline or {}).get("chapters") or [] if isinstance(c, dict)]
     opening = len(found) > 1 and bool(found[0].get("untitled")) and not any(
         c.get("untitled") for c in found[1:])
     lone = len(found) == 1 and bool(found[0].get("untitled"))
+    people: list = []
+    keys: dict = {}
+    voices = 0
+
+    def who(phrase: dict) -> Optional[int]:
+        nonlocal voices
+        speaker = phrase.get("speaker")
+        if isinstance(speaker, dict) and isinstance(speaker.get("name"), str) \
+                and speaker["name"].strip():
+            name = speaker["name"].strip()[:_NAME_MAX]
+            accent = speaker.get("accent")
+            color = accent if type(accent) is int and accent >= 0 else len(people)
+            key = ("speaker", name, color)
+        elif story:
+            return None
+        else:
+            voice = phrase.get("voice")
+            if not isinstance(voice, str) or not voice.strip():
+                return None
+            given = (voice_names or {}).get(voice)
+            if isinstance(given, str) and given.strip():
+                name = given.strip()[:_NAME_MAX]
+            elif _ID_LIKE_RE.fullmatch(voice.strip()):
+                return None
+            else:
+                name = voice.strip()[:_NAME_MAX]
+            key = ("voice", voice)
+            color = None
+        if key not in keys:
+            if color is None:
+                color = voices
+                voices += 1
+            keys[key] = len(people)
+            people.append({"name": name, "color": color % len(book_templates.WHO_LIGHT)})
+        return keys[key]
+
     chapters = []
     number = 0
     for index, chapter in enumerate(found):
@@ -147,17 +236,25 @@ def page_timeline(timeline: Optional[dict], labels: Optional[dict] = None,
             title = book_title or chapter_title(chapter, 1, labels)
         else:
             title = chapter_title(chapter, number, labels)
+        phrases = [_page_phrase(p, who(p)) for p in chapter.get("phrases") or []
+                   if isinstance(p, dict)]
+        sections = [{"title": str(s.get("title") or ""), "level": s.get("level", 2),
+                     "start": s.get("start", 0), "phrase": s.get("phrase", 0)}
+                    for s in chapter.get("sections") or [] if isinstance(s, dict)]
+        precision = chapter.get("precision", "chapter")
+        if precision == "chapter":
+            phrases, moved = _by_sentence(phrases)
+            for section in sections:
+                if type(section["phrase"]) is int and 0 <= section["phrase"] < len(moved):
+                    section["phrase"] = moved[section["phrase"]]
         doc = {
             "title": title,
             "number": None if intro or lone else number,
             "start": chapter.get("start", 0),
             "end": chapter.get("end", 0),
-            "precision": chapter.get("precision", "chapter"),
-            "phrases": [_page_phrase(p) for p in chapter.get("phrases") or []
-                        if isinstance(p, dict)],
-            "sections": [{"title": str(s.get("title") or ""), "level": s.get("level", 2),
-                          "start": s.get("start", 0), "phrase": s.get("phrase", 0)}
-                         for s in chapter.get("sections") or [] if isinstance(s, dict)],
+            "precision": precision,
+            "phrases": phrases,
+            "sections": sections,
         }
         if chapter.get("untitled"):
             doc["untitled"] = True
@@ -168,39 +265,94 @@ def page_timeline(timeline: Optional[dict], labels: Optional[dict] = None,
         if intro or (chapter.get("untitled") and not (lone and book_title)):
             doc["app_title"] = True
         chapters.append(doc)
-    return {"chapters": chapters}
+    return {"chapters": chapters, "people": people}
 
 
-def _page_phrase(phrase: dict) -> dict:
+def _page_phrase(phrase: dict, who: Optional[int] = None) -> dict:
     doc = {"text": str(phrase.get("text") or ""), "start": phrase.get("start", 0),
            "end": phrase.get("end", 0)}
     if phrase.get("break") in _BREAKS:
         doc["break"] = phrase["break"]
+    if who is not None:
+        doc["who"] = who
     return doc
 
 
+def _abbreviation(before: str, following: str) -> bool:
+    """Whether the period after ``before`` (the sentence so far) marks an
+    abbreviation rather than the sentence's end, ``following`` the first
+    character after it."""
+    words = [w.lstrip(_QUOTES + "(") for w in before.split()]
+    if not words:
+        return False
+    word = words[-1].lower()
+    if word in _NUMBER_ABBREVIATIONS:
+        return following.isdigit()
+    if word == "st":
+        # "Main St." is a street, which may end a sentence; "St. Paul" (or
+        # "Then St. Paul") a saint.
+        return not (len(words) > 2 and words[-2][:1].isupper())
+    return word in _ABBREVIATIONS
+
+
+def sentences(text: str) -> list:
+    """``text`` cut after each sentence-final mark (and its closing quotes)
+    that a capital, a digit or an opening quote follows — not after an
+    abbreviation such as "Dr." or "TS."."""
+    out, start = [], 0
+    for match in _SENTENCE_END_RE.finditer(text):
+        following = text[match.end():match.end() + 1]
+        if not following or not (following.isupper() or following.isdigit()
+                                 or following in "\"'“‘«(["):
+            continue
+        if text[match.start()] == "." and _abbreviation(text[start:match.start()], following):
+            continue
+        out.append(text[start:match.end()].strip())
+        start = match.end()
+    out.append(text[start:].strip())
+    return [s for s in out if s]
+
+
+def _by_sentence(phrases: list) -> tuple:
+    """The phrases of a chapter timed only as a whole — a paragraph each,
+    timed by its share of the characters — cut into their sentences the same
+    way, so the highlight moves on sentence by sentence (as the app's reader
+    does) rather than lighting a whole paragraph. Returns them and, for each
+    phrase given, the index of its first sentence."""
+    out, moved = [], []
+    for phrase in phrases:
+        moved.append(len(out))
+        parts = sentences(phrase["text"])
+        if len(parts) < 2:
+            out.append(phrase)
+            continue
+        start, end = float(phrase["start"] or 0), float(phrase["end"] or 0)
+        total = sum(len(p) for p in parts) or 1
+        at = 0
+        for k, part in enumerate(parts):
+            piece = {**phrase, "text": part,
+                     "start": round(start + (end - start) * at / total, 3)}
+            at += len(part)
+            piece["end"] = round(start + (end - start) * at / total, 3)
+            if k:
+                piece.pop("break", None)
+            out.append(piece)
+    return out, moved
+
+
 _CSS = """
-:root{--bg:#fbfaf7;--fg:#211f1b;--muted:#6d675e;--line:#e7e2d9;--card:#ffffff;
---accent:#2d58cf;--word:#1d43ad;--phrase:rgba(45,88,207,.10);--shadow:rgba(30,25,15,.12);
---scale:1;--bar-h:3.25rem;--player-h:7rem;color-scheme:light}
-@media (prefers-color-scheme:dark){:root:not([data-theme]){--bg:#151517;--fg:#e8e6e1;
---muted:#9c978e;--line:#2c2b30;--card:#1d1d22;--accent:#91a9ff;--word:#b8c8ff;
---phrase:rgba(145,169,255,.16);--shadow:rgba(0,0,0,.45);color-scheme:dark}}
-:root[data-theme=dark]{--bg:#151517;--fg:#e8e6e1;--muted:#9c978e;--line:#2c2b30;--card:#1d1d22;
---accent:#91a9ff;--word:#b8c8ff;--phrase:rgba(145,169,255,.16);--shadow:rgba(0,0,0,.45);color-scheme:dark}
-:root[data-theme=sepia]{--bg:#f4ecd8;--fg:#3a2f23;--muted:#7b6b56;--line:#e0d3b6;--card:#faf3e2;
---accent:#9a5a12;--word:#7a4207;--phrase:rgba(154,90,18,.13);--shadow:rgba(80,55,20,.15);color-scheme:light}
+:root{--scale:1;--bar-h:3.25rem;--player-h:7rem;--base:1.1875rem;--base-phone:1.0625rem;
+--leading:1.75;--measure:66ch;--who:var(--accent)}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-padding-top:calc(var(--bar-h) + 1rem)}
-body{margin:0;background:var(--bg);color:var(--fg);
-font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 var(--ui-font);
 padding-bottom:calc(var(--player-h) + 2rem)}
 button{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 [hidden]{display:none!important}
 .icon{display:inline-grid;place-items:center;min-width:2.5rem;height:2.5rem;padding:0 .5rem;border-radius:.6rem;
 border:1px solid transparent;background:transparent;cursor:pointer;line-height:1}
-.icon:hover{background:var(--phrase)}
+.icon:hover{background:var(--tint)}
 .icon svg{width:1.25rem;height:1.25rem;fill:currentColor}
 .icon:disabled{opacity:.4;cursor:default;background:transparent}
 .bar{position:sticky;top:0;z-index:20;height:var(--bar-h);display:flex;align-items:center;gap:.5rem;
@@ -209,7 +361,7 @@ padding:0 .75rem;background:color-mix(in srgb,var(--bg) 92%,transparent);border-
 .bar-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;
 font-size:.95rem;opacity:0;transition:opacity .2s}
 .bar.titled .bar-title{opacity:1}
-.aa{font-family:Georgia,"Times New Roman",serif;font-size:1.05rem;font-weight:600}
+.aa{font-family:var(--body-font);font-size:1.05rem;font-weight:600}
 .menu{position:absolute;z-index:30;background:var(--card);color:var(--fg);border:1px solid var(--line);
 border-radius:.9rem;box-shadow:0 12px 32px var(--shadow);padding:.9rem;font-size:.9rem}
 #settings{top:calc(var(--bar-h) - .25rem);inset-inline-end:.75rem;width:min(20rem,calc(100vw - 1.5rem))}
@@ -235,41 +387,42 @@ overflow-x:hidden;overflow-y:auto;padding:1.5rem .25rem 1rem 0;font-size:.9rem;o
 #toc button{display:flex;gap:.6rem;align-items:baseline;width:100%;text-align:start;padding:.35rem .5rem;border:0;
 border-radius:.5rem;background:transparent;cursor:pointer;line-height:1.35;overflow-wrap:anywhere;
 border-inline-start:2px solid transparent}
-#toc button:hover{background:var(--phrase)}
+#toc button:hover{background:var(--tint)}
 #toc .num{flex:none;min-width:1.2rem;color:var(--muted);font-variant-numeric:tabular-nums;font-size:.85em}
 #toc .t{min-width:0}
+#toc .dur{display:none}
 #toc button[aria-current=true]{color:var(--accent);font-weight:600;border-inline-start-color:var(--accent);
-background:var(--phrase)}
+background:var(--tint)}
 #toc button[aria-current=true] .num{color:var(--accent)}
 #toc .s3{padding-inline-start:1.25rem}
 #toc ol button{color:var(--muted);font-size:.95em;padding-block:.25rem}
 .scrim{position:fixed;inset:0;z-index:39;background:rgba(0,0,0,.35)}
-main{min-width:0;max-width:66ch;width:100%;margin:0 auto;padding:2.5rem 0 0;
-font-family:"Noto Serif","Source Serif 4","Source Serif Pro",Cambria,Georgia,"Times New Roman",serif;
-font-size:calc(1.1875rem * var(--scale));line-height:1.75;font-kerning:normal}
-/* Georgia lacks the Vietnamese letters: they would come apart into marks. */
-main:lang(vi){font-family:"Noto Serif","Source Serif 4","Source Serif Pro",Cambria,"Times New Roman",serif}
+main{min-width:0;max-width:var(--measure);width:100%;margin:0 auto;padding:2.5rem 0 0;font-family:var(--body-font);
+font-size:calc(var(--base) * var(--scale));line-height:var(--leading);font-kerning:normal}
 .cover{display:flex;gap:1.5rem;align-items:center;margin:0 0 3rem;padding-bottom:2.5rem;border-bottom:1px solid var(--line)}
 .cover img{width:9rem;max-width:35%;height:auto;border-radius:.4rem;box-shadow:0 8px 28px var(--shadow);flex:none}
+.cover h1,.hero h1,.opener h2,main h3,main h4,.pull{font-family:var(--heading-font)}
 .cover h1{margin:0;font-size:2.1em;line-height:1.15;font-weight:600;text-wrap:balance;overflow-wrap:break-word}
-.cover p{margin:.6rem 0 0;text-indent:0;color:var(--muted);font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;
-font-size:.95rem;line-height:1.4}
+.cover p{margin:.6rem 0 0;color:var(--muted);font-family:var(--ui-font);font-size:.95rem;line-height:1.4}
 .cover .author{font-size:1.05rem;color:var(--fg)}
-.note{margin:0 0 2rem;padding:.6rem .9rem;border-radius:.6rem;background:var(--phrase);color:var(--muted);
-font:.85rem/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif}
+.note{margin:0 0 2rem;padding:.6rem .9rem;border-radius:.6rem;background:var(--tint);color:var(--muted);
+font:.85rem/1.45 var(--ui-font)}
 main section{padding-top:1rem;margin-bottom:4rem}
 .opener{margin:0 0 2rem;text-align:start}
-.opener .label{margin:0 0 .5rem;color:var(--accent);font:600 .78rem/1.2 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;
-letter-spacing:.14em;text-transform:uppercase}
+.opener .label{margin:0 0 .5rem;color:var(--accent);font:600 .78rem/1.2 var(--ui-font);letter-spacing:.14em;
+text-transform:uppercase}
 .opener h2{margin:0;font-size:1.75em;line-height:1.25;font-weight:600;text-wrap:balance;overflow-wrap:break-word}
 main h3,main h4{text-align:start;line-height:1.35;font-weight:600;margin:2.2em 0 .8em;break-after:avoid}
 main h3{font-size:1.25em}
 main h4{font-size:1.08em;color:var(--muted)}
-main p{margin:0;text-align:justify;text-justify:inter-word;text-align-last:start;
--webkit-hyphens:manual;hyphens:manual;overflow-wrap:break-word}
-:root[data-align=start] main p{text-align:start}
-main p+p{text-indent:1.5em}
-main p.lead::first-letter{font-size:1.6em;line-height:1;font-weight:600;color:var(--accent)}
+main p{margin:0;overflow-wrap:break-word}
+.chapter>p{text-align:justify;text-justify:inter-word;text-align-last:start;-webkit-hyphens:manual;hyphens:manual}
+:root[data-align=start] .chapter>p{text-align:start}
+.chapter>p+p{text-indent:1.5em}
+.who{font:700 .74em/1 var(--label-font);letter-spacing:.07em;text-transform:uppercase;
+color:var(--who);margin-inline-end:.1em}
+.who-0{--who:var(--who-0)}.who-1{--who:var(--who-1)}.who-2{--who:var(--who-2)}.who-3{--who:var(--who-3)}
+.who-4{--who:var(--who-4)}.who-5{--who:var(--who-5)}.who-6{--who:var(--who-6)}.who-7{--who:var(--who-7)}
 .ph{border-radius:.2em;-webkit-box-decoration-break:clone;box-decoration-break:clone;transition:background-color .2s}
 .ph.on{background:var(--phrase)}
 .w{cursor:pointer}
@@ -277,7 +430,7 @@ main p.lead::first-letter{font-size:1.6em;line-height:1;font-weight:600;color:va
 .w.on{color:var(--word);text-decoration:underline;text-decoration-color:var(--accent);
 text-decoration-thickness:.09em;text-underline-offset:.22em}
 .pill{position:fixed;z-index:25;left:50%;bottom:calc(var(--player-h) + .9rem);transform:translateX(-50%);
-padding:.55rem 1rem;border:0;border-radius:999px;background:var(--accent);color:var(--card);font-size:.9rem;
+padding:.55rem 1rem;border:0;border-radius:999px;background:var(--accent);color:var(--on-accent);font-size:.9rem;
 font-weight:600;box-shadow:0 6px 20px var(--shadow);cursor:pointer}
 .player{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--card);border-top:1px solid var(--line);
 box-shadow:0 -6px 24px var(--shadow);padding:.5rem 1rem calc(.6rem + env(safe-area-inset-bottom))}
@@ -289,7 +442,8 @@ box-shadow:0 -6px 24px var(--shadow);padding:.5rem 1rem calc(.6rem + env(safe-ar
 #time{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.85rem;white-space:nowrap}
 .now{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.9rem;font-weight:600}
 .buttons{display:flex;align-items:center;gap:.15rem}
-#play{width:3rem;height:3rem;border-radius:50%;background:var(--accent);color:var(--card);margin:0 .25rem}
+#play{width:3rem;height:3rem;border-radius:50%;background:var(--accent);color:var(--on-accent);margin:0 .25rem}
+#play:not(.playing) .i-pause,#play.playing .i-play{display:none}
 #play:hover{background:var(--accent);filter:brightness(1.08)}
 .extras{flex:1 1 0;display:flex;justify-content:flex-end;align-items:center;gap:.5rem;position:relative}
 .extras label{font-size:.85rem;color:var(--muted);display:flex;gap:.4rem;align-items:center}
@@ -305,7 +459,7 @@ padding:1rem;background:var(--card);border-inline-end:1px solid var(--line);box-
 transform:translateX(-105%);visibility:hidden;transition:transform .25s ease,visibility .25s}
 [dir=rtl] .toc{transform:translateX(105%)}
 .toc.open{transform:none;visibility:visible}
-main{padding-top:1.5rem;font-size:calc(1.0625rem * var(--scale))}
+main{padding-top:1.5rem;font-size:calc(var(--base-phone) * var(--scale))}
 .cover{flex-direction:column;align-items:flex-start;gap:1rem;margin-bottom:2rem;padding-bottom:1.75rem}
 .cover img{width:7rem}
 .cover h1{font-size:1.75em}
@@ -321,23 +475,22 @@ main{padding-top:1.5rem;font-size:calc(1.0625rem * var(--scale))}
 .extras label span{display:none}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
-@media print{
+"""
+
+_PRINT_CSS = """
 @page{margin:2cm}
-/* As specific as the theme rules (a theme picked, or Auto in a dark OS): paper stays light. */
-:root,:root[data-theme],:root:not([data-theme]){--bg:#fff;--fg:#000;--muted:#444;--line:#bbb;
---card:#fff;--accent:#000;--word:#000;--phrase:transparent;--shadow:transparent;color-scheme:light}
 body{background:#fff;color:#000;padding:0}
-.bar,.player,.toc,.pill,.scrim,.note,#settings,#keys{display:none!important}
+.bar,.player,.toc,.pill,.scrim,.note,#settings,#keys,.cover-play{display:none!important}
 .shell{display:block;max-width:none;padding:0}
-main{max-width:none;padding:0;font-size:11.5pt;line-height:1.55}
+main{max-width:none;padding:0;margin:0;font-size:11.5pt;line-height:1.55;background:none;box-shadow:none}
 .cover{break-after:page;border:0}
 main section{break-before:page;margin:0}
 .opener,main h3,main h4{break-after:avoid}
 main p{orphans:3;widows:3}
-.ph.on{background:none}
-.w.on{color:inherit;text-decoration:none}
+.ph.on{background:none;box-shadow:none}
+.w.on{color:inherit;text-decoration:none;background:none;box-shadow:none}
 .opener .label,main p.lead::first-letter{color:#000}
-}
+.opener .label{background:none}
 """
 
 _JS = r"""
@@ -347,21 +500,22 @@ _JS = r"""
   var L = data.labels;
   var root = document.documentElement;
   var body = document.body;
-  var audio = document.getElementById('audio');
-  var playButton = document.getElementById('play');
-  var seekBar = document.getElementById('seek');
-  var ticks = document.getElementById('ticks');
-  var timeText = document.getElementById('time');
-  var nowTitle = document.getElementById('now');
-  var main = document.getElementById('text');
-  var toc = document.getElementById('toc');
-  var tocPanel = document.getElementById('toc-panel');
+  function byId(id) { return document.getElementById(id); }
+  var audio = byId('audio');
+  var playButton = byId('play');
+  var seekBar = byId('seek');
+  var ticks = byId('ticks');
+  var timeText = byId('time');
+  var nowTitle = byId('now');
+  var main = byId('text');
+  var toc = byId('toc');
+  var tocPanel = byId('toc-panel');
   var bookLang = main.getAttribute('lang') || '';
-  var tocToggle = document.getElementById('toc-toggle');
-  var scrim = document.getElementById('scrim');
-  var bar = document.getElementById('bar');
-  var player = document.getElementById('player');
-  var pill = document.getElementById('back-to-current');
+  var tocToggle = byId('toc-toggle');
+  var scrim = byId('scrim');
+  var bar = byId('bar');
+  var player = byId('player');
+  var pill = byId('back-to-current');
   var WS = /\s+/;
   var LETTER;
   try { LETTER = new RegExp('[\\p{L}\\p{M}\\p{N}]', 'gu'); } catch (e) { LETTER = /[A-Za-z0-9]/g; }
@@ -369,10 +523,11 @@ _JS = r"""
   var phraseEls = [];
   var chapters = [];
 
-  // ---- Reading settings: kept in this browser only.
+  // ---- Reading settings: kept in this browser only. The theme and the
+  // alignment are the book's own until the reader picks one.
   var STORE = 'voicestudio-book-reader';
   var SCALES = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6];
-  var prefs = { scale: 2, theme: 'auto', align: 'justify', follow: true };
+  var prefs = { scale: 2, theme: null, align: null, follow: true };
   try {
     var saved = JSON.parse(window.localStorage.getItem(STORE) || 'null');
     if (saved && typeof saved === 'object') {
@@ -385,22 +540,25 @@ _JS = r"""
   function savePrefs() {
     try { window.localStorage.setItem(STORE, JSON.stringify(prefs)); } catch (e) { /* not kept */ }
   }
-  var fontDown = document.getElementById('font-down');
-  var fontUp = document.getElementById('font-up');
-  var fontSize = document.getElementById('font-size');
-  var followBox = document.getElementById('follow');
+  // The reader's pick, else the book's own.
+  function chosen(key) { return prefs[key] || data[key]; }
+  var fontDown = byId('font-down');
+  var fontUp = byId('font-up');
+  var fontSize = byId('font-size');
+  var followBox = byId('follow');
   var choices = Array.prototype.slice.call(document.querySelectorAll('[data-pref]'));
   function applyPrefs() {
     root.style.setProperty('--scale', String(SCALES[prefs.scale]));
-    if (prefs.theme === 'auto') root.removeAttribute('data-theme');
-    else root.setAttribute('data-theme', prefs.theme);
-    root.setAttribute('data-align', prefs.align);
+    var theme = chosen('theme');
+    if (theme === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', theme);
+    root.setAttribute('data-align', chosen('align'));
     fontSize.textContent = Math.round(SCALES[prefs.scale] * 100) + '%';
     fontDown.disabled = prefs.scale === 0;
     fontUp.disabled = prefs.scale === SCALES.length - 1;
     followBox.checked = prefs.follow;
     choices.forEach(function (button) {
-      button.setAttribute('aria-pressed', String(prefs[button.dataset.pref] === button.dataset.value));
+      button.setAttribute('aria-pressed', String(chosen(button.dataset.pref) === button.dataset.value));
     });
   }
   function setPref(key, value) { prefs[key] = value; applyPrefs(); savePrefs(); }
@@ -416,7 +574,7 @@ _JS = r"""
   });
   applyPrefs();
 
-  // ---- The text.
+  // ---- The text: each phrase the page sets, its words timed in turn.
   function tokens(text) { return String(text || '').trim().split(WS).filter(Boolean); }
   // Words of a phrase over [start, end]: by their letters, or evenly when
   // only the chapter is timed (the app's reader does the same).
@@ -432,7 +590,6 @@ _JS = r"""
       return item;
     });
   }
-  function squash(text) { return String(text || '').replace(/\s+/g, ' ').trim(); }
   function clock(t) {
     t = Math.max(0, Math.floor(t || 0));
     var h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
@@ -445,119 +602,30 @@ _JS = r"""
     if (text != null) node.textContent = text;
     return node;
   }
-  function addPhrase(host, phrase, even) {
-    var span = el('span', 'ph');
-    var index = phraseEls.length;
-    phraseEls.push(span);
-    timeWords(tokens(phrase.text), phrase.start, phrase.end, even).forEach(function (w, k) {
-      if (k) span.appendChild(document.createTextNode(' '));
-      var word = el('span', 'w', w.text);
-      word.dataset.i = String(words.length);
-      words.push({ start: w.start, el: word, phrase: index });
-      span.appendChild(word);
-    });
-    if (host.childNodes.length && host.lastChild.nodeName !== 'BR') host.appendChild(document.createTextNode(' '));
-    host.appendChild(span);
-  }
-  // The chapter-number label above a title, unless the title already says it
-  // ("Chapter 3: …" under "Chapter 3").
-  function numberLabel(chapter) {
-    if (chapter.headless || chapter.untitled || chapter.number == null) return '';
-    var label = L.chapter_n.replace('{n}', String(chapter.number));
-    var lead = squash(L.chapter_n.split('{n}')[0]).toLowerCase();
-    if (lead && squash(chapter.title).toLowerCase().indexOf(lead) === 0) return '';
-    return label;
-  }
-  // Words in the app's language (labels) inside the book's text, which
-  // carries the book's own: read out and set in the app's language.
-  function appWords(node) {
-    node.lang = root.lang;
-    node.dir = root.dir || 'ltr';
-    return node;
-  }
-  function tocButton(number, title, onClick, cls) {
-    var button = el('button', cls || null);
-    button.type = 'button';
-    if (number !== null) button.appendChild(el('span', 'num', number));
-    button.appendChild(el('span', 't', title));
-    button.addEventListener('click', onClick);
-    return button;
-  }
-
-  var estimated = false;
-  var hasSections = false;
-  data.chapters.forEach(function (chapter, c) {
-    var even = chapter.precision === 'chapter';
-    if (even) estimated = true;
-    var section = el('section');
-    section.id = 'chapter-' + (c + 1);
-    var label = numberLabel(chapter);
-    if (!chapter.headless) {
-      var opener = el('header', 'opener');
-      if (label) opener.appendChild(appWords(el('p', 'label', label)));
-      var openerTitle = opener.appendChild(el('h2', null, chapter.title));
-      if (chapter.app_title) appWords(openerTitle);
-      section.appendChild(opener);
-    }
-    var item = el('li');
-    var button = tocButton(label ? String(chapter.number) : null, chapter.title,
-      function () { seekTo(chapter.start, section); closeDrawer(); });
-    if (chapter.app_title) appWords(button.lastChild);
-    item.appendChild(button);
-    chapters.push({ start: chapter.start, el: button, section: section, title: chapter.title,
-      appTitle: !!chapter.app_title });
-    var marks = (chapter.sections || []).slice().sort(function (a, b) { return a.phrase - b.phrase; });
-    if (marks.length) { item.appendChild(el('ol')); hasSections = true; }
-    toc.appendChild(item);
-    var phrases = chapter.phrases || [];
-    var p = null;
-    var lead = true;
-    var m = 0;
-    for (var i = 0; i < phrases.length; i++) {
-      if (m < marks.length && marks[m].phrase <= i) {
-        var mark = marks[m++];
-        var heading = el(mark.level === 3 ? 'h4' : 'h3');
-        section.appendChild(heading);
-        var sub = el('li');
-        sub.appendChild(tocButton(null, mark.title, (function (t, target) {
-          return function () { seekTo(t, target); closeDrawer(); };
-        })(mark.start, heading), mark.level === 3 ? 's3' : null));
-        item.lastChild.appendChild(sub);
-        // The heading is read aloud: its phrases are the heading itself.
-        var said = '';
-        var k = i;
-        while (k < phrases.length && squash(said).length < squash(mark.title).length) {
-          said += ' ' + phrases[k].text;
-          k++;
-        }
-        if (squash(said) === squash(mark.title)) {
-          for (; i < k; i++) addPhrase(heading, phrases[i], even);
-        } else {
-          heading.textContent = mark.title;
-        }
-        p = null;
-        lead = false;
-        i--;
-        continue;
-      }
-      var brk = phrases[i]['break'];
-      if (!p || brk === 'paragraph') {
-        p = el('p', lead ? 'lead' : null);
-        lead = false;
-        section.appendChild(p);
-      } else if (brk === 'line') {
-        p.appendChild(el('br'));
-      }
-      addPhrase(p, phrases[i], even);
-    }
-    main.appendChild(section);
+  var sections = Array.prototype.slice.call(main.querySelectorAll('section.chapter'));
+  var tocButtons = Array.prototype.slice.call(toc.children).map(function (item) {
+    return item.querySelector('button');
   });
-  if (estimated) {
-    var note = appWords(el('p', 'note', L.estimated));
-    var cover = main.querySelector('.cover');
-    main.insertBefore(note, cover ? cover.nextSibling : main.firstChild);
-  }
-  if (chapters.length < 2 && !hasSections) body.classList.add('no-toc');
+  sections.forEach(function (section, c) {
+    var even = section.hasAttribute('data-even');
+    Array.prototype.forEach.call(section.querySelectorAll('.ph'), function (span) {
+      var index = phraseEls.length;
+      phraseEls.push(span);
+      var list = tokens(span.textContent);
+      span.textContent = '';
+      timeWords(list, Number(span.getAttribute('data-s')), Number(span.getAttribute('data-e')), even)
+        .forEach(function (w, k) {
+          if (k) span.appendChild(document.createTextNode(' '));
+          var word = el('span', 'w', w.text);
+          word.dataset.i = String(words.length);
+          words.push({ start: w.start, el: word, phrase: index });
+          span.appendChild(word);
+        });
+    });
+    chapters.push({ start: Number(section.getAttribute('data-start')) || 0, el: tocButtons[c],
+      section: section, title: section.getAttribute('data-title') || '',
+      appTitle: section.hasAttribute('data-app-title') });
+  });
 
   // ---- Playback.
   function total() {
@@ -567,6 +635,7 @@ _JS = r"""
     var started = audio.play();
     if (started && started.catch) started.catch(function () {});
   }
+  function toggle() { if (audio.paused) play(); else audio.pause(); }
   function jump(t) {
     audio.currentTime = Math.max(0, t);
     suspended = false;
@@ -687,7 +756,7 @@ _JS = r"""
   function showChapterInContents(button) {
     // Skipped only where the contents are not drawn: the phone drawer is
     // fixed (so it has no offsetParent) but drawn, open or not.
-    if (!tocPanel.getClientRects().length || body.classList.contains('no-toc')) return;
+    if (!button || !tocPanel.getClientRects().length || body.classList.contains('no-toc')) return;
     var top = button.getBoundingClientRect().top - tocPanel.getBoundingClientRect().top +
       tocPanel.scrollTop;
     if (top < tocPanel.scrollTop || top + button.offsetHeight > tocPanel.scrollTop + tocPanel.clientHeight) {
@@ -711,13 +780,13 @@ _JS = r"""
     }
     var chapter = find(chapters, t);
     if (chapter !== currentChapter) {
-      if (currentChapter >= 0) chapters[currentChapter].el.removeAttribute('aria-current');
+      if (currentChapter >= 0 && chapters[currentChapter].el) chapters[currentChapter].el.removeAttribute('aria-current');
       currentChapter = chapter;
       var shown = chapters[Math.max(0, chapter)];
       nowTitle.textContent = shown ? shown.title : '';
       nowTitle.lang = shown && shown.appTitle ? root.lang : bookLang;
       nowTitle.dir = shown && shown.appTitle ? (root.dir || 'ltr') : 'auto';
-      if (chapter >= 0) {
+      if (chapter >= 0 && chapters[chapter].el) {
         chapters[chapter].el.setAttribute('aria-current', 'true');
         showChapterInContents(chapters[chapter].el);
       }
@@ -738,11 +807,13 @@ _JS = r"""
   }
   var frame = 0;
   function loop() { paint(); frame = audio.paused ? 0 : requestAnimationFrame(loop); }
+  var playLabels = Array.prototype.slice.call(document.querySelectorAll('[data-play] .label'));
   function setPlaying(playing) {
     playButton.setAttribute('aria-label', playing ? L.pause : L.play);
     playButton.title = playing ? L.pause : L.play;
-    playButton.querySelector('.i-play').style.display = playing ? 'none' : '';
-    playButton.querySelector('.i-pause').style.display = playing ? '' : 'none';
+    playButton.classList.toggle('playing', playing);
+    playLabels.forEach(function (label) { label.textContent = playing ? L.pause : L.play; });
+    body.classList.toggle('playing', playing);
   }
   audio.addEventListener('play', function () {
     setPlaying(true);
@@ -766,17 +837,27 @@ _JS = r"""
     paint();
   });
   seekBar.addEventListener('change', function () { seeking = false; suspended = false; reveal(false); });
-  playButton.addEventListener('click', function () { if (audio.paused) play(); else audio.pause(); });
-  document.getElementById('back').addEventListener('click', function () { audio.currentTime = Math.max(0, audio.currentTime - 10); });
-  document.getElementById('forward').addEventListener('click', function () { audio.currentTime = audio.currentTime + 10; });
-  document.getElementById('prev-chapter').addEventListener('click', previousChapter);
-  document.getElementById('next-chapter').addEventListener('click', nextChapter);
-  document.getElementById('speed').addEventListener('change', function (event) { audio.playbackRate = Number(event.target.value) || 1; });
+  playButton.addEventListener('click', toggle);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-play]'), function (button) {
+    button.addEventListener('click', toggle);
+  });
+  byId('back').addEventListener('click', function () { audio.currentTime = Math.max(0, audio.currentTime - 10); });
+  byId('forward').addEventListener('click', function () { audio.currentTime = audio.currentTime + 10; });
+  byId('prev-chapter').addEventListener('click', previousChapter);
+  byId('next-chapter').addEventListener('click', nextChapter);
+  byId('speed').addEventListener('change', function (event) { audio.playbackRate = Number(event.target.value) || 1; });
   main.addEventListener('click', function (event) {
     var selection = window.getSelection && window.getSelection();
     if (selection && !selection.isCollapsed) return;
     var target = event.target;
     if (target && target.dataset && target.dataset.i !== undefined) jump(words[Number(target.dataset.i)].start);
+  });
+  // A chapter or section in the contents: its time, and where it is set.
+  toc.addEventListener('click', function (event) {
+    var button = event.target.closest && event.target.closest('button[data-seek]');
+    if (!button) return;
+    seekTo(Number(button.getAttribute('data-seek')) || 0, byId(button.getAttribute('data-target')));
+    closeDrawer();
   });
 
   // ---- Menus and the contents drawer.
@@ -794,8 +875,8 @@ _JS = r"""
     }
   }
   [['settings', 'settings-toggle'], ['keys', 'keys-toggle']].forEach(function (pair) {
-    var menu = document.getElementById(pair[0]);
-    var button = document.getElementById(pair[1]);
+    var menu = byId(pair[0]);
+    var button = byId(pair[1]);
     button.addEventListener('click', function () { setMenu(menu, button, menu.hidden); });
   });
   document.addEventListener('click', function (event) {
@@ -821,7 +902,7 @@ _JS = r"""
     tocToggle.focus({ preventScroll: true });
   }
   tocToggle.addEventListener('click', function () { setDrawer(!tocPanel.classList.contains('open')); });
-  document.getElementById('toc-close').addEventListener('click', closeDrawer);
+  byId('toc-close').addEventListener('click', closeDrawer);
   scrim.addEventListener('click', closeDrawer);
   // Wide again (a tablet turned): the contents are the sidebar, so an open
   // drawer closes; its scrim and expanded toggle would stay behind.
@@ -848,7 +929,7 @@ _JS = r"""
     if (/^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(tag)) return;
     if (event.key === ' ' || event.key === 'Spacebar') {
       event.preventDefault();
-      if (audio.paused) play(); else audio.pause();
+      toggle();
     } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
       event.preventDefault();
       var back = event.key === 'ArrowLeft';
@@ -861,7 +942,7 @@ _JS = r"""
   });
 
   // The title shows in the top bar once the title block has scrolled away.
-  var h1 = main.querySelector('.cover h1');
+  var h1 = byId('book-title');
   if (h1 && window.IntersectionObserver) {
     new IntersectionObserver(function (entries) {
       bar.classList.toggle('titled', !entries[0].isIntersecting);
@@ -892,36 +973,316 @@ _ICONS = {
     "close": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>',
 }
 
+_ROMAN = ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+          (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"))
+
+
+def _roman(number: int) -> str:
+    out = ""
+    for value, letters in _ROMAN:
+        while number >= value:
+            out += letters
+            number -= value
+    return out
+
+
+def _capital(text: str) -> bool:
+    """Whether ``text`` starts (past any quote or bracket) with a capital."""
+    letter = next((c for c in text if c.isalnum()), "")
+    return letter.isupper()
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _seconds(value) -> str:
+    """A time for a ``data-*`` attribute: seconds, to the millisecond."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0.0
+    return f"{max(0.0, number):.3f}".rstrip("0").rstrip(".")
+
+
+def _clock(seconds: float) -> str:
+    total = max(0, int(seconds or 0))
+    h, m, s = total // 3600, total % 3600 // 60, total % 60
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _number_label(chapter: dict, labels: dict, numbering: str) -> str:
+    """The chapter-number label above a title in the design's numbering,
+    unless the title already says it ("Chapter 3: …" under "Chapter 3")."""
+    if chapter.get("headless") or chapter.get("untitled") or chapter.get("number") is None \
+            or numbering == "none":
+        return ""
+    lead = _squash(labels["chapter_n"].split("{n}")[0]).lower()
+    if lead and _squash(chapter["title"]).lower().startswith(lead):
+        return ""
+    number = int(chapter["number"])
+    if numbering == "numeral":
+        return str(number)
+    if numbering == "roman":
+        return _roman(number)
+    return labels["chapter_n"].replace("{n}", str(number))
+
+
+def _toc_number(chapter: dict, label: str, numbering: str) -> Optional[str]:
+    if not label:
+        return None
+    return _roman(int(chapter["number"])) if numbering == "roman" else str(chapter["number"])
+
+
+class _Chapter:
+    """One chapter of the page: its section and its entry in the contents."""
+
+    def __init__(self, chapter: dict, index: int, *, design, labels: dict, people: list,
+                 app_attrs: str, preview_on: bool):
+        self.chapter = chapter
+        self.index = index
+        self.design = design
+        self.template = design.template
+        self.labels = labels
+        self.people = people
+        self.app_attrs = app_attrs
+        self.preview_on = preview_on
+        self.blocks: list = []      # [kind, html, first phrase text]
+        self.subs: list = []        # contents entries of its sections
+        self.paragraph: Optional[dict] = None
+        # Who says the phrase set last (None: narration, or not known yet).
+        self.speaking: Optional[int] = None
+        # A standfirst was just set: the paragraph after it opens with an initial.
+        self.initial = False
+
+    def phrase(self, phrase: dict) -> str:
+        cls = "ph on" if self.preview_on else "ph"
+        self.preview_on = False
+        return (f'<span class="{cls}" data-s="{_seconds(phrase["start"])}" '
+                f'data-e="{_seconds(phrase["end"])}">{html.escape(phrase["text"])}</span>')
+
+    def close(self) -> None:
+        paragraph, self.paragraph = self.paragraph, None
+        if not paragraph:
+            return
+        inner = ""
+        for part in paragraph["parts"]:
+            inner += part if part == "<br>" or not inner or inner.endswith("<br>") else " " + part
+        who = paragraph["who"]
+        if paragraph["label"]:
+            person = self.people[who]
+            self.blocks.append(["turn", (
+                f'<p class="turn who-{person["color"]}"><b class="who">'
+                f'{html.escape(person["name"])}</b> <span class="said">{inner}</span></p>'),
+                paragraph["first"]])
+        else:
+            cls = f' class="{paragraph["cls"]}"' if paragraph["cls"] else ""
+            self.blocks.append(["p", f"<p{cls}>{inner}</p>", paragraph["first"]])
+
+    def open(self, who: Optional[int], cls: str, first: str) -> None:
+        self.close()
+        named = self.design.show_names and who is not None
+        label = named and (self.template.turns or who != self.speaking)
+        self.speaking = who
+        if self.initial and not cls and not label and _capital(first):
+            cls = "initial"
+        self.initial = cls == "standfirst"
+        self.paragraph = {"who": who, "label": label, "parts": [], "first": first,
+                          "cls": "" if label else cls}
+
+    def name(self, who: int) -> str:
+        """``who``'s name where the voice changes inside a paragraph."""
+        person = self.people[who]
+        return f'<b class="who who-{person["color"]}">{html.escape(person["name"])}</b>'
+
+    def build(self) -> tuple:
+        chapter, index, labels = self.chapter, self.index, self.labels
+        esc = html.escape
+        number_label = _number_label(chapter, labels, self.design.numbering)
+        app = chapter.get("app_title")
+        title = esc(chapter["title"])
+        head = ""
+        if not chapter.get("headless"):
+            label_html = (f'<p class="label"{self.app_attrs}>{esc(number_label)}</p>'
+                          if number_label else "")
+            head = (f'<header class="opener">{label_html}'
+                    f'<h2{self.app_attrs if app else ""}>{title}</h2></header>')
+        phrases = chapter["phrases"]
+        marks = sorted(chapter.get("sections") or [], key=lambda s: s.get("phrase", 0))
+        lead = True
+        standfirst = (self.template.standfirst and len(phrases) > 1
+                      and len(phrases[0]["text"]) <= _STANDFIRST_MAX)
+        m = i = 0
+        while i < len(phrases):
+            if m < len(marks) and marks[m].get("phrase", 0) <= i:
+                mark = marks[m]
+                m += 1
+                self.close()
+                # The heading is read aloud: its phrases are the heading itself.
+                said, k = "", i
+                while k < len(phrases) and len(_squash(said)) < len(_squash(mark["title"])):
+                    said += " " + phrases[k]["text"]
+                    k += 1
+                tag = "h4" if mark.get("level") == 3 else "h3"
+                anchor = f"s-{index + 1}-{m}"
+                if _squash(said) == _squash(mark["title"]):
+                    inner = " ".join(self.phrase(p) for p in phrases[i:k])
+                    i = k
+                else:
+                    inner = esc(mark["title"])
+                self.blocks.append(["h", f'<{tag} id="{anchor}">{inner}</{tag}>', ""])
+                deeper = ' class="s3"' if tag == "h4" else ""
+                self.subs.append(
+                    f'<li><button type="button"{deeper} data-seek="{_seconds(mark.get("start"))}"'
+                    f' data-target="{anchor}"><span class="t">{esc(mark["title"])}</span></button></li>')
+                lead = standfirst = False
+                self.speaking = None
+                continue
+            phrase = phrases[i]
+            brk = phrase.get("break")
+            who = phrase.get("who")
+            if self.paragraph is None or brk == "paragraph":
+                if standfirst and not (self.design.show_names and who is not None):
+                    # The chapter's first phrase stands above it; its
+                    # paragraph goes on below.
+                    self.open(who, "standfirst", phrase["text"])
+                    self.paragraph["parts"].append(self.phrase(phrase))
+                    self.close()
+                    standfirst = lead = False
+                    i += 1
+                    if i < len(phrases) and phrases[i].get("break") != "paragraph":
+                        self.open(phrases[i].get("who"), "", phrases[i]["text"])
+                    continue
+                self.open(who, "lead" if lead else "", phrase["text"])
+                lead = standfirst = False
+            elif self.design.show_names and who != self.speaking and self.template.turns:
+                # Another voice inside a paragraph: a turn of its own.
+                self.open(who, "", phrase["text"])
+            else:
+                if brk == "line" and self.paragraph["parts"]:
+                    self.paragraph["parts"].append("<br>")
+                if self.design.show_names and who != self.speaking and who is not None:
+                    self.paragraph["parts"].append(self.name(who))
+            self.speaking = who
+            self.paragraph["parts"].append(self.phrase(phrase))
+            i += 1
+        self.close()
+        if self.template.pull_quotes:
+            self._pull_quote()
+        attrs = (f' class="chapter" id="chapter-{index + 1}" data-start="{_seconds(chapter["start"])}"'
+                 f' data-title="{title}"')
+        if app:
+            attrs += " data-app-title"
+        if chapter.get("precision") == "chapter":
+            attrs += " data-even"
+        section = f"<section{attrs}>{head}{''.join(b[1] for b in self.blocks)}</section>"
+        number = _toc_number(chapter, number_label, self.design.numbering)
+        number_html = f'<span class="num">{esc(number)}</span>' if number else ""
+        length = max(0.0, float(chapter.get("end") or 0) - float(chapter.get("start") or 0))
+        entry = (f'<li><button type="button" data-seek="{_seconds(chapter["start"])}" '
+                 f'data-target="chapter-{index + 1}">{number_html}'
+                 f'<span class="t"{self.app_attrs if app else ""}>{title}</span>'
+                 f'<span class="dur">{_clock(length)}</span></button>'
+                 f'{"<ol>" + "".join(self.subs) + "</ol>" if self.subs else ""}</li>')
+        return section, entry, bool(self.subs), any(b[0] == "turn" for b in self.blocks)
+
+    def _pull_quote(self) -> None:
+        """A pull quote — the first sentence of a paragraph halfway into the
+        chapter, set large a paragraph ahead of it; a copy, so hidden from
+        screen readers."""
+        paragraphs = [k for k, block in enumerate(self.blocks) if block[0] == "p"]
+        if len(paragraphs) < 3:
+            return
+        for n in range(max(2, len(paragraphs) // 2), len(paragraphs)):
+            first = sentences(_squash(self.blocks[paragraphs[n]][2]))
+            text = first[0] if first else ""
+            # The quote marks are the pull quote's own: not a line of dialogue.
+            if _PULL_MIN <= len(text) <= _PULL_MAX and text[0] not in _QUOTES:
+                self.blocks.insert(paragraphs[n - 1], [
+                    "pull", '<blockquote class="pull" aria-hidden="true">'
+                            f"<p>{html.escape(text)}</p></blockquote>", ""])
+                return
+
 
 def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
                 labels: Optional[dict] = None, author: str = "", narrator: str = "",
                 cover_src: Optional[str] = None, lang: str = "en", direction: str = "ltr",
-                book_lang: str = "", duration: float = 0.0) -> str:
+                book_lang: str = "", duration: float = 0.0,
+                design: Optional[book_templates.Design] = None, story: bool = False,
+                voice_names: Optional[dict] = None, preview: bool = False) -> str:
     """The book's ``index.html``. Every text from the book goes through
-    :func:`html.escape` or :func:`_script_json`; the page builds its text
+    :func:`html.escape` or :func:`_script_json`; the script builds its words
     with ``textContent`` only.
 
     ``lang`` and ``direction`` are the app's, whose words the page's own
     labels are in; ``book_lang`` is the language of the book's text (its
     title, contents and chapters), ``""`` when it is not known. The book's
-    text runs in its own direction (``dir="auto"``)."""
+    text runs in its own direction (``dir="auto"``). ``design`` is the book's
+    look (:func:`services.book_templates.resolve`; the default template when
+    ``None``); ``story`` says the timeline is a story's, whose characters are
+    named rather than its voices.
+
+    ``preview`` is the export dialog's: no script and no audio, the first
+    phrase shown as being read so the highlight's look shows."""
     labels = labels_for(labels)
+    design = design or book_templates.resolve(story=story)
+    template = design.template
     esc = html.escape
+    app_lang = esc(lang or "en")
+    app_dir = "rtl" if direction == "rtl" else "ltr"
+    app_attrs = f' lang="{app_lang}" dir="{app_dir}"'
 
     def label(key: str) -> str:
         return esc(labels[key])
 
+    data = page_timeline(timeline, labels, book_title=title, story=story,
+                         voice_names=voice_names)
+    text_lang = _text_lang(book_lang)
+    shown = len(data["chapters"])
+    if preview:
+        # The first chapter (after an opening without a heading, the one
+        # after it too), cut short; the contents still list every chapter.
+        shown = 2 if data["chapters"] and data["chapters"][0].get("headless") else 1
+        for chapter in data["chapters"][:shown]:
+            chapter["phrases"] = chapter["phrases"][:_PREVIEW_PHRASES]
+            chapter["sections"] = [s for s in chapter["sections"]
+                                   if s.get("phrase", 0) < _PREVIEW_PHRASES]
+        for chapter in data["chapters"][shown:]:
+            chapter["phrases"] = []  # listed in the contents only
+    built = [_Chapter(chapter, c, design=design, labels=labels, people=data["people"],
+                      app_attrs=app_attrs, preview_on=preview and c == 0).build()
+             for c, chapter in enumerate(data["chapters"])]
+    sections = "".join(b[0] for b in built[:shown])
+    toc = "".join(b[1] for b in built)
+    no_toc = len(built) < 2 and not any(b[2] for b in built)
+    turns = any(b[3] for b in built[:shown])
+    estimated = any(c["precision"] == "chapter" for c in data["chapters"])
+
     byline = ""
     if author:
-        byline += f'<p class="author"{_text_lang(book_lang)}>{esc(author)}</p>'
+        byline += f'<p class="author"{text_lang}>{esc(author)}</p>'
     if narrator:
         # "Narrated by" is the app's words, inside the book's text.
-        byline += (f'<p lang="{esc(lang or "en")}" dir="{"rtl" if direction == "rtl" else "ltr"}">'
-                   f"{label('narrated_by')} <bdi>{esc(narrator)}</bdi></p>")
-    cover = f'<img src="{esc(cover_src)}" alt="">' if cover_src else ""
-    data = {**page_timeline(timeline, labels, book_title=title), "labels": labels,
-            "duration": float(duration or 0)}
-    text_lang = _text_lang(book_lang)
+        byline += f"<p{app_attrs}>{label('narrated_by')} <bdi>{esc(narrator)}</bdi></p>"
+    play_cover = ""
+    if template.cover_play:
+        play_cover = (f'<button type="button" class="cover-play" data-play>{_ICONS["play"]}'
+                      f'<span class="label"{app_attrs}>{label("play")}</span></button>')
+    cover = esc(cover_src) if cover_src else ""
+    if template.hero:
+        hero = (f'<header class="hero"{text_lang}>'
+                + (f'<img class="hero-bg" src="{cover}" alt="">' if cover else "")
+                + '<div class="hero-inner">'
+                + (f'<img class="hero-poster" src="{cover}" alt="">' if cover else "")
+                + f'<div class="cover-text"><h1 id="book-title">{esc(title)}</h1>{byline}{play_cover}</div>'
+                + "</div></header>")
+        title_block = ""
+    else:
+        hero = ""
+        image = f'<img src="{cover}" alt="">' if cover else ""
+        title_block = (f'<header class="cover">{image}<div class="cover-text">'
+                       f'<h1 id="book-title">{esc(title)}</h1>{byline}{play_cover}</div></header>')
+    note = f'<p class="note"{app_attrs}>{label("estimated")}</p>' if estimated else ""
     speeds = "".join(
         f'<option value="{s}"{" selected" if s == 1 else ""}>{s}×</option>' for s in SPEEDS)
 
@@ -931,16 +1292,29 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 
     themes = "".join(choice("theme", v, f"theme_{v}") for v in ("auto", "light", "sepia", "dark"))
     aligns = choice("align", "justify", "justify") + choice("align", "start", "align_start")
+    css = (_CSS + book_templates.theme_css(design) + book_templates.font_css(design)
+           + template.css + "@media print{" + _PRINT_CSS + book_templates.print_css(design) + "}")
+    faces = "".join(book_fonts.face_css([font], italic=italic) for font, italic in design.embedded)
+    page_data = {"labels": {"play": labels["play"], "pause": labels["pause"]},
+                 "duration": float(duration or 0), "theme": template.theme,
+                 "align": template.align}
+    theme_attr = f' data-theme="{template.theme}"' if template.theme != "auto" else ""
+    classes = f"tpl-{template.id}" + (" no-toc" if no_toc else "") + (" turns" if turns else "")
+    audio = (f'<audio id="audio" preload="metadata" src="{esc(audio_src)}"></audio>'
+             if audio_src and not preview else '<audio id="audio" preload="none"></audio>')
+    script = "" if preview else (
+        f'<script type="application/json" id="book-data">{_script_json(page_data)}</script>\n'
+        f"<script>{_JS}</script>\n")
     return f"""<!doctype html>
-<html lang="{esc(lang or 'en')}" dir="{'rtl' if direction == 'rtl' else 'ltr'}">
+<html lang="{app_lang}" dir="{app_dir}" data-template="{template.id}"{theme_attr} data-align="{template.align}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>{esc(title)}</title>
-<style>{_CSS}</style>
+<style>{faces}{css}</style>
 </head>
-<body>
+<body class="{classes}">
 <header class="bar" id="bar">
 <button type="button" class="icon only-narrow" id="toc-toggle" aria-label="{label('contents')}" title="{label('contents')}" aria-expanded="false" aria-controls="toc-panel">{_ICONS['menu']}</button>
 <span class="bar-title"{text_lang}>{esc(title)}</span>
@@ -956,25 +1330,25 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 <label class="switch"><span>{label('follow')}</span><input type="checkbox" id="follow" checked></label>
 </div>
 </header>
-<div class="shell">
+{hero}<div class="shell">
 <nav class="toc" id="toc-panel" aria-labelledby="contents">
 <div class="toc-head"><h2 id="contents">{label('contents')}</h2><button type="button" class="icon only-narrow" id="toc-close" aria-label="{label('close')}" title="{label('close')}">{_ICONS['close']}</button></div>
-<ol id="toc"{text_lang}></ol>
+<ol id="toc"{text_lang}>{toc}</ol>
 </nav>
 <div class="scrim" id="scrim" hidden></div>
 <main id="text"{text_lang}>
-<header class="cover">{cover}<div><h1>{esc(title)}</h1>{byline}</div></header>
+{title_block}{note}{sections}
 </main>
 </div>
 <button type="button" class="pill" id="back-to-current" hidden>{label('back_to_current')}</button>
 <div class="player" id="player" role="region" aria-label="{label('player')}">
-<audio id="audio" preload="metadata" src="{esc(audio_src)}"></audio>
+{audio}
 <div class="seek-row">
 <div class="seek"><div id="ticks" aria-hidden="true"></div><input id="seek" type="range" min="0" step="0.1" value="0" aria-label="{label('seek')}"></div>
-<span id="time">0:00</span>
+<span id="time">0:00 / {_clock(duration)}</span>
 </div>
 <div class="controls">
-<div class="now" id="now"{text_lang}></div>
+<div class="now" id="now"{text_lang}>{esc(data["chapters"][0]["title"]) if data["chapters"] else ""}</div>
 <div class="buttons">
 <button type="button" class="icon" id="prev-chapter" aria-label="{label('prev_chapter')}" title="{label('prev_chapter')}">{_ICONS['prev']}</button>
 <button type="button" class="icon" id="back" aria-label="{label('back')}" title="{label('back')}">{_ICONS['back']}</button>
@@ -989,9 +1363,7 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 </div>
 </div>
 </div>
-<script type="application/json" id="book-data">{_script_json(data)}</script>
-<script>{_JS}</script>
-</body>
+{script}</body>
 </html>
 """
 

@@ -1,0 +1,559 @@
+{
+ "version": 1,
+ "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c",
+ "subset": "Latin, Latin Extended, Vietnamese",
+ "families": [
+  {
+   "id": "literata",
+   "family": "Literata",
+   "category": "serif",
+   "license": "OFL-1.1",
+   "license_file": "literata/OFL.txt",
+   "license_sha256": "8742963604cd89dc81437811a850018fc03b2bfad686d7422c8235967c87614e",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/literata",
+   "files": [
+    {
+     "file": "literata/Literata.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 118060,
+     "sha256": "efe64f32ea7a2c3ee4a53005859044aacded4ef992777a8d5ef3ad153436b365",
+     "upstream": "Literata[opsz,wght].ttf"
+    },
+    {
+     "file": "literata/Literata-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 120124,
+     "sha256": "0b1ef46cab0d14f946f39d830c2676db764faa6900ae397fbe2b5edf1eadbf62",
+     "upstream": "Literata-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "noto-serif",
+   "family": "Noto Serif",
+   "category": "serif",
+   "license": "OFL-1.1",
+   "license_file": "noto-serif/OFL.txt",
+   "license_sha256": "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/notoserif",
+   "files": [
+    {
+     "file": "noto-serif/NotoSerif.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 143912,
+     "sha256": "2a77b60c7ac58f6125225c0b3ccff00274068b9f72bb293022efa84cee57b0f7",
+     "upstream": "NotoSerif[wdth,wght].ttf"
+    },
+    {
+     "file": "noto-serif/NotoSerif-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 180268,
+     "sha256": "74ee00a7091e506c087542bbe7118a5b761957503d39699ff57a1dc3bf41a0c9",
+     "upstream": "NotoSerif-Italic[wdth,wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "lora",
+   "family": "Lora",
+   "category": "serif",
+   "license": "OFL-1.1",
+   "license_file": "lora/OFL.txt",
+   "license_sha256": "1d9a970809ac804b582a6ce7f0ebc4e7fefcbfd7ff6299cad35ee656a21be716",
+   "reserved_font_name": "Lora",
+   "prepared": "recompressed",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/lora",
+   "files": [
+    {
+     "file": "lora/Lora.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      700
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 85060,
+     "sha256": "55d33ee1c9230c1f07107d1173de684da0975d19877097c699a44406b2b74696",
+     "upstream": "Lora[wght].ttf"
+    },
+    {
+     "file": "lora/Lora-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      700
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 91860,
+     "sha256": "f7121315f96c74bb8c90da9f3e2c82803e6d7dac8bf6ca0e5c93c17ae5d55af7",
+     "upstream": "Lora-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "eb-garamond",
+   "family": "EB Garamond",
+   "category": "serif",
+   "license": "OFL-1.1",
+   "license_file": "eb-garamond/OFL.txt",
+   "license_sha256": "0985066662eb755ed3683ae5482a81a9195b49ce3f7e165cc2388b3dbece7dd7",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/ebgaramond",
+   "files": [
+    {
+     "file": "eb-garamond/EBGaramond.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      800
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 167280,
+     "sha256": "ce8ca6fffcc927f46e1870ced1f4a70d8c43554b114e5c8b359e0fcf775ba271",
+     "upstream": "EBGaramond[wght].ttf"
+    },
+    {
+     "file": "eb-garamond/EBGaramond-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      800
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 179516,
+     "sha256": "e85c63706b854e678d3ac70bce1d3c821b6a0420a3a6bc8d0953652fc2da68f5",
+     "upstream": "EBGaramond-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "source-serif-4",
+   "family": "Source Serif 4",
+   "category": "serif",
+   "license": "OFL-1.1",
+   "license_file": "source-serif-4/OFL.txt",
+   "license_sha256": "5f94c3fd3a23131a417ab5a0c8452de57e70c3cfb9f604d88241f7065ebf9fd9",
+   "reserved_font_name": "Source",
+   "prepared": "recompressed",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/sourceserif4",
+   "files": [
+    {
+     "file": "source-serif-4/SourceSerif4.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      900
+     ],
+     "axes": [
+      "opsz",
+      "wght"
+     ],
+     "bytes": 427556,
+     "sha256": "4453d73855919eb67a8291bf2bad07782ecaf8af0e4e363d58948ff993209d51",
+     "upstream": "SourceSerif4[opsz,wght].ttf"
+    },
+    {
+     "file": "source-serif-4/SourceSerif4-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      900
+     ],
+     "axes": [
+      "opsz",
+      "wght"
+     ],
+     "bytes": 346088,
+     "sha256": "a5e93099350c2768f7939fa51503641c961550830fb2a02083f5cf11adf227b5",
+     "upstream": "SourceSerif4-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "playfair-display",
+   "family": "Playfair Display",
+   "category": "display",
+   "license": "OFL-1.1",
+   "license_file": "playfair-display/OFL.txt",
+   "license_sha256": "566be814f8e96e93dfa16101331557eb6b5467e9e03f627c0910fe93ca12300e",
+   "reserved_font_name": "Playfair Display",
+   "prepared": "recompressed",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/playfairdisplay",
+   "files": [
+    {
+     "file": "playfair-display/PlayfairDisplay.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 106456,
+     "sha256": "f6c8877e84bea26623e04abbbff4490f3b052059fba633ca4065d6e263cce72b",
+     "upstream": "PlayfairDisplay[wght].ttf"
+    },
+    {
+     "file": "playfair-display/PlayfairDisplay-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 103916,
+     "sha256": "c74d00c77eb1fa1cd8ece0f2375943e1c3a3b19e23ca8bf3f3061fdcf08f2cae",
+     "upstream": "PlayfairDisplay-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "be-vietnam-pro",
+   "family": "Be Vietnam Pro",
+   "category": "sans",
+   "license": "OFL-1.1",
+   "license_file": "be-vietnam-pro/OFL.txt",
+   "license_sha256": "6b7f8f73609a25ea78c891e34cf37b06f8a676b7ea986e941e43b009110f2a85",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/bevietnampro",
+   "files": [
+    {
+     "file": "be-vietnam-pro/BeVietnamPro-Regular.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "axes": [],
+     "bytes": 35784,
+     "sha256": "04d862d5d538519af44a7513eaeda1b0eadfa427333685a81df183c47d8b9648",
+     "upstream": "BeVietnamPro-Regular.ttf"
+    },
+    {
+     "file": "be-vietnam-pro/BeVietnamPro-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      400,
+      400
+     ],
+     "axes": [],
+     "bytes": 36312,
+     "sha256": "36bfec346fcb0b8f64adae87b1f5bcf59d7d7a82dd81fac69a140d7fb7f70f88",
+     "upstream": "BeVietnamPro-Italic.ttf"
+    },
+    {
+     "file": "be-vietnam-pro/BeVietnamPro-SemiBold.woff2",
+     "style": "normal",
+     "weight": [
+      600,
+      600
+     ],
+     "axes": [],
+     "bytes": 38120,
+     "sha256": "d97dc67e55d68542d363fd127f48b4f21d1e52a3ff27861812068687509444f6",
+     "upstream": "BeVietnamPro-SemiBold.ttf"
+    },
+    {
+     "file": "be-vietnam-pro/BeVietnamPro-Bold.woff2",
+     "style": "normal",
+     "weight": [
+      700,
+      700
+     ],
+     "axes": [],
+     "bytes": 39056,
+     "sha256": "03a9dc8dd68915266dd165ee0dc9a8640125ffeaef89b1d3619ff183cb9b702e",
+     "upstream": "BeVietnamPro-Bold.ttf"
+    }
+   ]
+  },
+  {
+   "id": "inter",
+   "family": "Inter",
+   "category": "sans",
+   "license": "OFL-1.1",
+   "license_file": "inter/OFL.txt",
+   "license_sha256": "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/inter",
+   "files": [
+    {
+     "file": "inter/Inter.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 131956,
+     "sha256": "ce7eed79ad120b984fce2c26c79fdf8414856bc876373c973a7d56795df3ad6a",
+     "upstream": "Inter[opsz,wght].ttf"
+    },
+    {
+     "file": "inter/Inter-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 141876,
+     "sha256": "2485009f4738b235b78b581c80aa4c0195edae971e88c60935755ec979cc6670",
+     "upstream": "Inter-Italic[opsz,wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "montserrat",
+   "family": "Montserrat",
+   "category": "sans",
+   "license": "OFL-1.1",
+   "license_file": "montserrat/OFL.txt",
+   "license_sha256": "8b7141c03fa4f8d44e6345d5d4931709290f0f67875e452e95ac1fd3a027802e",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/montserrat",
+   "files": [
+    {
+     "file": "montserrat/Montserrat.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 133020,
+     "sha256": "7693841accf3e5e026d3e495fc30e06f41beb9932c66b63cdda6d5eb95dcf9da",
+     "upstream": "Montserrat[wght].ttf"
+    },
+    {
+     "file": "montserrat/Montserrat-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 145532,
+     "sha256": "e530cbe9e53d99fc776ba07d93bfb84c6c0b2442b17c97dbe8bbdb72f6629e6a",
+     "upstream": "Montserrat-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "lexend",
+   "family": "Lexend",
+   "category": "sans",
+   "license": "OFL-1.1",
+   "license_file": "lexend/OFL.txt",
+   "license_sha256": "5da8505887d0fa7fe963445fd58852707fda34adfeb65af25c99d152bab285bd",
+   "reserved_font_name": "RevReading Lexend",
+   "prepared": "recompressed",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/lexend",
+   "files": [
+    {
+     "file": "lexend/Lexend.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      900
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 71896,
+     "sha256": "441703052742423b4dc18957b1224bc8e9c95a6c1539a159c35ad3a5de8680e4",
+     "upstream": "Lexend[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "nunito",
+   "family": "Nunito",
+   "category": "rounded",
+   "license": "OFL-1.1",
+   "license_file": "nunito/OFL.txt",
+   "license_sha256": "580df76c95a1ec5ab878ceb25bb3d85c6a076804e9c970c8c6972aea775fdf65",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/nunito",
+   "files": [
+    {
+     "file": "nunito/Nunito.woff2",
+     "style": "normal",
+     "weight": [
+      200,
+      1000
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 64704,
+     "sha256": "bb9965e35dd6730be5247486a104f0eb21e4c8bbb4bb1dff778285de75ee8b21",
+     "upstream": "Nunito[wght].ttf"
+    },
+    {
+     "file": "nunito/Nunito-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      200,
+      1000
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 70728,
+     "sha256": "228c95bd0a2d4367799452e83f68a67edef0f810ec5b176a3f879b20b83e5561",
+     "upstream": "Nunito-Italic[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "baloo-2",
+   "family": "Baloo 2",
+   "category": "rounded",
+   "license": "OFL-1.1",
+   "license_file": "baloo-2/OFL.txt",
+   "license_sha256": "0ed46c05a619f53d97153694e67260f0159268985d00b629b36edd5b7e4fafe4",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/baloo2",
+   "files": [
+    {
+     "file": "baloo-2/Baloo2.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      800
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 57148,
+     "sha256": "9f150ff65b99a00885d54c0a31c98a65b3fabd137995735261455bd92de9a79e",
+     "upstream": "Baloo2[wght].ttf"
+    }
+   ]
+  },
+  {
+   "id": "patrick-hand",
+   "family": "Patrick Hand",
+   "category": "handwriting",
+   "license": "OFL-1.1",
+   "license_file": "patrick-hand/OFL.txt",
+   "license_sha256": "377f4f9c19e935228552478eb68cc2ed82910988a60ba60e2ac73b09f32d02d1",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/patrickhand",
+   "files": [
+    {
+     "file": "patrick-hand/PatrickHand-Regular.woff2",
+     "style": "normal",
+     "weight": [
+      400,
+      400
+     ],
+     "axes": [],
+     "bytes": 56548,
+     "sha256": "127053174e26aae0aadce3861a5ef89678545f64307bda562373fed123c190a7",
+     "upstream": "PatrickHand-Regular.ttf"
+    }
+   ]
+  },
+  {
+   "id": "jetbrains-mono",
+   "family": "JetBrains Mono",
+   "category": "mono",
+   "license": "OFL-1.1",
+   "license_file": "jetbrains-mono/OFL.txt",
+   "license_sha256": "b2fe5e8987594e9ffd1d2ca52a2f5d73eb8335243893c5d6254b5ad69269591d",
+   "reserved_font_name": null,
+   "prepared": "subset",
+   "source": "https://github.com/google/fonts/tree/7085eb89a950e85db5b166b7a58d414544b4140c/ofl/jetbrainsmono",
+   "files": [
+    {
+     "file": "jetbrains-mono/JetBrainsMono.woff2",
+     "style": "normal",
+     "weight": [
+      100,
+      800
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 50108,
+     "sha256": "2a46a79189ca422179debf3a45df6269d10a8c32a76a41d448cfbf7bf420ca88",
+     "upstream": "JetBrainsMono[wght].ttf"
+    },
+    {
+     "file": "jetbrains-mono/JetBrainsMono-Italic.woff2",
+     "style": "italic",
+     "weight": [
+      100,
+      800
+     ],
+     "axes": [
+      "wght"
+     ],
+     "bytes": 53464,
+     "sha256": "1cc182487436ca13efbc2eeef6da896af32e072323124b8811d111e8735c7bd8",
+     "upstream": "JetBrainsMono-Italic[wght].ttf"
+    }
+   ]
+  }
+ ]
+}

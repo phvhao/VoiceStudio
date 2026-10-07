@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import '@/i18n';
+import i18n from '@/i18n';
 import { parseCastNames } from '@shared/utils/audiobookScript';
 import type { VoiceGains } from '@shared/utils/longformOverrides';
 import { MarkupContextMenu } from './markup-context-menu';
@@ -72,6 +72,23 @@ const submenu = async (name: string | RegExp) => {
   fireEvent.click(await screen.findByRole('menuitem', { name }));
   return (await screen.findAllByRole('menu')).at(-1)!;
 };
+
+it('labels none of its items until it opens', async () => {
+  // Stories keeps a closed menu on every line: closed, it asks for no label
+  // and formats no volume.
+  const asked = vi.spyOn(i18n, 't');
+  try {
+    render(<Editor initial="Wait [pause 1s] here" />);
+    const keys = () => asked.mock.calls.map(([key]) => key);
+    expect(keys()).not.toContain('context.cut');
+    expect(keys()).not.toContain('leveling.db');
+    rightClickAt(0);
+    expect(await screen.findByRole('menuitem', { name: /Cut/ })).toBeInTheDocument();
+    expect(keys()).toContain('leveling.db');
+  } finally {
+    asked.mockRestore();
+  }
+});
 
 it('removes the tag that was right-clicked', async () => {
   render(<Editor initial="Wait [pause 1s] here" />);

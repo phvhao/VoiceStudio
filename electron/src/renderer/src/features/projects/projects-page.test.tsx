@@ -42,7 +42,7 @@ vi.mock('../dub/dub-session', () => ({
   openDubProject: vi.fn(),
 }));
 vi.mock('../longform/longform-session', () => ({
-  useLongformSession: () => ({ active: mocks.active }),
+  useLongformActive: () => mocks.active,
   listLongformProjects: async () => mocks.books,
   openLongformProject: mocks.open,
   createLongformProject: mocks.create,

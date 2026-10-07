@@ -49,6 +49,13 @@ is **separately licensed under Apache License 2.0** by its upstream authors and
 is not relicensed here. Apache License 2.0 is compatible with, and may be
 combined under, the GNU AGPL-3.0. See `pyproject.toml`.
 
+The reading fonts bundled in `backend/assets/fonts/` (used by HTML book
+exports and the reader) are **licensed under the SIL Open Font License 1.1** by
+their authors; each family's `OFL.txt` sits beside its files, and
+`manifest.json` lists every file, its source and its licence. The OFL is
+compatible with distributing them alongside AGPL-3.0 software; they are not
+relicensed here.
+
 Downloaded model weights are not relicensed by VoiceStudio. The default
 `k2-fsa/OmniVoice` model card identifies its code as Apache-2.0 and pretrained
 weights as CC-BY-NC. Its `audio_tokenizer/LICENSE` contains separate Boson

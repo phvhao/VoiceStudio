@@ -1,12 +1,10 @@
-import { useState } from 'react';
 import type { TFunction } from 'i18next';
-import { useTranslation } from 'react-i18next';
-import { FileCodeIcon } from 'lucide-react';
 import { getBridge } from '@/components/bridge';
-import { Button } from '@/components/ui/button';
-import { apiFetch, apiJson, apiPath, describeError } from '@/lib/api/client';
+import { apiFetch, apiJson, apiPath } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
-import { bookLanguageTag, type Draft } from './longform-session';
+import { storyToSpans } from '@shared/utils/storyToSpans';
+import { designRequest, type HtmlDesign } from './html-design';
+import { bookLanguageTag, type Draft, type Mode } from './longform-session';
 
 /** The exported page's own words, in the app's language. */
 export function htmlExportLabels(t: TFunction) {
@@ -48,17 +46,30 @@ export function htmlExportLabels(t: TFunction) {
   };
 }
 
+export interface HtmlExportOptions {
+  mode?: Mode;
+  /** The page's design; the backend's default template when left out. */
+  design?: HtmlDesign | null;
+  /** Names to show for a book's voices: a profile id → its name. */
+  voiceNames?: Record<string, string>;
+}
+
 /**
- * `POST /audiobook/export/html` for the draft's finished book. The script and
- * chapter lengths it was rendered from go along: a book rendered before
- * timelines were kept gets one estimated from them. The page's own words are
- * in the app's language and direction; the book's text keeps its own language.
+ * `POST /audiobook/export/html` for the draft's finished book or story. The
+ * script and chapter lengths it was rendered from go along: a book rendered
+ * before timelines were kept gets one estimated from them. A story sends its
+ * lines as its render posted them — each line's start and character — which
+ * marks it a story and gives one rendered before its timeline said who reads
+ * each line its turns: the lines it was rendered from when the draft kept
+ * them (`outputStory`), else its lines as they stand. The page's own words are in the app's language and
+ * direction; the book's text keeps its own language.
  */
 export function htmlExportBody(
   draft: Draft,
   t: TFunction,
   lang: string,
   direction: 'ltr' | 'rtl' = 'ltr',
+  { mode = 'audiobook', design = null, voiceNames }: HtmlExportOptions = {},
 ) {
   const durations = draft.outputChapters.map((chapter) =>
     chapter.status === 'failed'
@@ -68,17 +79,27 @@ export function htmlExportBody(
         : (chapter.duration_s ?? Number.NaN),
   );
   const timed = durations.length > 0 && durations.every((d) => d === null || Number.isFinite(d));
+  const story = mode === 'stories';
   return {
     output: draft.output,
     title: draft.title,
     metadata: draft.metadata,
     cover_path: draft.cover?.path ?? null,
     text: draft.outputScript || null,
-    chapter_durations: draft.outputScript && timed ? durations : null,
+    chapter_durations: (draft.outputScript || story) && timed ? durations : null,
     lang,
     direction,
     book_lang: bookLanguageTag(draft.language),
     labels: htmlExportLabels(t),
+    ...(design ? { design: designRequest(design) } : {}),
+    ...(story
+      ? {
+          story:
+            draft.outputStory ??
+            storyToSpans(draft.lines, draft.cast, draft.globalSpeed, { layout: true }),
+        }
+      : {}),
+    ...(voiceNames && Object.keys(voiceNames).length ? { voice_names: voiceNames } : {}),
   };
 }
 
@@ -93,17 +114,19 @@ export function htmlExportName(draft: Draft): string {
  * native save dialog under Electron, a download in the browser. The backend
  * hands the ZIP out once and then removes it: it is a full copy of the book.
  * A save that is cancelled or fails never fetches it, so it is discarded.
+ * Resolves to how it ended: `saved`, `canceled` or `downloaded`.
  */
 export async function exportBookHtml(
   draft: Draft,
   t: TFunction,
   lang: string,
   direction: 'ltr' | 'rtl' = 'ltr',
-) {
+  options: HtmlExportOptions = {},
+): Promise<'saved' | 'canceled' | 'downloaded'> {
   const { id } = await apiJson<{ id: string }>('/audiobook/export/html', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(htmlExportBody(draft, t, lang, direction)),
+    body: JSON.stringify(htmlExportBody(draft, t, lang, direction, options)),
   });
   const path = '/audiobook/export/html/' + encodeURIComponent(id);
   const url = apiPath(path);
@@ -115,47 +138,15 @@ export async function exportBookHtml(
       await discard();
       throw error;
     });
-    if (!saved || saved.canceled) await discard();
-    return;
+    if (!saved || saved.canceled) {
+      await discard();
+      return 'canceled';
+    }
+    return 'saved';
   }
   const link = document.createElement('a');
   link.href = url;
   link.download = name;
   link.click();
-}
-
-/** "Export HTML" beside a finished book's downloads. */
-export function ExportHtmlButton({
-  draft,
-  disabled,
-  onError,
-}: {
-  draft: Draft;
-  disabled?: boolean;
-  onError: (message: string | null) => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      disabled={disabled || busy}
-      title={t('book.export_html_hint')}
-      onClick={async () => {
-        setBusy(true);
-        onError(null);
-        try {
-          await exportBookHtml(draft, t, i18n.language, i18n.dir(i18n.language));
-        } catch (cause) {
-          onError(describeError(cause));
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <FileCodeIcon />
-      {t('book.export_html')}
-    </Button>
-  );
+  return 'downloaded';
 }

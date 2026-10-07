@@ -41,6 +41,27 @@ it('resumes a manifest without submitting edited script and accepts only termina
   expect(longformSession.state.drafts.audiobook.output).toBe('new.m4b');
   expect(longformSession.state.failed).toBe(1);
 });
+it("keeps the lines a story was rendered from, and only that render's", async () => {
+  const done = () =>
+    eventResponse([
+      { type: 'started', chapters: 1 },
+      { type: 'chapter', index: 0, title: '', duration_s: 1 },
+      { type: 'done', output: 'story.m4b', failed_chapters: [] },
+    ]);
+  editLongform('stories', { lines: [{ id: '1', text: 'Read aloud.', profileId: null }] });
+  fetchMock.mockResolvedValue(done());
+  await renderLongform('stories');
+  const posted = JSON.parse(fetchMock.mock.calls[0][1].body).chapters;
+  expect(longformSession.state.drafts.stories.outputStory).toEqual(posted);
+  expect(posted[0].spans[0].text).toBe('Read aloud.');
+  // A book keeps its script instead; a resumed render posts no lines to keep.
+  fetchMock.mockResolvedValue(done());
+  await renderLongform('audiobook');
+  expect(longformSession.state.drafts.audiobook.outputStory).toBeNull();
+  fetchMock.mockResolvedValue(done());
+  await renderLongform('stories', 'manifest');
+  expect(longformSession.state.drafts.stories.outputStory).toBeNull();
+});
 it('keeps the exact chapter milliseconds the cue sheet needs', async () => {
   fetchMock.mockResolvedValue(
     eventResponse([

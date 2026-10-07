@@ -1,6 +1,7 @@
 import { SupportShortcut } from '@/components/app-shell/support-shortcut';
 import { SidebarToggle } from '@/components/app-shell/sidebar-toggle';
 import { HistoryNav } from '@/components/app-shell/history-nav';
+import { useTitlebarFit } from '@/components/app-shell/titlebar-fit';
 import { EditProfile } from './edit-profile';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { VoiceSetup } from './voice-setup';
@@ -126,6 +127,7 @@ export function ClonePage() {
   const wasGenerating = useRef(false);
   if (isGenerating) wasGenerating.current = true;
   const focused = useEditorFocus();
+  const titlebarFit = useTitlebarFit();
   // Asking for a pane (voice sample, take details, profile editor) leaves focus mode.
   useEffect(() => {
     if (panel || editingProfileId || selectedTake) setEditorFocus(false);
@@ -167,8 +169,9 @@ export function ClonePage() {
       <div className="flex min-w-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
           <header
+            ref={titlebarFit}
             className={cn(
-              'workspace-titlebar flex shrink-0 items-center justify-between gap-3 px-5',
+              'group/titlebar workspace-titlebar flex shrink-0 items-center justify-between gap-3 px-5',
               (focused || (!editingProfile && !selectedTake && (!panel || choosingVoice))) &&
                 !isMac() &&
                 'native-controls-right',
@@ -201,8 +204,10 @@ export function ClonePage() {
                 }}
               >
                 <HistoryIcon data-icon="inline-start" />
-                {/* A narrow window keeps the page title in view instead. */}
-                <span className="@max-3xl:sr-only">{t('clone.history_title')}</span>
+                {/* A crowded title bar keeps the page title in view instead. */}
+                <span className="group-data-[fit~=controls]/titlebar:sr-only">
+                  {t('clone.history_title')}
+                </span>
               </Button>
             </div>
           </header>

@@ -181,6 +181,41 @@ describe('storyToSpans', () => {
     expect(storyToSpans(tracks, CAST)[0].spans[0].speed).toBeNull(); // default arg
   });
 
+  it('with layout, says where each line starts and who says it', () => {
+    const tracks = [
+      { character: 'narrator', text: '# One' },
+      { character: 'narrator', text: 'Once.' },
+      { character: 'c_fox', text: '[pause 1s] Hi [slow]there[/slow].' },
+      { text: 'Nobody cast.' },
+      { character: 'narrator', text: '# Two' },
+      { character: 'c_fox', text: 'Again.' },
+    ];
+    const chapters = storyToSpans(tracks, CAST, null, { layout: true });
+    const fox = { name: 'Fox', accent: 1 };
+    expect(chapters[0].spans.map((s) => [s.text, s.break_before, s.speaker])).toEqual([
+      ['Once.', undefined, { name: 'Narrator', accent: 0 }],
+      // The leading pause folds into the line before; the line's first span opens it.
+      ['Hi', 'paragraph', fox],
+      ['there', undefined, fox],
+      ['.', undefined, fox],
+      ['Nobody cast.', 'paragraph', undefined],
+    ]);
+    // A chapter's first line opens nothing; a character with no name is nobody.
+    expect(chapters[1].spans[0]).toMatchObject({ text: 'Again.', speaker: fox });
+    expect(chapters[1].spans[0]).not.toHaveProperty('break_before');
+    const unnamed = storyToSpans(
+      [{ character: 'c_fox', text: 'Hm.' }],
+      [{ id: 'c_fox', name: '  ', profileId: null }],
+      null,
+      { layout: true },
+    );
+    expect(unnamed[0].spans[0]).not.toHaveProperty('speaker');
+    // Without layout (takes, retakes, previews) the plan is as before.
+    expect(storyToSpans(tracks, CAST)[0].spans.some((s) => s.break_before || s.speaker)).toBe(
+      false,
+    );
+  });
+
   it('[voice:] reverts to the resolved cast voice, not null', () => {
     const tracks = [{ character: 'c_fox', text: 'hi [voice:p_bob] there [voice:] back' }];
     const spans = storyToSpans(tracks, CAST)[0].spans;

@@ -48,6 +48,9 @@ import {
   type AudiobookLyricsWord,
 } from '@shared/utils/audiobookLyrics';
 import { tokenizeMarkup, type MarkupKind } from './script-markup';
+import { useStore } from '@tanstack/react-store';
+import { useBookFontFamily } from './book-fonts';
+import { longformSession } from './longform-session';
 
 /**
  * Read-along for a rendered audiobook: the book model (words, sentences and
@@ -1253,6 +1256,11 @@ function ReaderTranscript({
   const { t } = useTranslation();
   const activeWord = usePlayingWord(book);
   const activeRef = useRef<HTMLSpanElement>(null);
+  // The body font the book's web-page design chose, served by the backend;
+  // the app's own until it has loaded, and for system fonts.
+  const bookFont = useBookFontFamily(
+    useStore(longformSession, (state) => state.drafts.audiobook.htmlExport?.bodyFont),
+  );
   const pointerDown = useRef(false);
   const settled = useRef(false);
   // Where the glide this started is heading, until it ends. Following
@@ -1347,7 +1355,12 @@ function ReaderTranscript({
       >
         {book.words.length ? (
           // The book's own language and direction, which the app's may not be.
-          <div lang={book.lang} dir="auto">
+          <div
+            lang={book.lang}
+            dir="auto"
+            data-book-font={bookFont ? '' : undefined}
+            style={bookFont ? { fontFamily: bookFont } : undefined}
+          >
             <Transcript
               book={book}
               activeWord={activeWord}

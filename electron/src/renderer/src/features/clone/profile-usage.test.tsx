@@ -16,7 +16,7 @@ vi.mock('../dub/dub-session', () => ({
   useDubSession: () => mocks.session,
   openDubProject: mocks.open,
 }));
-vi.mock('../longform/longform-session', () => ({ useLongformSession: () => ({ active: null }) }));
+vi.mock('../longform/longform-session', () => ({ useLongformActive: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 import { ProfileUsagePanel } from './profile-usage';
 afterEach(() => {

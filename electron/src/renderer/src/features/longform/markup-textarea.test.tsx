@@ -16,7 +16,25 @@ import {
   laneSegments,
   revealOffset,
 } from './markup-textarea';
+import { EditorStatusBar, createCaretSource } from './editor-status-bar';
 import { DEFAULT_VOICE_ACCENT, VOICE_ACCENTS, VOICE_RESET_CHIP } from './voice-palette';
+
+// What the editor reads its text with: the tokenizer (on what) and the voice switches.
+const reads = vi.hoisted(() => ({ tokenized: [] as string[], switches: 0 }));
+vi.mock('./script-markup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./script-markup')>();
+  return {
+    ...actual,
+    tokenizeMarkup: (...args: Parameters<typeof actual.tokenizeMarkup>) => {
+      reads.tokenized.push(args[0]);
+      return actual.tokenizeMarkup(...args);
+    },
+    voiceSwitches: (...args: Parameters<typeof actual.voiceSwitches>) => {
+      reads.switches += 1;
+      return actual.voiceSwitches(...args);
+    },
+  };
+});
 
 type EditorProps = Omit<ComponentProps<typeof MarkupTextarea>, 'value' | 'onValueChange'>;
 
@@ -197,6 +215,79 @@ describe('overlay', () => {
       ['[a tag', 'unknown', '0'],
       ['broken]', 'unknown', '0'],
     ]);
+  });
+
+  it('reads again only the line a keystroke changes, and draws what a fresh editor draws', () => {
+    const book = [
+      '# One',
+      '[voice:Mara] Hi [pause 1s] there.',
+      '## Part [voice:Ben] two',
+      '[slow]Slowly[/slow] and [[gif|jiff]].',
+      '',
+      'Last line.',
+    ].join('\n');
+    const editor = (text: string, label = 'Script') => (
+      <MarkupTextarea
+        aria-label={label}
+        value={text}
+        onValueChange={() => {}}
+        headings
+        gutter
+        activeLine
+        voices={['Mara', 'Ben']}
+      />
+    );
+    // Each node with its attributes, in whatever order an update set them.
+    const shape = (node: Node): unknown =>
+      node instanceof Element
+        ? [
+            node.tagName,
+            Object.fromEntries([...node.attributes].map((attr) => [attr.name, attr.value])),
+            [...node.childNodes].map(shape),
+          ]
+        : node.textContent;
+    const drawn = (container: HTMLElement) =>
+      shape(container.querySelector('[data-slot="markup-lines"]')!);
+    const fresh = (text: string) => {
+      const view = render(editor(text, 'Fresh'));
+      const html = drawn(view.container);
+      view.unmount();
+      return html;
+    };
+    const view = render(editor(book));
+    for (const text of [
+      book.replace('Hi', 'Hi you'),
+      // A tag left open runs into the lines below, and is closed again.
+      book.replace('Hi', 'Hi [voi'),
+      book.replace('Hi', 'Hi [voice:Ben]'),
+      book.replace('Last line.', '# Two\nLast line.'),
+      book,
+    ]) {
+      view.rerender(editor(text));
+      expect(drawn(view.container)).toEqual(fresh(text));
+    }
+    reads.tokenized = [];
+    view.rerender(editor(book.replace('there.', 'there!')));
+    expect(reads.tokenized).toEqual(['[voice:Mara] Hi [pause 1s] there!']);
+  });
+
+  it('reads the voice switches once for the editor and its status bar', () => {
+    const text = '[voice:Mara] Once\n# One\n[voice:Ben] read for both';
+    reads.switches = 0;
+    render(
+      <>
+        <MarkupTextarea aria-label="Script" value={text} onValueChange={() => {}} headings gutter />
+        <EditorStatusBar
+          text={text}
+          caret={createCaretSource()}
+          headings
+          names={['Mara', 'Ben']}
+          voiceCast={{}}
+          profiles={[]}
+        />
+      </>,
+    );
+    expect(reads.switches).toBe(1);
   });
 
   it('colors each voice tag by its name and outlines the way back to the default', () => {

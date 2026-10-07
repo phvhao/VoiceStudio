@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
 import {
@@ -226,6 +226,16 @@ describe('ActionBar', () => {
     expect(button).toHaveTextContent('↵');
   });
 
+  it('sizes the action to its label and shortcut, never below the usual width', () => {
+    render(<ActionBar />);
+    const button = screen.getByRole('button', { name: 'Synthesize audio' });
+
+    // A fixed width cut longer translations short ("Синтезировать ау…").
+    expect(button).toHaveClass('min-w-60');
+    expect(button).not.toHaveClass('w-60');
+    expect(within(button).getByText('Synthesize audio')).toHaveClass('truncate');
+  });
+
   it('keeps the action fixed while showing the real model-loading phase and progress', () => {
     Object.assign(runtime, {
       isGenerating: true,
@@ -236,7 +246,11 @@ describe('ActionBar', () => {
     });
     render(<ActionBar />);
 
-    expect(screen.getByRole('button', { name: 'Optimizing model…' })).toHaveClass('w-60');
+    const button = screen.getByRole('button', { name: 'Optimizing model…' });
+    // The ready face still sets the width, out of sight; the busy face fills it
+    // without adding to it, so the action does not jump between phases.
+    expect(within(button).getByText('Synthesize audio').closest('.invisible')).not.toBeNull();
+    expect(screen.getByText('62% · 3.4s').parentElement).toHaveClass('w-0', 'min-w-full');
     expect(screen.getByText('62% · 3.4s')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '62');
   });

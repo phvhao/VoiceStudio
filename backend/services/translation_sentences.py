@@ -15,8 +15,9 @@ go on after it ("「行こう。」と彼は言った", "'Stop!' he said") stay 
 
 Every translator's output then goes through :func:`omission_verdict`, which
 flags a line that came back much shorter than its source, or with fewer
-sentences, so the segment row can offer a second, more literal pass before
-the line is dubbed.
+sentences, or that repeats one word over and over in place of the rest
+(:func:`looped_repeats`), so the segment row can offer a second, more literal
+pass before the line is dubbed.
 
 Pure text: no model, torch or network import.
 """
@@ -125,6 +126,28 @@ OMISSION_SENTENCE_RATIO = 0.9
 #: "No.", "Okay." — is no sentence a translation can be missing: translators
 #: fold such a word into the next sentence or leave it out.
 _COUNTED_SENTENCE_S = 0.5
+#: Back-to-back copies of one word or phrase that mark a translator stuck in
+#: a loop: NLLB answered a Japanese "No, no, that is not so" with "No, no, no,
+#: no, ..." up to its length limit (133 copies), while complete translations
+#: of 83 lines held five at most ("Oui, oui, oui, oui, oui !" for "Yes, yes,
+#: yes, yes!") where their source repeated nothing much, and the next
+#: sentence may open with the same word: "Không, không, không, không, không.
+#: Không sao đâu." is two sentences, not a loop. A line that repeats more is
+#: allowed more (:func:`repeat_allowance`).
+REPEAT_MIN_COPIES = 7
+#: Copies a translation may hold whatever its source: what a faithful line
+#: says unprompted ("No, no, no, no" for "いやいや").
+REPEAT_FLOOR = 4
+#: Longest unit of characters a source's repetition is read in when it is
+#: inside a word or a script without spaces: "Hahaha", "Nooooo", 哈哈哈.
+_SOURCE_REPEAT_CHARS = 4
+#: Longest repeated unit looked for: words, or characters of a script written
+#: without spaces.
+_REPEAT_MAX_UNIT = 12
+#: Scripts written without spaces between words (Han, kana, Thai): a
+#: repetition is read in their characters.
+_UNSPACED = "".join(f"{chr(first)}-{chr(last)}" for first, last, language in _DENSE_BLOCKS if language != "ko")
+_REPEAT_UNIT = re.compile(rf"[{_UNSPACED}]|[^\W_{_UNSPACED}]+")
 
 
 def _speakable(text: str) -> bool:
@@ -403,14 +426,80 @@ def sentence_count(text: str, language: Optional[str] = None) -> int:
     return len(_content(text, language)[0])
 
 
+def _periodic(text: str) -> bool:
+    """Whether ``text`` is one shorter piece over and over ("哈哈", "haha")."""
+    return any(len(text) % size == 0 and text == text[:size] * (len(text) // size)
+               for size in range(1, len(text) // 2 + 1))
+
+
+def _repeat_copies(text: str) -> int:
+    """The most back-to-back copies of one unit of ``text``: one to
+    :data:`_REPEAT_MAX_UNIT` words, or characters of a script written without
+    spaces, compared without case or punctuation ("No, no, no!" holds 3). A
+    unit that is one character, or one shorter piece over and over, is no
+    repetition: "I-I-I" is a stammer, and a laugh or a scream ("哈哈哈",
+    "hahaha", "aaah") repeats one sound, however it is cut into units."""
+    units = [unit.casefold() for unit in _REPEAT_UNIT.findall(text or "")]
+    best = min(len(units), 1)
+    for size in range(1, _REPEAT_MAX_UNIT + 1):
+        run = 0
+        for at in range(size, len(units)):
+            run = run + 1 if units[at] == units[at - size] else 0
+            copies = run // size + 1
+            if copies > best:
+                unit = "".join(units[at - size + 1:at + 1])
+                if len(unit) > 1 and not _periodic(unit):
+                    best = copies
+    return best
+
+
+def _source_copies(text: str) -> int:
+    """How much ``text`` repeats itself, read generously: its words and
+    phrases (:func:`_repeat_copies`) and also a sound of up to
+    :data:`_SOURCE_REPEAT_CHARS` letters inside a word or a script without
+    spaces ("Hahahaha" holds 4, 哈 ten times 10), so a faithful translation
+    of a laugh into words ("Ha ha ha ...") is held to the laugh's length."""
+    letters = "".join(char for char in (text or "").casefold() if char.isalnum())
+    best = 1 if letters else 0
+    for size in range(1, _SOURCE_REPEAT_CHARS + 1):
+        run = 0
+        for at in range(size, len(letters)):
+            run = run + 1 if letters[at] == letters[at - size] else 0
+            best = max(best, run // size + 1)
+    return max(best, _repeat_copies(text))
+
+
+def repeat_allowance(source: str) -> int:
+    """Back-to-back copies of one word or phrase a faithful translation of
+    ``source`` may hold: half again what the source holds, and one more, but
+    never fewer than :data:`REPEAT_FLOOR` — five "はい" came out as seven
+    "yeah". NLLB's loop guard lets a line run this far, and no further."""
+    copies = _source_copies(source)
+    return max(REPEAT_FLOOR, copies + copies // 2 + 1)
+
+
+def looped_repeats(source: str, translation: str) -> int:
+    """How many back-to-back copies of one word or phrase ``translation``
+    holds when that is a translator stuck in a loop, else 0: at least
+    :data:`REPEAT_MIN_COPIES`, and more than :func:`repeat_allowance` lets a
+    line repeating what its source repeats ("Ha ha ha ha ha!") hold."""
+    copies = _repeat_copies(translation)
+    if copies >= REPEAT_MIN_COPIES and copies > repeat_allowance(source):
+        return copies
+    return 0
+
+
 def omission_verdict(source: str, translation: str, source_lang: Optional[str],
                      target_lang: Optional[str]) -> Optional[dict]:
     """Why ``translation`` may be missing part of ``source``, or None.
 
-    Both lengths are expected seconds of speech in their own language, of the
-    sentences a translation must keep (:func:`_content`: no bracketed asides,
-    no "Oh." before a sentence), and the translation is compared with what a
-    complete one usually measures for that language pair
+    A translation that repeats one word or phrase over and over
+    (:func:`looped_repeats`) is flagged ``repeated`` whatever its length: the
+    loop took the place of the rest of the line. Otherwise both lengths are
+    expected seconds of speech in their own language, of the sentences a
+    translation must keep (:func:`_content`: no bracketed asides, no "Oh."
+    before a sentence), and the translation is compared with what a complete
+    one usually measures for that language pair
     (:data:`_RELATIVE_LENGTH` for the translation, and
     :data:`_SOURCE_RELATIVE_LENGTH` for the spoken source; dense scripts are
     recognized by their characters, so a mislabelled source still measures
@@ -426,14 +515,22 @@ def omission_verdict(source: str, translation: str, source_lang: Optional[str],
     source_sentences, source_language = _content(source, source_lang)
     target_sentences, target_language = _content(translation, target_lang)
     source_s = sum(expected_duration(sentence, source_language) for sentence in source_sentences)
-    if source_s < OMISSION_MIN_SOURCE_S:
+    repeats = looped_repeats(source, translation)
+    if repeats:
+        # Judged whatever the source's length; one too short to count as a
+        # sentence ("Yes.") is measured whole.
+        source_s = source_s or expected_duration(source, source_language)
+    elif source_s < OMISSION_MIN_SOURCE_S:
         return None
     expected = source_s * (_RELATIVE_LENGTH.get(target_language, 1.0)
                            / _SOURCE_RELATIVE_LENGTH.get(source_language, 1.0))
-    ratio = sum(expected_duration(sentence, target_language) for sentence in target_sentences) / expected
+    target_s = sum(expected_duration(sentence, target_language) for sentence in target_sentences)
+    ratio = target_s / expected if expected else 0.0
     source_n = len(source_sentences)
     target_n = len(target_sentences)
     verdict = {"ratio": round(ratio, 2), "source_sentences": source_n, "target_sentences": target_n}
+    if repeats:
+        return {"reason": "repeated", "repeats": repeats, **verdict}
     if ratio < OMISSION_SHORT_RATIO:
         return {"reason": "short", **verdict}
     if (source_n >= 2 and target_n < source_n and ratio < OMISSION_SENTENCE_RATIO

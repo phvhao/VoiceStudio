@@ -8,14 +8,14 @@ import { apiJson, describeError } from '@/lib/api/client';
 import { Button } from '@/components/ui/button';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { openDubProject, useDubSession } from '../dub/dub-session';
-import { useLongformSession } from '../longform/longform-session';
+import { useLongformActive } from '../longform/longform-session';
 import type { DubProject } from '../projects/project-format';
 
 export function ProfileUsagePanel({ id }: { id: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const session = useDubSession();
-  const longform = useLongformSession();
+  const longformActive = useLongformActive();
   const [pending, setPending] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
@@ -26,7 +26,7 @@ export function ProfileUsagePanel({ id }: { id: string }) {
   });
   const locked =
     busy ||
-    Boolean(longform.active || session.recovery) ||
+    Boolean(longformActive || session.recovery) ||
     !['idle', 'editing', 'done'].includes(session.phase);
   const open = async (projectId: string) => {
     if (locked) return;

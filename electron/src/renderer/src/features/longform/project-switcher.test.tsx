@@ -20,7 +20,10 @@ const m = vi.hoisted(() => ({
   save: vi.fn(),
 }));
 vi.mock('./longform-session', () => ({
-  useLongformSession: () => m.state,
+  useLongformState: (select: (state: typeof m.state) => unknown) => select(m.state),
+  useLongformActive: () => m.state.active,
+  useDraftField: (mode: 'audiobook' | 'stories', field: 'projectId' | 'title') =>
+    m.state.drafts[mode][field],
   listLongformProjects: m.list,
   openLongformProject: m.open,
   newLongformProject: m.create,

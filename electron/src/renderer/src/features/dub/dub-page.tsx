@@ -6,6 +6,7 @@ import { EngineNotice } from '@/components/engine-notice';
 import { AgentFixButton } from '@/components/agent-fix-button';
 import { getBridge } from '@/components/bridge';
 import { WorkspaceHeader } from '@/components/app-shell/workspace-header';
+import { TITLEBAR_NAME_MIN } from '@/components/app-shell/titlebar-fit';
 import { Switch } from '@/components/ui/switch';
 import { MAX_COOKIE_EXPORT_BYTES } from '@shared/utils/cookieExport';
 import { hasCompleteTranslation, multiLangTargets } from '@shared/utils/multiLang';
@@ -50,7 +51,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { runRendererTask } from '@/lib/global-error-recovery';
 import { isImeComposing } from '@/lib/ime';
 import { canCreateStoryFromDub, loadDubIntoStories, storiesDraftOccupied } from './dub-to-story';
-import { useLongformSession } from '../longform/longform-session';
+import { useLongformActive, useLongformDraft } from '../longform/longform-session';
 import { useTranslation } from 'react-i18next';
 import {
   AlertCircleIcon,
@@ -155,9 +156,14 @@ import {
 } from './dub-session';
 import { OmissionFlag, VideoFitBadge, VideoFitControl, segmentVideoRatio } from './segment-fit';
 import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
+import { useFitSteps } from '@/hooks/use-fit-steps';
 
 const DEFAULT_TRANSLATION_AGENT_KEY = 'voicestudio.defaultTranslationAgent';
 const LIVE_PREVIEW_KEY = 'voicestudio.dubLivePreview';
+// What the segment toolbar gives up, in order, when its actions do not fit in
+// one row: the Undo, Redo and Glossary words, then the remaining words (every
+// button keeps its name for screen readers and tooltips), then the single row.
+const TOOLBAR_FIT_STEPS = ['short', 'icons', 'wrap'] as const;
 const targetOptions = LANG_CODES.map((item) => item.label);
 const sentenceEnd = /[.!?\u3002\uff01\uff1f]/;
 
@@ -297,7 +303,8 @@ export function DubPage() {
   const modelCatalogue = useModelCatalogue();
   const profiles = useProfiles();
   const navigate = useNavigate();
-  const longform = useLongformSession();
+  const longformActive = useLongformActive();
+  const storiesDraft = useLongformDraft('stories');
   const [storyOpen, setStoryOpen] = useState(false);
   // A dub already knows who says what: diarisation grouped the segments and the
   // Cast strip gave each speaker a voice. Rebuilding that as a Story by hand
@@ -305,7 +312,7 @@ export function DubPage() {
   const storyFromDub = canCreateStoryFromDub(session);
   // Loading replaces whatever is in Stories, so ask first — but only when there
   // is something to lose.
-  const storyOccupied = storiesDraftOccupied(longform.drafts.stories);
+  const storyOccupied = storiesDraftOccupied(storiesDraft);
   const createStoryFromDub = () => {
     if (!profiles.isSuccess) return;
     const loaded = loadDubIntoStories(session.segments, {
@@ -353,6 +360,7 @@ export function DubPage() {
   useLayoutEffect(() => {
     requestAnimationFrame(() => segmentVirtualizer.measure());
   }, [editingSegmentId, expandedSegmentId, segmentVirtualizer]);
+  const toolbarFit = useFitSteps<HTMLDivElement>(TOOLBAR_FIT_STEPS, '[data-fit-part]');
   const code = LANG_CODES.find((item) => item.label === target)?.code;
   const batchTargets = multiLangTargets(target, code || '', session.multiTargets || []);
   const agentBatchReady = Boolean(
@@ -894,7 +902,10 @@ export function DubPage() {
   const translateBlockers = describeBlockers(dubTranslateBlockers({ ...gateState, translator }));
   // A local agent CLI translates on its own; the LLM route goes through the engine.
   const agentTranslateBlockers = describeBlockers(
-    dubTranslateBlockers({ ...gateState, translator: selectedTranslationAgent ? null : translator }),
+    dubTranslateBlockers({
+      ...gateState,
+      translator: selectedTranslationAgent ? null : translator,
+    }),
   );
   const generateBlockers = describeBlockers(
     dubGenerateBlockers({
@@ -964,6 +975,7 @@ export function DubPage() {
         <span
           className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
           title={session.filename}
+          data-fit-min={TITLEBAR_NAME_MIN}
         >
           {compactSourceLabel(session.filename)}
         </span>
@@ -973,9 +985,9 @@ export function DubPage() {
             size="sm"
             // editLongform is a no-op while a longform render is running, so the
             // action would navigate to Stories having loaded nothing.
-            disabled={Boolean(longform.active) || !profiles.isSuccess}
+            disabled={Boolean(longformActive) || !profiles.isSuccess}
             title={
-              longform.active
+              longformActive
                 ? t('dubWorkspace.storyBusy')
                 : !profiles.isSuccess
                   ? t(profiles.isError ? 'common.error' : 'common.loading')
@@ -1179,7 +1191,11 @@ export function DubPage() {
                   aria-label={removeSourceLabel}
                   disabled={!sourceRemovable}
                   onClick={() => {
-                    if (session.recovery || session.segments.length > 0 || editHistory.undoDepth > 0)
+                    if (
+                      session.recovery ||
+                      session.segments.length > 0 ||
+                      editHistory.undoDepth > 0
+                    )
                       setRemoveVideoOpen(true);
                     else void removeVideo();
                   }}
@@ -1995,10 +2011,15 @@ export function DubPage() {
             <div className="w-full space-y-4">
               {session.segments.length > 0 && (
                 <div
-                  className="sticky top-0 z-30 -mx-6 grid min-h-12 w-[calc(100%+3rem)] min-w-0 isolate grid-cols-[auto_minmax(0,1fr)_auto] items-center overflow-hidden border-y border-border/60 px-2 py-1 shadow-sm max-[1100px]:grid-cols-[minmax(0,1fr)_auto]"
+                  ref={toolbarFit}
+                  data-slot="dub-segment-toolbar"
+                  className="group/toolbar sticky top-0 z-30 -mx-6 grid min-h-12 w-[calc(100%+3rem)] min-w-0 isolate grid-cols-[auto_minmax(0,1fr)_auto] items-center overflow-hidden border-y border-border/60 px-2 py-1 shadow-sm max-[1100px]:grid-cols-[minmax(0,1fr)_auto]"
                   style={{ backgroundColor: 'var(--background)' }}
                 >
-                  <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
+                  <div
+                    data-fit-part
+                    className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5"
+                  >
                     <span className="shrink-0 rounded-md bg-muted/35 px-2 py-1 text-xs font-medium tabular-nums text-muted-foreground">
                       {session.segments.length} {t('dub.segments')}
                     </span>
@@ -2022,7 +2043,9 @@ export function DubPage() {
                       }}
                     >
                       <HeadphonesIcon />
-                      <span className="hidden @5xl:inline">{t('dub.live_preview')}</span>
+                      <span className="group-data-[fit~=icons]/toolbar:hidden">
+                        {t('dub.live_preview')}
+                      </span>
                     </Button>
                   </div>
                   <div className="contents">
@@ -2049,7 +2072,10 @@ export function DubPage() {
                       </div>
                     )}
                   </div>
-                  <div className="col-start-2 row-start-1 flex min-w-0 items-center justify-center gap-1 overflow-x-auto px-2 [scrollbar-width:none] max-[1100px]:col-span-2 max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:mt-1 max-[1100px]:justify-start max-[1100px]:border-t max-[1100px]:border-border/50 max-[1100px]:pt-1 [&::-webkit-scrollbar]:hidden">
+                  <div
+                    data-fit-part
+                    className="col-start-2 row-start-1 flex min-w-0 items-center justify-center-safe gap-1 overflow-x-auto px-2 [scrollbar-width:none] group-data-[fit~=wrap]/toolbar:flex-wrap max-[1100px]:col-span-2 max-[1100px]:col-start-1 max-[1100px]:row-start-2 max-[1100px]:mt-1 max-[1100px]:justify-start max-[1100px]:border-t max-[1100px]:border-border/50 max-[1100px]:pt-1 [&::-webkit-scrollbar]:hidden"
+                  >
                     <Button
                       size="sm"
                       variant="ghost"
@@ -2065,7 +2091,9 @@ export function DubPage() {
                       }
                     >
                       <CheckCheckIcon />
-                      {t('projects.all')}
+                      <span className="group-data-[fit~=icons]/toolbar:hidden">
+                        {t('projects.all')}
+                      </span>
                     </Button>
                     <Button
                       size="sm"
@@ -2076,7 +2104,9 @@ export function DubPage() {
                       onClick={undoDubEdit}
                     >
                       <Undo2Icon />
-                      <span className="hidden @6xl:inline">{t('segmentEditing.undo')}</span>
+                      <span className="group-data-[fit~=short]/toolbar:hidden">
+                        {t('segmentEditing.undo')}
+                      </span>
                     </Button>
                     <Button
                       size="sm"
@@ -2087,7 +2117,9 @@ export function DubPage() {
                       onClick={redoDubEdit}
                     >
                       <Redo2Icon />
-                      <span className="hidden @6xl:inline">{t('segmentEditing.redo')}</span>
+                      <span className="group-data-[fit~=short]/toolbar:hidden">
+                        {t('segmentEditing.redo')}
+                      </span>
                     </Button>
                     {failedTranslationCount > 0 && code && (
                       <Button
@@ -2119,7 +2151,9 @@ export function DubPage() {
                       }}
                     >
                       <ClipboardPasteIcon />
-                      <span className="hidden @5xl:inline">{t('dub.paste_translation_btn')}</span>
+                      <span className="group-data-[fit~=icons]/toolbar:hidden">
+                        {t('dub.paste_translation_btn')}
+                      </span>
                     </Button>
                     <Button
                       size="sm"
@@ -2136,7 +2170,7 @@ export function DubPage() {
                       }}
                     >
                       <BookOpenIcon />
-                      <span className="hidden @6xl:inline">
+                      <span className="group-data-[fit~=short]/toolbar:hidden">
                         {t('dub.glossary_btn', { count: glossaryCount })}
                       </span>
                     </Button>
@@ -3195,20 +3229,18 @@ export function DubPage() {
                     </GatedAction>
                   )}
                   {/* Regenerating changed lines re-fits the track too. */}
-                  {session.phase === 'done' &&
-                    timingChanged &&
-                    !incrementalPlan?.stale.length && (
-                      <GatedAction
-                        variant="secondary"
-                        blockers={regenBlockers}
-                        align="end"
-                        title={t('dub.apply_timing_title')}
-                        onClick={() => void applyTiming()}
-                      >
-                        <Clock3Icon />
-                        {t('dub.apply_timing')}
-                      </GatedAction>
-                    )}
+                  {session.phase === 'done' && timingChanged && !incrementalPlan?.stale.length && (
+                    <GatedAction
+                      variant="secondary"
+                      blockers={regenBlockers}
+                      align="end"
+                      title={t('dub.apply_timing_title')}
+                      onClick={() => void applyTiming()}
+                    >
+                      <Clock3Icon />
+                      {t('dub.apply_timing')}
+                    </GatedAction>
+                  )}
                 </>
               )}
             </footer>

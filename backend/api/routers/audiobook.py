@@ -3111,6 +3111,18 @@ def audiobook_timeline(output: str) -> dict:
 _LANG_TAG_RE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,3}$")
 
 
+class HtmlBookDesign(BaseModel):
+    """A book's look (``services.book_templates``): a template and its quick
+    options. A choice left out, or one this app does not know, is the
+    template's own."""
+    template: str | None = Field(default=None, max_length=40)
+    accent: str | None = Field(default=None, max_length=7)
+    body_font: str | None = Field(default=None, max_length=40)
+    heading_font: str | None = Field(default=None, max_length=40)
+    show_names: bool | None = None
+    numbering: str | None = Field(default=None, max_length=10)
+
+
 class AudiobookHtmlExportRequest(BaseModel):
     output: str
     title: str = Field(default="", max_length=500)
@@ -3129,6 +3141,16 @@ class AudiobookHtmlExportRequest(BaseModel):
     labels: dict[str, str] | None = None
     # The language of the book's text (an HTML lang tag); "" when not known.
     book_lang: str = Field(default="", max_length=35)
+    # The page's design; left out, the default template (Script for a story).
+    design: HtmlBookDesign | None = None
+    # A story's chapters as /longform/render posted them, which marks the
+    # book a story: one rendered before its timeline said who reads each line
+    # and where each starts gets that from them, and one rendered without a
+    # timeline is estimated from them.
+    story: list[dict] | None = Field(default=None, max_length=_MAX_CHAPTERS)
+    # Names to show for the voices a book reads in, by the name its
+    # [voice:…] tags give (a profile id among them).
+    voice_names: dict[str, str] | None = None
 
 
 def _html_export_dir() -> str:
@@ -3163,39 +3185,86 @@ def sweep_html_exports() -> None:
     _prune_html_exports(_html_export_dir(), max_age_s=None)
 
 
-@router.post("/audiobook/export/html")
-async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
-    """Export a finished book as a web page: a ZIP holding ``index.html`` —
-    one self-contained page that reads the book along with its audio —
-    ``audio/<book>`` and the cover. It waits in the app's data folder under
-    ``id`` until ``GET /audiobook/export/html/{id}`` downloads it, once, or
-    ``DELETE`` discards it."""
+#: Voice names an export request may give, and how long each may be.
+_VOICE_NAMES_MAX, _VOICE_NAME_MAX = 500, 200
+#: The longest side of the cover the export dialog's preview carries inline.
+_PREVIEW_COVER_PX = 640
+
+
+def _html_story_plan(items: list[dict] | None) -> list | None:
+    """A posted story's chapters as its render read them (``None`` when no
+    story was posted); 422 when they are not a ``/longform/render`` plan."""
+    from pydantic import ValidationError
+
+    if items is None:
+        return None
+    try:
+        posted = [LongformChapter.model_validate(item) for item in items]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="story is not a /longform/render plan") from exc
+    return [c for c in (_story_chapter(p, i) for i, p in enumerate(posted)) if c is not None]
+
+
+def _preview_cover(path: str) -> str | None:
+    """The cover as a small inline JPEG: the preview frame loads nothing."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(path) as image:
+            image.thumbnail((_PREVIEW_COVER_PX, _PREVIEW_COVER_PX))
+            out = io.BytesIO()
+            image.convert("RGB").save(out, "JPEG", quality=82)
+    except (OSError, ValueError):
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+
+
+async def _html_book(req: AudiobookHtmlExportRequest, *, preview: bool = False) -> dict:
+    """What an HTML export of ``req`` holds: ``page`` (its ``index.html``),
+    the book's ``audio`` file and its ``audio_entry`` in the ZIP, and the
+    ``cover`` and its ``cover_entry`` (``None`` without one). 404 when
+    ``output`` is not a finished render. The ``preview`` is the export
+    dialog's: the first chapter, the cover inline, no audio, nothing removed."""
     from core.config import OUTPUTS_DIR
+    from services import book_templates
+    from services.audiobook import timeline_with_layout, timeline_with_turns
     from services.audiobook_html import (
         audio_name,
         chapter_title,
-        estimated_timeline,
+        estimated_plan_timeline,
         labels_for,
         render_page,
-        write_export_zip,
     )
-    from services.audiobook import timeline_with_layout
     from services.ffmpeg_utils import probe_duration
 
     audio_path = _book_path(req.output)
     legacy_zip = _book_path(req.output, HTML_EXPORT_SUFFIX)
     if audio_path is None or legacy_zip is None or not os.path.isfile(audio_path):
         raise HTTPException(status_code=404, detail="No such audiobook")
-    # An earlier version kept the export beside the book, a second copy of it.
-    _remove_quietly(legacy_zip)
+    if not preview:
+        # An earlier version kept the export beside the book, a second copy of it.
+        _remove_quietly(legacy_zip)
+    story = _html_story_plan(req.story)
     timeline = _read_book_timeline(req.output)
-    if timeline is None and req.text:
+    if timeline is None and (req.text or story):
+        planned = parse_audiobook_script(req.text).chapters if req.text else story
         durations = req.chapter_durations
+        if durations is not None and len(durations) != len(planned):
+            # Lengths of other chapters (a story edited since its render):
+            # the file's length is shared by these chapters' text instead.
+            durations = None
         total = None
         if durations is None:
             total = await probe_duration(audio_path, allowed_root=OUTPUTS_DIR)
-        timeline = estimated_timeline(req.output, req.text, chapter_durations=durations,
-                                      duration=total)
+        timeline = estimated_plan_timeline(req.output, planned, chapter_durations=durations,
+                                           duration=total)
+    elif timeline is not None and story:
+        # A story timed before its phrases said who reads them and where each
+        # line starts takes both from the lines it was rendered from.
+        timeline = await asyncio.to_thread(timeline_with_turns, timeline, story)
     elif timeline is not None and req.text:
         # A book timed before phrases kept their line and paragraph breaks
         # takes them from the script it was rendered from.
@@ -3207,24 +3276,75 @@ async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
     named = next((c for c in chapters if not c.get("untitled") and c.get("title")), None)
     title = (req.title.strip() or (meta.get("title") or "").strip()
              or (chapter_title(named, 1, labels) if named else "") or req.output)
+    is_story = story is not None or req.output.startswith("story_")
+    chosen = req.design or HtmlBookDesign()
+    design = book_templates.resolve(
+        chosen.template, accent=chosen.accent, body_font=chosen.body_font,
+        heading_font=chosen.heading_font, show_names=chosen.show_names,
+        numbering=chosen.numbering, story=is_story)
+    voice_names = {str(k)[:_VOICE_NAME_MAX]: str(v)[:_VOICE_NAME_MAX]
+                   for k, v in list((req.voice_names or {}).items())[:_VOICE_NAMES_MAX]}
     cover = _safe_cover_path(req.cover_path)
     cover_entry = f"cover{os.path.splitext(cover)[1].lower()}" if cover else None
     entry = f"audio/{audio_name(req.output)}"
-    page = render_page(
-        title=title, timeline=timeline, audio_src=entry, labels=labels,
+    cover_src = cover_entry
+    if preview and cover:
+        cover_src = await asyncio.to_thread(_preview_cover, cover)
+    page = await asyncio.to_thread(
+        render_page,
+        title=title, timeline=timeline, audio_src="" if preview else entry, labels=labels,
         author=(meta.get("author") or "").strip(), narrator=(meta.get("narrator") or "").strip(),
-        cover_src=cover_entry, lang=req.lang if _LANG_TAG_RE.fullmatch(req.lang) else "en",
+        cover_src=cover_src, lang=req.lang if _LANG_TAG_RE.fullmatch(req.lang) else "en",
         direction=req.direction,
         book_lang=req.book_lang if _LANG_TAG_RE.fullmatch(req.book_lang) else "",
-        duration=float((timeline or {}).get("duration") or 0))
+        duration=float((timeline or {}).get("duration") or 0), design=design,
+        story=is_story, voice_names=voice_names, preview=preview)
+    return {"page": page, "audio": audio_path, "audio_entry": entry, "cover": cover,
+            "cover_entry": cover_entry}
+
+
+@router.post("/audiobook/export/html")
+async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
+    """Export a finished book or story as a web page: a ZIP holding
+    ``index.html`` — one self-contained page in the book's design that reads
+    the book along with its audio — ``audio/<book>`` and the cover. It waits
+    in the app's data folder under ``id`` until ``GET
+    /audiobook/export/html/{id}`` downloads it, once, or ``DELETE`` discards it."""
+    from services.audiobook_html import write_export_zip
+
+    book = await _html_book(req)
     directory = _html_export_dir()
     os.makedirs(directory, exist_ok=True)
     _prune_html_exports(directory)
     export_id = uuid.uuid4().hex
     zip_path = os.path.join(directory, f"{export_id}.zip")
-    size = await asyncio.to_thread(write_export_zip, zip_path, page=page, audio_path=audio_path,
-                                   audio_entry=entry, cover_path=cover, cover_entry=cover_entry)
+    size = await asyncio.to_thread(
+        write_export_zip, zip_path, page=book["page"], audio_path=book["audio"],
+        audio_entry=book["audio_entry"], cover_path=book["cover"],
+        cover_entry=book["cover_entry"])
     return {"id": export_id, "bytes": size}
+
+
+@router.post("/audiobook/export/html/preview")
+async def audiobook_export_html_preview(req: AudiobookHtmlExportRequest) -> dict:
+    """The export dialog's live preview: the page ``POST
+    /audiobook/export/html`` would write, for the book's first chapter, in
+    ``html`` — a document with no script, its cover and fonts inline, to show
+    in a sandboxed frame. Writes nothing."""
+    return {"html": (await _html_book(req, preview=True))["page"]}
+
+
+@router.get("/audiobook/export/html/templates")
+def audiobook_export_html_templates() -> dict:
+    """The designs the export dialog offers: each template with what it
+    starts with and a swatch, the accent colours offered besides each
+    template's own, and the chapter numbering styles. The bundled fonts are
+    listed by ``GET /fonts``. (Declared before ``/{export_id}``, which would
+    take this path.)"""
+    from services import book_templates
+
+    return {"templates": book_templates.listing(), "accents": list(book_templates.ACCENTS),
+            "numbering": list(book_templates.NUMBERING)}
 
 
 @router.get("/audiobook/export/html/{export_id}")
@@ -3292,6 +3412,13 @@ async def audiobook_synthesize(req: AudiobookRequest, request: Request = None):
 
 # ── Shared longform render: Stories (and any future front door) post a plan ──
 
+class LongformSpeaker(BaseModel):
+    """A Stories character: its name in the cast and its slot in the
+    editor's colours (the cast order)."""
+    name: str = Field(max_length=200)
+    accent: int | None = Field(default=None, ge=0, le=10_000)
+
+
 class LongformSpan(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     voice_id: str | None = None
@@ -3303,6 +3430,12 @@ class LongformSpan(BaseModel):
     # A [volume] passage's gain in dB (the parser clamps it to ±12; so does
     # synthesis).
     gain_db: float | None = Field(default=None, ge=-MAX_LEVEL_GAIN_DB, le=MAX_LEVEL_GAIN_DB)
+    # Display only, never synthesis or a cache key: the span starts a new
+    # line of the story (its first span of a line after the chapter's first),
+    # and the character who says it — read by the rendered timeline, so the
+    # HTML book sets the story as turns.
+    break_before: Literal["line", "paragraph"] | None = None
+    speaker: LongformSpeaker | None = None
 
 
 class LongformChapter(BaseModel):
@@ -3329,13 +3462,22 @@ class LongformRenderRequest(ExpressiveMixin):
 def _story_chapter(chapter: LongformChapter, index: int = 0):
     """Chapter ``index`` of a posted plan as the render reads it, or ``None``
     when it holds nothing to render: a span is kept if it has text to speak
-    or a pause to render (pause-only spans carry the silence between lines)."""
+    or a pause to render (pause-only spans carry the silence between lines).
+    A dropped span's line break passes to the span after it."""
     from services.audiobook import Chapter, Span
 
-    spans = [Span(voice_id=s.voice_id, text=(s.text or "").strip(),
-                  pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
-                  join=s.join, gain_db=s.gain_db or None)
-             for s in chapter.spans if ((s.text and s.text.strip()) or s.pause_ms_after > 0)]
+    spans, pending = [], None
+    for s in chapter.spans:
+        brk = "paragraph" if "paragraph" in (pending, s.break_before) else (
+            pending or s.break_before)
+        if not ((s.text and s.text.strip()) or s.pause_ms_after > 0):
+            pending = brk
+            continue
+        pending = None
+        spans.append(Span(voice_id=s.voice_id, text=(s.text or "").strip(),
+                          pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
+                          join=s.join, gain_db=s.gain_db or None, break_before=brk,
+                          speaker=s.speaker.model_dump() if s.speaker else None))
     if not spans:
         return None
     return Chapter(title=chapter.title or f"Chapter {index + 1}", spans=spans,

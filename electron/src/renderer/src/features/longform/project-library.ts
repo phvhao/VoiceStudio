@@ -4,6 +4,7 @@ import {
 } from '@shared/utils/indexedDbLongformStore';
 import { scriptStats } from '@shared/utils/audiobookScript';
 import type { Draft, Mode } from './longform-session';
+import { outlineStats, scriptOutline } from './script-outline';
 
 /**
  * The book/story library: every Audiobook and Stories draft belongs to a
@@ -53,6 +54,7 @@ export interface LongformProject extends LongformProjectMeta {
  */
 export interface RenderDetails {
   outputScript: unknown;
+  outputStory?: unknown;
   outputChapters: unknown;
   outputCachedChapters: unknown;
   outputFailedChapters: unknown;
@@ -100,11 +102,14 @@ function readMeta(key: string, value: unknown): LongformProjectMeta | null {
 
 /** What the lists show about a draft, and the files that link renders to it. */
 function describe(mode: Mode, draft: Draft, previous: string[] = []) {
-  const text =
+  // A book is counted as its editor counts it, from its outline — which the
+  // open editor has already read, so its auto-save counts nothing again.
+  const stats =
     mode === 'audiobook'
-      ? draft.script
-      : draft.lines.map((line) => (typeof line?.text === 'string' ? line.text : '')).join('\n');
-  const stats = scriptStats(text);
+      ? outlineStats(scriptOutline(draft.script))
+      : scriptStats(
+          draft.lines.map((line) => (typeof line?.text === 'string' ? line.text : '')).join('\n'),
+        );
   const output = typeof draft.output === 'string' ? draft.output : '';
   const outputs =
     output && !previous.includes(output) ? [...previous, output].slice(-MAX_OUTPUTS) : previous;
@@ -301,7 +306,9 @@ export function createProjectLibrary(store: LongformKeyedStore) {
     /** Whether the working drafts from before the library have joined it. */
     draftsAdopted: () => serial(async () => isRecord(await store.get(ADOPTED))),
     markDraftsAdopted: () =>
-      serial(() => store.commit({ put: [[ADOPTED, { version: LIBRARY_VERSION, at: Date.now() }]] })),
+      serial(() =>
+        store.commit({ put: [[ADOPTED, { version: LIBRARY_VERSION, at: Date.now() }]] }),
+      ),
     rename: (id: string, name: string) =>
       serial(async () => {
         if (!name.trim()) throw new Error('Project name is required');

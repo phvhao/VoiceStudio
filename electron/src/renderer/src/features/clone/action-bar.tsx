@@ -431,7 +431,7 @@ export function ActionBar() {
           <VoiceControls />
         </div>
 
-        <div className="relative ml-auto flex shrink-0 gap-2">
+        <div className="relative ml-auto flex max-w-full min-w-0 shrink-0 gap-2">
           {demo ? (
             <CloneDemoAction />
           ) : (
@@ -440,7 +440,7 @@ export function ActionBar() {
               size="lg"
               align="end"
               data-clone-generate
-              className="h-10 w-60 shrink-0 justify-between overflow-hidden rounded-lg ps-4 pe-2.5 shadow-sm transition-colors"
+              className="h-10 max-w-full min-w-60 shrink justify-between overflow-hidden rounded-lg ps-4 pe-2.5 shadow-sm transition-colors"
               onClick={() => void generate()}
               disabled={isGenerating}
               blockers={blockers}
@@ -448,34 +448,49 @@ export function ActionBar() {
               aria-label={generationLabel}
               aria-keyshortcuts="Control+Enter Meta+Enter"
             >
-              <span className="flex min-w-0 flex-1 items-center gap-2">
-                {isGenerating ? (
-                  <LoaderCircleIcon className="shrink-0 animate-spin motion-reduce:animate-none" />
-                ) : (
-                  <PlayIcon className="shrink-0" />
+              {/* The ready face sets the width: the usual one, or more when a
+                  language needs it for the label and shortcut. The busy face
+                  fills that width without adding to it, so the action holds
+                  still while it reports each phase. */}
+              <span className="grid min-w-0 flex-1 *:col-start-1 *:row-start-1">
+                <span
+                  className={cn(
+                    'flex min-w-0 items-center justify-between gap-2',
+                    isGenerating && 'invisible',
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <PlayIcon className="shrink-0" />
+                    <span className="min-w-0 truncate">{t('clone.synthesize')}</span>
+                  </span>
+                  {/* Blocked, the not-ready mark takes the shortcut's place. */}
+                  {!blocked && (
+                    <KbdGroup aria-hidden="true" className="shrink-0">
+                      {[mac ? '⌘' : 'Ctrl', '↵'].map((key) => (
+                        <Kbd
+                          key={key}
+                          className="h-5 min-w-5 rounded-[5px] bg-primary-foreground/15 px-1 text-[11px] text-primary-foreground/85 shadow-[inset_0_-1px_0_rgb(0_0_0/18%)]"
+                        >
+                          {key}
+                        </Kbd>
+                      ))}
+                    </KbdGroup>
+                  )}
+                </span>
+                {isGenerating && (
+                  <span className="flex w-0 min-w-full items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <LoaderCircleIcon className="shrink-0 animate-spin motion-reduce:animate-none" />
+                      <span className="min-w-0 truncate" role="status">
+                        {generationLabel}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs font-normal tabular-nums opacity-80">
+                      {`${modelProgress != null && stage === 'loading' ? `${Math.round(modelProgress)}% · ` : ''}${elapsedSeconds.toFixed(1)}s`}
+                    </span>
+                  </span>
                 )}
-                <span className="min-w-0 truncate" role={isGenerating ? 'status' : undefined}>
-                  {generationLabel}
-                </span>
               </span>
-              {isGenerating && (
-                <span className="shrink-0 text-xs font-normal tabular-nums opacity-80">
-                  {`${modelProgress != null && stage === 'loading' ? `${Math.round(modelProgress)}% · ` : ''}${elapsedSeconds.toFixed(1)}s`}
-                </span>
-              )}
-              {/* Blocked, the not-ready mark takes the shortcut's place. */}
-              {!isGenerating && !blocked && (
-                <KbdGroup aria-hidden="true" className="shrink-0">
-                  {[mac ? '⌘' : 'Ctrl', '↵'].map((key) => (
-                    <Kbd
-                      key={key}
-                      className="h-5 min-w-5 rounded-[5px] bg-primary-foreground/15 px-1 text-[11px] text-primary-foreground/85 shadow-[inset_0_-1px_0_rgb(0_0_0/18%)]"
-                    >
-                      {key}
-                    </Kbd>
-                  ))}
-                </KbdGroup>
-              )}
             </GatedAction>
           )}
           {isGenerating && !demo ? (

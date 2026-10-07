@@ -69,6 +69,10 @@
   color: color-mix(in oklab, #d9b36a 70%, var(--foreground));
   fill: color-mix(in srgb, #d9b36a 22%, transparent);
 }
+/* A crowded title bar gives up the count after the words (titlebar-fit.ts). */
+.group\/titlebar[data-fit~='count'] .github-star-count {
+  display: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .support-shortcut,
   .support-shortcut::before,

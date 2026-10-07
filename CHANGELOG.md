@@ -12,7 +12,7 @@ metadata and the backend fallback mirror it.
 - Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
 - Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
 - Voices in a book come out at the same volume, and each voice can be turned up or down
-- Audiobooks get sections, a Contents panel, sentence-exact highlighting in the reader and an offline HTML export
+- Audiobooks get sections, a Contents panel, sentence-exact highlighting in the reader and an offline HTML export in six designs, for Stories too
 - Editing or retaking one sentence of a book renders just that sentence again; the rest of its chapter is reused
 
 ### Changed
@@ -44,6 +44,8 @@ metadata and the backend fallback mirror it.
 - The exported book reads like an e-book: the script's paragraphs, justified text in a serif font, chapter openers, a contents sidebar or phone drawer, text size, light/sepia/dark themes, a player bar with chapter marks, Back to current, and clean printing
 - The reader in the app justifies its text and keeps the script's paragraphs even after the script is edited
 - Playing an audiobook with the reader open no longer redraws the page on every frame, so long books play smoothly
+- Typing in a long Stories script redraws only the line typed in: a keystroke in a 560-line story takes about 30 ms instead of 0.5–0.8 s, and an autosave no longer redraws every line
+- Typing in a long Audiobook script redraws only what the keystroke changes, not the Contents rows after the cursor or the setup column: a keystroke in a 150,000-character book takes about 30 ms instead of 65–240 ms
 - The time left on an Audiobook or Stories render counts down from the last finished chapter, leaves out chapters the cache already holds and weighs the rest by their words; it no longer rises while a chapter renders, and the elapsed time survives leaving the page
 - The app loads less code at startup: the voice list no longer pulls in the waveform player, the unused Remotion player (a non-OSI licence) is gone, and compiled scripts are reused from the second launch
 - Stories and Audiobook keep a library of books: the header names the open book, saves it as you type, and opens search, new, rename, duplicate and delete; the old Projects card is gone
@@ -87,7 +89,7 @@ metadata and the backend fallback mirror it.
 - Changing a punctuation pause, trimming, the gap between paragraphs, voice leveling or a volume joins the sentences already rendered without rendering any, turning the speech check on only listens to them, and turning it off again reads each as first rendered; Pause at every comma renders only the sentences it cuts differently
 - Right-click a sentence in Audiobook or Stories (or open the card of a reaction, delivery or respelling in it) to Retake this sentence: only that take renders again (a remote worker reads it anew too), and only there (the same line elsewhere keeps its take); Audiobook plays its paragraph at once, and the Contents rail says how many sentences a changed chapter has left to render
 - Back and Forward arrows before each screen's title return to the screens you visited, naming where they lead; Alt+← / Alt+→ (⌘[ / ⌘] on a Mac) and the mouse's side buttons do the same, outside text fields, and a screen you return to is scrolled where you left it
-- In a narrow window the title bar keeps each screen's title on one line and shortens the open book's name instead of covering the link beside it; Get Pro and Star show just their icons until the workspace is 1024 px wide
+- In a narrow window the title bar keeps each screen's title on one line and shortens the open book's name instead of covering the link beside it
 - Text fields get a right-click menu in the app's language on Windows, macOS and Linux: Undo, Redo, Cut, Copy, Paste and Select all, with the dictionary's suggestions and Add to dictionary for an underlined word; selected text elsewhere offers Copy
 - Dubbing's link field has a Paste button: one click fills in a copied video link, and a clipboard without one leaves the field as it was and says so; a link being typed is still there when you come back to the page
 - Paste in the script editors' right-click menu and Clone's Paste button still work when the page may not read the clipboard, and the right-click menu says when it cannot paste instead of doing nothing
@@ -110,6 +112,8 @@ metadata and the backend fallback mirror it.
 - Dubbing with NLLB or Argos translates every sentence of a line: NLLB often returned only the last sentence of a two-sentence line; a sentence too short to stand alone (No., Oh., a list's 1.) goes with its neighbour instead of coming back as one NLLB made up, and a closing quote or bracket stays with its sentence
 - A translated dubbing line that is much shorter than the original, or has fewer sentences, shows May be missing content with Translate again, a more literal pass over that line, for every translator including Translate with Agent
 - Translate again keeps the whole line (no Cinematic rewrite or Autofit trim), is one Undo, and Retry after a failed one retries only that line; complete translations from Japanese are no longer flagged
+- Dubbing with NLLB no longer gets stuck repeating one word ("No, no, no, …" up to its length limit, 20–80 s a line on a CPU) on any Performance preset; a line that repeats a word on purpose keeps its repeats and the rest of the sentence after them
+- A translated dubbing line that repeats one word or phrase far more often than the original, from any translator, shows May be missing content with Translate again; a laugh or a scream written out in another script is not flagged
 - Smart Fit fits short lines too: the audio slows to 0.9× at most and that part of the video speeds up to 1.25×, background included, instead of leaving a silent gap while the mouth still moves; a line that may be missing content is never sped up, and is slowed down like any line when its dub runs long
 - Changing a dubbing line's video timing, or the timing mode, after a render shows Timing changed with Apply timing, which places the speech already rendered anew without generating it again
 - A dubbed MP4's Original track and the stems ZIP's background follow a Smart Fit or Stretch Video timeline, and a dub shorter than the picture no longer cuts the exported video short
@@ -124,6 +128,21 @@ metadata and the backend fallback mirror it.
 - Settings → Performance says why a model could not be unloaded (in use by dictation, busy) instead of reporting it unloaded
 - The notice after Synthesize that a take ran on the CPU, or on a GPU with a caveat, is in the app's language; `/generate` adds an `X-OmniVoice-Routing-Reason-Code` header
 - A voice's clip length reads in each language's own unit of seconds: Turkish showed "12'ler" ("the twelves") and Dutch "12's"
+- Vietnamese reads naturally across the app, one word per idea: Dàn giọng for a cast, Xuất and Nhập for export and import, Tạo for rendering, Chép lời for transcription; the terms live in docs/i18n-glossary-vi.md
+- In every language a story's or dub's Cast is the voices, not "throw" or "broadcast", export and import are file actions, not trade, and a detected speaker is a person, not a loudspeaker
+- Markup examples in every language keep [pause 0.5s], [voice:NAME] and "# " chapter headings as the parser reads them, so copying one pauses instead of reading the brackets aloud
+- The title bar gives up the Get Pro and Star words, then the star count, before it shortens a screen's title or squeezes the open book's or video's name to a few letters, in any language and with a side pane open
+- Clone's Synthesize audio widens for a longer translated label instead of cutting it short, and holds its width while it reports progress
+- The Dubbing segment toolbar drops its button words, then wraps, instead of covering All with Live preview or pushing the ⋯ menu out of reach
+- Export HTML opens a design dialog with a live preview of the first chapter, on a desktop or a phone, and six templates: Classic, Modern, Magazine, Cinematic, Kids and Script
+- An HTML book's accent colour, body and heading fonts, voice or character names and chapter numbering are quick options kept with the book; the reader in the app sets the book's text in its body font
+- Fourteen reading fonts with every Vietnamese letter ship with the app under the SIL Open Font License, among them Literata, EB Garamond, Be Vietnam Pro and Nunito; an HTML book carries only the two its design names, or none with System fonts
+- Stories export HTML too, in the Script template by default: one block per line, named after its character in its Stories colour; the page shows the lines that were rendered, even after the story is edited
+- An HTML book sets its own text, so it reads and prints without script; a chapter timed only as a whole is highlighted sentence by sentence, and a voice that changes mid-paragraph is named where it starts
+- In an HTML book a long character name wraps instead of running over the line beside it, the Kids word being read no longer reflows its line and its chapter labels read on the dark theme, and Script's italic narration on a phone uses the real italic; a sentence ending in "no." or "etc." is highlighted on its own
+- Script warnings follow the book you open or the script you replace at once, instead of showing the previous script's for half a second
+- Source Serif 4 ships whole, as its Reserved Font Name requires, like Lora and Playfair Display
+- The tray menu's Quit item says Quit in every language, not "exit code"; Vietnamese labels are in sentence case and no longer call speech synthesis "tổng hợp"
 
 ## [0.5.7] — 2026-10-05
 

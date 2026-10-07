@@ -423,6 +423,208 @@ function UnsupportedTagItems({ token, tools }: { token: MarkupToken; tools: TagT
 }
 
 /**
+ * The menu's items, built as it opens: Stories keeps a closed menu on every
+ * line, and a closed one labels and formats none of them.
+ */
+function MenuItems({
+  tools,
+  token,
+  selection,
+  retake,
+  unfound,
+  onChapter,
+  onListen,
+}: {
+  tools: TagToolProps;
+  /** The tag the click landed on. */
+  token: MarkupToken | null;
+  /** Text is selected: there is something to cut or copy. */
+  selection: boolean;
+  retake: RetakeTarget | null;
+  unfound: [number, number] | null;
+  onChapter?(): void;
+  onListen?(): void;
+}) {
+  const { t } = useTranslation();
+  const gainText = useVoiceGainText();
+  const { getTarget, voiceCast, onVoiceCast, retakes } = tools;
+  // Only the markup this page reads is offered (`heading` stands for chapters).
+  const reads = (kind: MarkupKind) => !tools.unsupported?.includes(kind);
+  const unread = token && unsupportedKind(tools, token);
+  const run = (make: (value: string, start: number, end: number) => MarkupEdit) => {
+    const target = getTarget();
+    if (target) applyMarkupEdit(target, make);
+  };
+  const selectedText = () => {
+    const element = getTarget()?.element;
+    return element ? element.value.slice(element.selectionStart, element.selectionEnd) : '';
+  };
+  const copy = () => void navigator.clipboard?.writeText(selectedText());
+  const cut = () => {
+    void navigator.clipboard?.writeText(selectedText());
+    run((value, start, end) => replaceRange(value, start, end, ''));
+  };
+  // The desktop shell reads the clipboard when the page's Clipboard API is refused.
+  const paste = () =>
+    void readClipboardText().then(
+      (clip) => run((value, start, end) => replaceRange(value, start, end, clip)),
+      () => toast.error(t('clone.paste_failed')),
+    );
+  const selectAll = () => {
+    const element = getTarget()?.element;
+    element?.focus();
+    element?.select();
+  };
+  return (
+    <>
+      {token &&
+        (unread ? (
+          <UnsupportedTagItems token={{ ...token, kind: unread }} tools={tools} />
+        ) : (
+          <TagItems token={token} tools={tools} />
+        ))}
+      <Item
+        icon={<ScissorsIcon />}
+        label={t('context.cut')}
+        hint={shortcut('X')}
+        disabled={!selection}
+        onClick={cut}
+      />
+      <Item
+        icon={<CopyIcon />}
+        label={t('context.copy')}
+        hint={shortcut('C')}
+        disabled={!selection}
+        onClick={copy}
+      />
+      <Item
+        icon={<ClipboardPasteIcon />}
+        label={t('context.paste')}
+        hint={shortcut('V')}
+        onClick={paste}
+      />
+      <Item
+        icon={<TextSelectIcon />}
+        label={t('context.select_all')}
+        hint={shortcut('A')}
+        onClick={selectAll}
+      />
+      <ContextMenu.Separator className={SEPARATOR} />
+      {reads('pause') && (
+        <Submenu icon={<PauseIcon />} label={t('audiobook.insert_pause')}>
+          <PauseItems
+            choose={(ms) =>
+              run((value, start, end) => insertToken(value, start, end, pauseToken(ms)))
+            }
+          />
+        </Submenu>
+      )}
+      {reads('voice') && (
+        <Submenu icon={<AudioLinesIcon />} label={t('audiobook.insert_voice')}>
+          <VoiceItems
+            tools={tools}
+            choose={(name) => run((value, start, end) => applyVoice(value, start, end, name))}
+            chooseProfile={(profile) =>
+              run((value, start, end) =>
+                applyVoice(value, start, end, castProfileVoice(profile, voiceCast, onVoiceCast)),
+              )
+            }
+          />
+          <ContextMenu.Separator className={SEPARATOR} />
+          <Item
+            icon={<RotateCcwIcon />}
+            label={t('markup.voice_reset')}
+            onClick={() =>
+              run((value, start, end) => insertToken(value, start, end, VOICE_RESET_TOKEN))
+            }
+          />
+        </Submenu>
+      )}
+      {reads('delivery') && (
+        <Submenu icon={<WandSparklesIcon />} label={t('context.delivery')}>
+          {DELIVERY_TAGS.map((tag) => (
+            <Item
+              key={tag}
+              label={t(DELIVERY_LABELS[tag])}
+              hint={`[${tag}]`}
+              onClick={() =>
+                run((value, start, end) =>
+                  wrapSelection(value, start, end, `[${tag}]`, `[/${tag}]`),
+                )
+              }
+            />
+          ))}
+        </Submenu>
+      )}
+      {reads('volume') && (
+        <Submenu icon={<Volume2Icon />} label={t('editor.volume_wrap')}>
+          {VOLUME_PRESETS.map((preset) => (
+            <Item
+              key={preset.id}
+              label={t(preset.label)}
+              hint={gainText(preset.db)}
+              onClick={() =>
+                run((value, start, end) =>
+                  wrapSelection(value, start, end, volumeToken(preset.db), VOLUME_CLOSE),
+                )
+              }
+            />
+          ))}
+        </Submenu>
+      )}
+      {reads('pronunciation') && (
+        <Item
+          icon={<SpeechIcon />}
+          label={t('markup.pronounce')}
+          onClick={() => run(pronounceSelection)}
+        />
+      )}
+      {reads('expression') && (
+        <Submenu icon={<SmileIcon />} label={t('audiobook.insert_reactions')}>
+          <ExpressionItems
+            choose={(tag) => run((value, start, end) => insertToken(value, start, end, tag))}
+          />
+        </Submenu>
+      )}
+      {reads('heading') && (
+        <Item
+          icon={<HeadingIcon />}
+          label={t('markup.chapter')}
+          onClick={() =>
+            onChapter
+              ? onChapter()
+              : run((value, start) =>
+                  insertChapter(
+                    value,
+                    start,
+                    t('stories.chapterN', { n: countHeadings(value) + 1 }),
+                  ),
+                )
+          }
+        />
+      )}
+      {(onListen || retakes) && <ContextMenu.Separator className={SEPARATOR} />}
+      {onListen && <Item icon={<PlayIcon />} label={t('markup.preview')} onClick={onListen} />}
+      {retakes && (
+        <Item
+          icon={<RefreshCwIcon />}
+          label={
+            retake && retake.takes.length > 1
+              ? t('editor.retake_sentences', { count: retake.takes.length })
+              : t('editor.retake_sentence')
+          }
+          disabled={!retake && !unfound}
+          onClick={() => {
+            if (retake) retakes.retake(retake);
+            else if (unfound) retakes.retakeAt(...unfound);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
  * Right-click menu for a script editor: the usual cut/copy/paste, every
  * markup the toolbar inserts, and — when the click lands on a tag — what the
  * tag card offers for it, in menu form. Chromium moves the caret to the
@@ -448,11 +650,7 @@ export function MarkupContextMenu({
   onOpenChange?(open: boolean): void;
   className?: string;
 }) {
-  const { t } = useTranslation();
-  const gainText = useVoiceGainText();
-  const { getTarget, headings = false, voiceCast, onVoiceCast, retakes } = tools;
-  // Only the markup this page reads is offered (`heading` stands for chapters).
-  const reads = (kind: MarkupKind) => !tools.unsupported?.includes(kind);
+  const { getTarget, headings = false, retakes } = tools;
   const [token, setToken] = useState<MarkupToken | null>(null);
   const [selection, setSelection] = useState(false);
   // The takes a retake would ask for again, once found: none while looking.
@@ -462,7 +660,6 @@ export function MarkupContextMenu({
   const [unfound, setUnfound] = useState<[number, number] | null>(null);
   const finding = useRef<AbortController | null>(null);
   useEffect(() => () => finding.current?.abort(), []);
-  const unread = token && unsupportedKind(tools, token);
   const capture = () => {
     const element = getTarget()?.element;
     if (!element) return;
@@ -484,30 +681,6 @@ export function MarkupContextMenu({
       },
     );
   };
-  const run = (make: (value: string, start: number, end: number) => MarkupEdit) => {
-    const target = getTarget();
-    if (target) applyMarkupEdit(target, make);
-  };
-  const selectedText = () => {
-    const element = getTarget()?.element;
-    return element ? element.value.slice(element.selectionStart, element.selectionEnd) : '';
-  };
-  const copy = () => void navigator.clipboard?.writeText(selectedText());
-  const cut = () => {
-    void navigator.clipboard?.writeText(selectedText());
-    run((value, start, end) => replaceRange(value, start, end, ''));
-  };
-  // The desktop shell reads the clipboard when the page's Clipboard API is refused.
-  const paste = () =>
-    void readClipboardText().then(
-      (clip) => run((value, start, end) => replaceRange(value, start, end, clip)),
-      () => toast.error(t('clone.paste_failed')),
-    );
-  const selectAll = () => {
-    const element = getTarget()?.element;
-    element?.focus();
-    element?.select();
-  };
 
   if (disabled) return <div className={className}>{children}</div>;
   return (
@@ -523,156 +696,15 @@ export function MarkupContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-50">
           <ContextMenu.Popup className={POPUP} finalFocus={() => getTarget()?.element ?? true}>
-            {token &&
-              (unread ? (
-                <UnsupportedTagItems token={{ ...token, kind: unread }} tools={tools} />
-              ) : (
-                <TagItems token={token} tools={tools} />
-              ))}
-            <Item
-              icon={<ScissorsIcon />}
-              label={t('context.cut')}
-              hint={shortcut('X')}
-              disabled={!selection}
-              onClick={cut}
+            <MenuItems
+              tools={tools}
+              token={token}
+              selection={selection}
+              retake={retake}
+              unfound={unfound}
+              onChapter={onChapter}
+              onListen={onListen}
             />
-            <Item
-              icon={<CopyIcon />}
-              label={t('context.copy')}
-              hint={shortcut('C')}
-              disabled={!selection}
-              onClick={copy}
-            />
-            <Item
-              icon={<ClipboardPasteIcon />}
-              label={t('context.paste')}
-              hint={shortcut('V')}
-              onClick={paste}
-            />
-            <Item
-              icon={<TextSelectIcon />}
-              label={t('context.select_all')}
-              hint={shortcut('A')}
-              onClick={selectAll}
-            />
-            <ContextMenu.Separator className={SEPARATOR} />
-            {reads('pause') && (
-              <Submenu icon={<PauseIcon />} label={t('audiobook.insert_pause')}>
-                <PauseItems
-                  choose={(ms) =>
-                    run((value, start, end) => insertToken(value, start, end, pauseToken(ms)))
-                  }
-                />
-              </Submenu>
-            )}
-            {reads('voice') && (
-              <Submenu icon={<AudioLinesIcon />} label={t('audiobook.insert_voice')}>
-                <VoiceItems
-                  tools={tools}
-                  choose={(name) => run((value, start, end) => applyVoice(value, start, end, name))}
-                  chooseProfile={(profile) =>
-                    run((value, start, end) =>
-                      applyVoice(
-                        value,
-                        start,
-                        end,
-                        castProfileVoice(profile, voiceCast, onVoiceCast),
-                      ),
-                    )
-                  }
-                />
-                <ContextMenu.Separator className={SEPARATOR} />
-                <Item
-                  icon={<RotateCcwIcon />}
-                  label={t('markup.voice_reset')}
-                  onClick={() =>
-                    run((value, start, end) => insertToken(value, start, end, VOICE_RESET_TOKEN))
-                  }
-                />
-              </Submenu>
-            )}
-            {reads('delivery') && (
-              <Submenu icon={<WandSparklesIcon />} label={t('context.delivery')}>
-                {DELIVERY_TAGS.map((tag) => (
-                  <Item
-                    key={tag}
-                    label={t(DELIVERY_LABELS[tag])}
-                    hint={`[${tag}]`}
-                    onClick={() =>
-                      run((value, start, end) =>
-                        wrapSelection(value, start, end, `[${tag}]`, `[/${tag}]`),
-                      )
-                    }
-                  />
-                ))}
-              </Submenu>
-            )}
-            {reads('volume') && (
-              <Submenu icon={<Volume2Icon />} label={t('editor.volume_wrap')}>
-                {VOLUME_PRESETS.map((preset) => (
-                  <Item
-                    key={preset.id}
-                    label={t(preset.label)}
-                    hint={gainText(preset.db)}
-                    onClick={() =>
-                      run((value, start, end) =>
-                        wrapSelection(value, start, end, volumeToken(preset.db), VOLUME_CLOSE),
-                      )
-                    }
-                  />
-                ))}
-              </Submenu>
-            )}
-            {reads('pronunciation') && (
-              <Item
-                icon={<SpeechIcon />}
-                label={t('markup.pronounce')}
-                onClick={() => run(pronounceSelection)}
-              />
-            )}
-            {reads('expression') && (
-              <Submenu icon={<SmileIcon />} label={t('audiobook.insert_reactions')}>
-                <ExpressionItems
-                  choose={(tag) => run((value, start, end) => insertToken(value, start, end, tag))}
-                />
-              </Submenu>
-            )}
-            {reads('heading') && (
-              <Item
-                icon={<HeadingIcon />}
-                label={t('markup.chapter')}
-                onClick={() =>
-                  onChapter
-                    ? onChapter()
-                    : run((value, start) =>
-                        insertChapter(
-                          value,
-                          start,
-                          t('stories.chapterN', { n: countHeadings(value) + 1 }),
-                        ),
-                      )
-                }
-              />
-            )}
-            {(onListen || retakes) && <ContextMenu.Separator className={SEPARATOR} />}
-            {onListen && (
-              <Item icon={<PlayIcon />} label={t('markup.preview')} onClick={onListen} />
-            )}
-            {retakes && (
-              <Item
-                icon={<RefreshCwIcon />}
-                label={
-                  retake && retake.takes.length > 1
-                    ? t('editor.retake_sentences', { count: retake.takes.length })
-                    : t('editor.retake_sentence')
-                }
-                disabled={!retake && !unfound}
-                onClick={() => {
-                  if (retake) retakes.retake(retake);
-                  else if (unfound) retakes.retakeAt(...unfound);
-                }}
-              />
-            )}
           </ContextMenu.Popup>
         </ContextMenu.Positioner>
       </ContextMenu.Portal>

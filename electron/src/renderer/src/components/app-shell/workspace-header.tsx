@@ -1,6 +1,7 @@
 import { SupportShortcut } from './support-shortcut';
 import { SidebarToggle } from './sidebar-toggle';
 import { HistoryNav } from './history-nav';
+import { useTitlebarFit } from './titlebar-fit';
 import type { ReactNode } from 'react';
 import { SearchIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -10,12 +11,15 @@ import { isMac } from '@/components/bridge';
 
 export function WorkspaceHeader({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
+  const fit = useTitlebarFit();
   return (
     <header
+      ref={fit}
       className={cn(
         // A crowded bar keeps each screen's title on one line; what sits
-        // beside it (a book or file name) shortens instead.
-        'workspace-titlebar flex shrink-0 items-center gap-3 border-b border-border/50 px-5 [&>h1]:whitespace-nowrap',
+        // beside it (a book or file name) shortens instead, and the
+        // shortcuts on the right give up their words first (titlebar-fit.ts).
+        'group/titlebar workspace-titlebar flex shrink-0 items-center gap-3 border-b border-border/50 px-5 [&>h1]:whitespace-nowrap',
         !isMac() && 'native-controls-right',
       )}
     >
@@ -33,7 +37,9 @@ export function WorkspaceHeader({ children }: { children: ReactNode }) {
           onClick={() => window.dispatchEvent(new Event('voicestudio:commands'))}
         >
           <SearchIcon className="transition-colors duration-150" />
-          <span className="hidden text-xs lg:inline">{isMac() ? '⌘K' : 'Ctrl K'}</span>
+          <span className="text-xs group-data-[fit~=labels]/titlebar:hidden">
+            {isMac() ? '⌘K' : 'Ctrl K'}
+          </span>
         </Button>
       </div>
     </header>

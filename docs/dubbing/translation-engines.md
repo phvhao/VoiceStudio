@@ -133,23 +133,37 @@ A quotation's closing mark stays with the sentence it closes (Japanese corner
 brackets, (…), ‘…’, «…», „…“), and the words that go on after it ("'Stop!' he
 said", a Japanese quotation followed by "he said") stay with it too.
 
+NLLB also decodes under a loop guard. Its search could go round in a loop on a
+short exclamation: a Japanese "No, no, that is not so" came back as "No, no,
+no, …" until the length limit, and the beam search of the Quality and Max
+presets looped the same way on other lines, 20 to 80 seconds of CPU for each
+line. Now a word or phrase may come out back to back only as often as the
+line allows: four times when the original repeats nothing much, and half again
+as often as the original repeats it, plus one, when it does, so "yes" said
+eight times may come out up to thirteen times and a laugh of twelve "ha" keeps
+all twelve. The count ignores case, so "oui, Oui, oui" is one run. A line
+that loops stops within a second or a few; a line that repeats a word on
+purpose keeps its repeats and the rest of the sentence after them.
+
 Every engine's output is then checked. A line whose translation is much
 shorter than its source, or has fewer sentences (an "Oh." or "No." a
-translation folds into the next sentence does not count as one), gets a **May
-be missing content** notice with **Translate again**. The check compares how long each
-text takes to say in its own language, so a compact Chinese or Japanese
+translation folds into the next sentence does not count as one), or repeats
+one word or phrase over and over (seven times in a row or more, and more often
+than the loop guard allows for that line), gets a **May be missing content** notice with
+**Translate again**; the notice says which. The length check compares how long
+each text takes to say in its own language, so a compact Chinese or Japanese
 translation is not mistaken for a short one, and spoken Japanese — polite forms
 above all — is measured as about as long as its English, so a natural English
 or Spanish line from Japanese is not taken for half a line; lines under about
-two seconds are not judged, and Thai and Lao, which separate sentences with
-spaces, are judged by length alone. **Translate again** works on that line
-only: Argos, NLLB and the online engines translate it clause by clause, the LLM
-engine is told to keep every part and skips its polish pass, and an agent
-translates the line again. Under Cinematic, Autofit and Agent it also skips the
-rewrite and the fit-to-time trim, which shorten a line on purpose. It is one
-edit: Undo brings the previous wording back, and every earlier edit keeps its
-Undo; if the request fails, Retry in the translation dock retries that line
-the same way, never the whole transcript.
+two seconds are not judged by length, and Thai and Lao, which separate
+sentences with spaces, are judged by length alone. **Translate again** works on
+that line only: Argos, NLLB and the online engines translate it clause by
+clause, the LLM engine is told to keep every part and skips its polish pass,
+and an agent translates the line again. Under Cinematic, Autofit and Agent it
+also skips the rewrite and the fit-to-time trim, which shorten a line on
+purpose. It is one edit: Undo brings the previous wording back, and every
+earlier edit keeps its Undo; if the request fails, Retry in the translation
+dock retries that line the same way, never the whole transcript.
 The notice clears when the new translation is complete or you edit the line.
 Translate with Agent rows are checked the same way through
 `POST /dub/translation-check`. Smart Fit never speeds up the video of a line

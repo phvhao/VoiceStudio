@@ -182,6 +182,7 @@ jobs:
           node electron/tests/longform-layout-smoke.mjs
           node electron/tests/language-picker-smoke.mjs
           node electron/tests/settings-model-cards-smoke.mjs
+          node electron/tests/locale-chrome-smoke.mjs
 
   linux-native-package:
     name: Linux native package

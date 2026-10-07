@@ -31,8 +31,11 @@ interface ProfilesQuery<T> {
  * The profile list as the voice pickers read it: still loading only while it
  * is on its way. A failed load is not loading — `ProfilesFailure` says so.
  */
+// No list yet (or none at all) is one empty list, not a new one every render:
+// what is worked out from it, and passed on, stays the same.
+const NO_PROFILES: never[] = [];
 export function profileListState<T>(query: ProfilesQuery<T>): { profiles: T[]; loading: boolean } {
-  return { profiles: query.data ?? [], loading: query.isPending };
+  return { profiles: query.data ?? NO_PROFILES, loading: query.isPending };
 }
 
 /** Why the voice list could not load, and a retry; nothing while it has not failed. */

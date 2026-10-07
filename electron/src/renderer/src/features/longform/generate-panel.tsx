@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
@@ -6,7 +7,11 @@ import { runRendererTask } from '@/lib/global-error-recovery';
 import { GenerationProgress } from './generation-progress';
 import type { GenerateBlocker } from './generate-blocker';
 import { describeGenerateBlockers, generateSteps, type GenerateSetup } from './generate-gates';
-import type { AudiobookRenderChapter, RenderTiming } from './longform-session';
+import {
+  useLongformState,
+  type AudiobookRenderChapter,
+  type RenderTiming,
+} from './longform-session';
 
 /** The slice of the render session this panel reads. */
 export interface GenerateSession {
@@ -112,3 +117,26 @@ export function GeneratePanel({
     </div>
   );
 }
+
+/**
+ * The panel of the open book's page: it reads the render session itself, one
+ * field at a time, so an edit to the book — every keystroke in its script —
+ * leaves it as it is.
+ */
+export const LongformGeneratePanel = memo(function LongformGeneratePanel(
+  props: Omit<Parameters<typeof GeneratePanel>[0], 'session'>,
+) {
+  const active = useLongformState((session) => session.active);
+  const stage = useLongformState((session) => session.stage);
+  const completed = useLongformState((session) => session.completed);
+  const total = useLongformState((session) => session.total);
+  const failed = useLongformState((session) => session.failed);
+  const stopped = useLongformState((session) => session.stopped);
+  const chapters = useLongformState((session) => session.chapters);
+  const timing = useLongformState((session) => session.timing);
+  const session = useMemo(
+    () => ({ active, stage, completed, total, failed, stopped, chapters, timing }),
+    [active, stage, completed, total, failed, stopped, chapters, timing],
+  );
+  return <GeneratePanel {...props} session={session} />;
+});

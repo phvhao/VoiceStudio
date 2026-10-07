@@ -154,6 +154,47 @@ def _watermark_pool_lifecycle_baseline():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clean_model_manager_shutdown_state(request):
+    """Start every test with the model manager NOT in shutdown mode (#1269).
+
+    An app lifespan's exit (``with TestClient(main.app)``) also sets
+    ``model_manager._shutting_down`` and tears the GPU pool down, and nothing
+    puts them back, so the next test's model load was refused before it
+    started (``ModelLoadInterruptedByShutdown``): test_hf_cache_repair failed
+    after test_karaoke_ass and passed alone. Mirror of the fixture in
+    backend/tests/conftest.py, reset before AND after each test.
+
+    Like the guards above it touches the module only once imported, never
+    forcing the import, and also cleans a module-typed alias the test module
+    holds: after tests/backend/** purges ``services.*`` from ``sys.modules``,
+    that alias is a different, stale module object. Not wrapped in try/except:
+    a reset that fails silently would leak exactly the state this removes.
+    """
+    import types
+
+    def _clean():
+        found = {}
+        candidates = [sys.modules.get("services.model_manager"),
+                      getattr(sys.modules.get("services"), "model_manager", None)]
+        test_module = getattr(request, "module", None)
+        if test_module is not None:
+            candidates += [value for value in vars(test_module).values()
+                           if isinstance(value, types.ModuleType)
+                           and getattr(value, "__name__", "") == "services.model_manager"]
+        for mod in candidates:
+            # A stand-in without the API has no shutdown state to reset.
+            if callable(getattr(mod, "reset_shutdown_flag", None)):
+                found[id(mod)] = mod
+        for mod in found.values():
+            mod.reset_shutdown_flag()
+            mod._reset_gpu_pool()
+
+    _clean()
+    yield
+    _clean()
+
+
 # ── torch default-dtype isolation (CI flaky trio) ───────────────────────────
 # Three tests (test_effects_chain / test_generation_audio_guard /
 # test_persona_bundle) fail intermittently on CI — never locally — with

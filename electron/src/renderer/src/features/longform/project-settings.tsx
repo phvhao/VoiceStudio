@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
@@ -14,6 +14,7 @@ import {
   TrashIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { TITLEBAR_NAME_MIN } from '@/components/app-shell/titlebar-fit';
 import { Input } from '@/components/ui/input';
 import {
   Dialog,
@@ -34,7 +35,9 @@ import {
   renameLongformProject,
   saveLongformProject,
   switchBlocker,
-  useLongformSession,
+  useDraftField,
+  useLongformActive,
+  useLongformState,
   type Mode,
 } from './longform-session';
 import type { LongformProjectMeta } from './project-library';
@@ -47,19 +50,21 @@ function edited(value: number): string {
 /**
  * The open book in the page header — its name and whether it is saved — and
  * the library of this mode's books behind it: search, open, new, rename,
- * duplicate, delete. Every book saves itself as it is edited.
+ * duplicate, delete. Every book saves itself as it is edited. It reads only
+ * the fields it shows, so typing in the book leaves it be.
  */
-export function ProjectSwitcher({ mode }: { mode: Mode }) {
+export const ProjectSwitcher = memo(function ProjectSwitcher({ mode }: { mode: Mode }) {
   const { t } = useTranslation();
-  const session = useLongformSession();
-  const draft = session.drafts[mode];
-  const state = session.saving[mode];
+  const projectId = useDraftField(mode, 'projectId');
+  const title = useDraftField(mode, 'title');
+  const state = useLongformState((session) => session.saving[mode]);
+  const saveError = useLongformState((session) => session.saveError[mode]);
   const [open, setOpen] = useState(false);
   const query = useQuery({ queryKey: ['longform-projects'], queryFn: listLongformProjects });
-  const current = query.data?.find((project) => project.id === draft.projectId);
+  const current = query.data?.find((project) => project.id === projectId);
   const name =
     current?.name ||
-    draft.title.trim() ||
+    title.trim() ||
     t(mode === 'audiobook' ? 'library.new_book' : 'library.new_story');
   const Icon = mode === 'audiobook' ? BookOpenTextIcon : AudioLinesIcon;
   return (
@@ -75,10 +80,12 @@ export function ProjectSwitcher({ mode }: { mode: Mode }) {
         onClick={() => setOpen(true)}
       >
         <Icon className="text-muted-foreground" />
-        <span className="max-w-[18rem] truncate">{name}</span>
+        <span className="max-w-[18rem] truncate" data-fit-min={TITLEBAR_NAME_MIN}>
+          {name}
+        </span>
         <ChevronDownIcon className="text-muted-foreground" />
       </Button>
-      <SaveState mode={mode} state={state} error={session.saveError[mode]} />
+      <SaveState mode={mode} state={state} error={saveError} />
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-xl" style={{ background: 'var(--popover)' }}>
           {open && (
@@ -88,7 +95,7 @@ export function ProjectSwitcher({ mode }: { mode: Mode }) {
               loading={query.isPending}
               loadError={query.isError ? describeError(query.error) : null}
               onRetry={() => void query.refetch()}
-              currentId={draft.projectId}
+              currentId={projectId}
               onClose={() => setOpen(false)}
             />
           )}
@@ -96,7 +103,7 @@ export function ProjectSwitcher({ mode }: { mode: Mode }) {
       </Dialog>
     </div>
   );
-}
+});
 
 function SaveState({ mode, state, error }: { mode: Mode; state: string; error: string | null }) {
   const { t } = useTranslation();
@@ -146,9 +153,9 @@ export function LibraryPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  // Subscribed to the session, so a render starting or ending here locks and
+  // Subscribed to the render, so one starting or ending here locks and
   // unlocks switching at once.
-  useLongformSession();
+  useLongformActive();
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);

@@ -155,27 +155,37 @@ export function pauseToken(ms: number): string {
   return value < 1000 || value % 100 !== 0 ? `[pause ${value}ms]` : `[pause ${value / 1000}s]`;
 }
 
+const NUMBER_STYLES: Record<'seconds' | 'signed', Intl.NumberFormatOptions> = {
+  /** Seconds, unit included ("1.5s", "1,5 giây"). */
+  seconds: { style: 'unit', unit: 'second', unitDisplay: 'narrow', maximumFractionDigits: 2 },
+  /** A gain, signed ("+3", "0", "-1,5"). */
+  signed: { signDisplay: 'exceptZero', maximumFractionDigits: 1 },
+};
+
+// Building a formatter costs far more than formatting with one, and the
+// editors label pauses and volumes on every render: one per style and locale.
+const formatters = new Map<string, Intl.NumberFormat>();
+function numberFormat(style: keyof typeof NUMBER_STYLES, locale?: string): Intl.NumberFormat {
+  const key = `${style} ${locale ?? ''}`;
+  let format = formatters.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(locale, NUMBER_STYLES[style]);
+    formatters.set(key, format);
+  }
+  return format;
+}
+
 export function formatPauseSeconds(ms: number, locale?: string): string {
-  return seconds(locale).format(Number((clampPauseMs(ms) / 1000).toFixed(2)));
+  return numberFormat('seconds', locale).format(Number((clampPauseMs(ms) / 1000).toFixed(2)));
 }
 
 /** The short unit `formatPauseSeconds` writes in `locale`: "s", "giây"… */
 export function secondsUnit(locale?: string): string {
   return (
-    seconds(locale)
+    numberFormat('seconds', locale)
       .formatToParts(1)
       .find((part) => part.type === 'unit')?.value ?? 's'
   );
-}
-
-/** Seconds as `locale` writes them, unit included ("1.5s", "1,5 giây"). */
-function seconds(locale?: string) {
-  return new Intl.NumberFormat(locale, {
-    style: 'unit',
-    unit: 'second',
-    unitDisplay: 'narrow',
-    maximumFractionDigits: 2,
-  });
 }
 
 /** How long a `[pause …]` tag pauses, to the millisecond; `null` for any other text. */
@@ -694,10 +704,7 @@ export function clampPassageGain(db: number): number {
 
 /** A gain in dB as `locale` writes it, signed: "+3", "0", "-1,5". The unit is the caller's. */
 export function formatSignedDb(db: number, locale?: string): string {
-  return new Intl.NumberFormat(locale, {
-    signDisplay: 'exceptZero',
-    maximumFractionDigits: 1,
-  }).format(db);
+  return numberFormat('signed', locale).format(db);
 }
 
 /** The gain an opening `[volume …]` tag sets, in dB; `null` for `[/volume]` and any other text. */

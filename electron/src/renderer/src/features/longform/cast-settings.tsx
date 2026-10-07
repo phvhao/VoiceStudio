@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { RotateCcwIcon } from 'lucide-react';
 import { castVoice } from './cast-map';
 import { useTranslation } from 'react-i18next';
@@ -25,11 +26,17 @@ function Swatch({ className }: { className: string }) {
   );
 }
 
-/** Formats a voice volume for display: "+3 dB", "0 dB", "-2 dB". */
+/**
+ * Formats a voice volume for display: "+3 dB", "0 dB", "-2 dB". The same
+ * function until the language changes, so memoized rows can take it.
+ */
 export function useVoiceGainText() {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage || i18n.language;
-  return (db: number) => t('leveling.db', { value: formatSignedDb(db, locale) });
+  return useCallback(
+    (db: number) => t('leveling.db', { value: formatSignedDb(db, locale) }),
+    [t, locale],
+  );
 }
 
 /**
@@ -183,7 +190,8 @@ export function CastSettings({
           </p>
           {volume('', t('audiobook.default_voice'))}
           <p className="text-xs text-muted-foreground">
-            {t('leveling.volume_hint')} {t('leveling.passage_hint', { tag: '[volume -6dB]…[/volume]' })}
+            {t('leveling.volume_hint')}{' '}
+            {t('leveling.passage_hint', { tag: '[volume -6dB]…[/volume]' })}
           </p>
         </div>
       )}

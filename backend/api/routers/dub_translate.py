@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse
 from schemas.requests import AgentFitRequest, TranslateRequest, TranslationCheckRequest
 from services.model_manager import _cpu_pool, _gpu_pool
 from services.hf_revisions import revision_for
-from services.translation_sentences import join_translations, omission_verdict, split_for_translation
+from services.translation_sentences import (
+    REPEAT_FLOOR,
+    join_translations,
+    omission_verdict,
+    repeat_allowance,
+    split_for_translation,
+)
 from services.translator import (
     SCRIPT_RANGES,
     _cinematic_budget,
@@ -240,6 +246,96 @@ _NLLB_BATCH_SIZE_ENV = "OMNIVOICE_NLLB_BATCH_SIZE"
 _NLLB_MAX_BATCH_SIZE = 32
 
 
+class _RepeatRunGuard:
+    """Loop guard for NLLB's search: no run of up to ``max_unit`` tokens comes
+    out more than its row's limit of times back to back.
+
+    Greedy NLLB answered a Japanese "No, no, that is not so" with "No, no, no,
+    ..." up to its 400-token limit, and beam search (the Quality and Max
+    presets) looped the same way on other short lines: 20-80 s of CPU a line.
+    ``no_repeat_ngram_size`` and ``repetition_penalty`` stop loops too, but on
+    the installed checkpoint they also changed complete translations: banning
+    a repeated 6-, 8- or 10-token run garbled lines that repeat a phrase on
+    purpose ("feliz cumpleaños" lost its s, "chúc mừng sinh nhật" came out as
+    "chúc chúc"), and a 1.1-1.3 penalty reworded 8-16 of 36 ordinary lines.
+    This guard only bans the token that would start one copy too many.
+
+    The limit is each source row's own :func:`repeat_allowance`: a line that
+    repeats a word is let repeat it as often again (and a half). A fixed four
+    copies cut faithful lines short — Japanese "hai" five times, then "I got it",
+    lost its last clause once a fifth "yeah," was banned, and a laugh of
+    twelve "ha" kept four — while loops run to 60-130 copies. Tokens are
+    compared without case (``folded``: each token id to the first id of its
+    case-folded text), so "oui, Oui, oui" is one run, not two.
+
+    ``limits`` holds one limit per source row; generate's rows are its
+    ``beams`` hypotheses of each source in turn.
+    """
+
+    def __init__(self, limits=(REPEAT_FLOOR,), beams: int = 1, folded=None,
+                 max_unit: int = 16):
+        self.limits = list(limits) or [REPEAT_FLOOR]
+        self.beams = max(1, beams)
+        self.folded = folded
+        self.max_unit = max_unit
+
+    def _fold(self, scores):
+        folded = self.folded
+        width = scores.shape[-1]
+        if folded.shape[0] < width:  # the model's vocabulary pads the tokenizer's
+            import torch
+
+            folded = torch.cat([folded, torch.arange(folded.shape[0], width)])
+        self.folded = folded = folded[:width].to(scores.device)
+        return folded
+
+    def __call__(self, input_ids, scores):
+        import torch
+
+        rows, length = input_ids.shape
+        folded = self._fold(scores) if self.folded is not None else None
+        ids = folded[input_ids] if folded is not None else input_ids
+        per_row = torch.tensor([self.limits[min(row // self.beams, len(self.limits) - 1)]
+                                for row in range(rows)], device=input_ids.device)
+        for limit in per_row.unique().tolist():
+            in_group = per_row == limit
+            for size in range(1, min(self.max_unit, length // limit) + 1):
+                tail = ids[:, -size * limit:].reshape(rows, limit, size)
+                stuck = ((tail == tail[:, -1:]).all(dim=2).all(dim=1) & in_group).nonzero(
+                    as_tuple=True)[0]
+                for row in stuck.tolist():
+                    if folded is None:
+                        scores[row, input_ids[row, -size]] = float("-inf")
+                    else:
+                        scores[row, folded == ids[row, -size]] = float("-inf")
+        return scores
+
+
+_nllb_folded = None
+
+
+def _nllb_case_folded():
+    """Each NLLB token id mapped to the first id whose text is the same
+    without case, for :class:`_RepeatRunGuard`; built once per tokenizer.
+    None when the tokenizer lists no vocabulary."""
+    global _nllb_folded
+    tokenizer = _nllb_tokenizer
+    if _nllb_folded is not None and _nllb_folded[0] is tokenizer:
+        return _nllb_folded[1]
+    try:
+        vocab = tokenizer.get_vocab()
+    except Exception:
+        return None
+    import torch
+
+    first: dict[str, int] = {}
+    folded = torch.arange(max(vocab.values(), default=-1) + 1)
+    for text, token in sorted(vocab.items(), key=lambda item: item[1]):
+        folded[token] = first.setdefault(text.casefold(), token)
+    _nllb_folded = (tokenizer, folded)
+    return folded
+
+
 def _nllb_batch_size() -> int:
     """Bound NLLB forward-pass width; explicit overrides remain available."""
     configured = os.environ.get(_NLLB_BATCH_SIZE_ENV, "").strip()
@@ -370,12 +466,13 @@ def _resolve_translation_context(req, client, model_name: str, timeout: float,
 
 def _unload_nllb():
     """Release NLLB VRAM so TTS model can reload."""
-    global _nllb_device, _nllb_model, _nllb_tokenizer
+    global _nllb_device, _nllb_folded, _nllb_model, _nllb_tokenizer
     import gc
     from services.model_manager import release_device_cache
     device = _nllb_device
     _nllb_model = None
     _nllb_tokenizer = None
+    _nllb_folded = None
     _nllb_device = None
     gc.collect()
     release_device_cache(device=device)
@@ -430,7 +527,7 @@ async def dub_translate(req: TranslateRequest):
                 global _nllb_model, _nllb_tokenizer, _nllb_device
                 import torch
                 from services.model_manager import release_device_cache
-                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+                from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, LogitsProcessorList
 
                 if torch.cuda.is_available():
                     target_device = "cuda"
@@ -462,6 +559,7 @@ async def dub_translate(req: TranslateRequest):
                 # Snapshot once so every segment and device fallback in this
                 # job uses the same decoding effort even if preferences change.
                 decode_options = translation_decode_defaults()
+                beams = max(1, int(decode_options.get("num_beams", 1)))
                 def _generate_rows(rows, target_language):
                     global _nllb_device
 
@@ -474,11 +572,16 @@ async def dub_translate(req: TranslateRequest):
                     if _nllb_device and _nllb_device != "cpu":
                         inputs = {key: value.to(_nllb_device) for key, value in inputs.items()}
                     forced_bos_token_id = _nllb_tokenizer.convert_tokens_to_ids(target_language)
+                    # Every pass, greedy or beam, decodes under the loop guard,
+                    # each row allowed the repetition its own source holds.
+                    guard = LogitsProcessorList([_RepeatRunGuard(
+                        [repeat_allowance(text) for _, text in rows], beams, _nllb_case_folded())])
                     try:
                         tokens = _nllb_model.generate(
                             **inputs,
                             forced_bos_token_id=forced_bos_token_id,
                             max_length=400,
+                            logits_processor=guard,
                             **decode_options,
                         )
                     except (RuntimeError, NotImplementedError) as error:
@@ -493,6 +596,7 @@ async def dub_translate(req: TranslateRequest):
                             **inputs,
                             forced_bos_token_id=forced_bos_token_id,
                             max_length=400,
+                            logits_processor=guard,
                             **decode_options,
                         )
                     decoded = _nllb_tokenizer.batch_decode(tokens, skip_special_tokens=True)
@@ -526,10 +630,9 @@ async def dub_translate(req: TranslateRequest):
                 # Beam search multiplies decoder memory per row. Keep the
                 # effective hypothesis count bounded while still widening the
                 # Fast path aggressively.
-                beam_count = max(1, int(decode_options.get("num_beams", 1)))
                 width = min(
                     _nllb_batch_size(),
-                    max(1, _nllb_hypothesis_budget() // beam_count),
+                    max(1, _nllb_hypothesis_budget() // beams),
                 )
                 translated_rows: dict[tuple[int, int], str] = {}
                 failed: dict[int, str] = {}

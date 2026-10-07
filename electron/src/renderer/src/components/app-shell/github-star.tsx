@@ -67,7 +67,7 @@ export function GithubStar() {
         }
       >
         <GithubIcon className="size-3.5" />
-        <span className="hidden @5xl:inline">{t('support.star_short')}</span>
+        <span className="group-data-[fit~=labels]/titlebar:hidden">{t('support.star_short')}</span>
         <span className="github-star-count">
           <StarIcon aria-hidden="true" className="size-3" />
           {formatCount.format(stars.data ?? BUNDLED_STARS)}

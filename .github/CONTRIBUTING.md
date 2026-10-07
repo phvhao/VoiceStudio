@@ -348,7 +348,12 @@ hard rules from the first prompt.
   uses: `electron/src/shared/i18n/locales/` (checked by
   `tests/test_locale_parity.py`) or `electron/src/renderer/src/i18n/locales/`
   (checked by `bun run --cwd electron locale:check`). Translate; don't copy
-  English into non-English locales. CI fails on hardcoded CJK outside the allowlist in
+  English into non-English locales, keep one term per concept (Vietnamese:
+  [`docs/i18n-glossary-vi.md`](../docs/i18n-glossary-vi.md)), and leave markup
+  such as `[pause 0.5s]` and `[voice:NAME]` untranslated
+  (`tests/test_locale_terms.py`). Where optional words compete for one row,
+  hide them by measured fit (`useFitSteps`) rather than a width breakpoint
+  tuned for English. CI fails on hardcoded CJK outside the allowlist in
   `tests/test_no_hardcoded_cjk.py` (extend `_ALLOWED_FILES` with a
   justification for legitimate functional CJK).
 - **DB schema changes** go through an alembic migration with a tested upgrade

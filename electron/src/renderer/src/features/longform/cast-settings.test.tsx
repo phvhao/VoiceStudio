@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
-import { CastSettings, VoiceGainControl, showsCastPanel } from './cast-settings';
+import { CastSettings, VoiceGainControl, showsCastPanel, useVoiceGainText } from './cast-settings';
 
 const profiles = [
   { id: 'p-hao', name: 'Hao PV' },
@@ -161,4 +161,14 @@ it('shows no automatic level before a leveled render', () => {
   renderCast({ names: ['Mara'], autoLevels: { Mara: 2 } });
   // Only the voices the render measured.
   expect(screen.getAllByText(/^Auto:/)).toHaveLength(1);
+});
+
+it('formats volumes with one function while the language stays', () => {
+  // Memoized rows take it as a prop: a new one on every render would render them all.
+  const { result, rerender } = renderHook(() => useVoiceGainText());
+  const gainText = result.current;
+  rerender();
+  expect(result.current).toBe(gainText);
+  expect(gainText(3)).toBe('+3 dB');
+  expect(gainText(-1.5)).toBe('-1.5 dB');
 });

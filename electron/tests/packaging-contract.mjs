@@ -76,6 +76,27 @@ for (const resource of [readme, 'LICENSE', 'pyproject.toml', 'uv.lock', 'backend
   if (artifactRequested)
     assert(existsSync(resolve(artifactResources, resource)), 'Packaged resource: ' + resource);
 }
+// The reading fonts HTML books embed and the reader loads ship inside the
+// backend resource: every file their manifest lists, licences included.
+const backendResource = config.extraResources.find((item) => item.to === 'backend');
+const fontsDir = resolve(root, backendResource.from, 'assets/fonts');
+const fontManifest = JSON.parse(readFileSync(resolve(fontsDir, 'manifest.json'), 'utf8'));
+assert(fontManifest.families.length >= 12, 'Bundled reading fonts');
+assert(
+  !backendResource.filter.some((pattern) => /fonts|woff|assets|\.txt/.test(pattern)),
+  'The backend filter keeps the reading fonts',
+);
+for (const file of fontManifest.families.flatMap((family) => [
+  family.license_file,
+  ...family.files.map((face) => face.file),
+])) {
+  assert(existsSync(resolve(fontsDir, file)), 'Reading font: ' + file);
+  if (artifactRequested)
+    assert(
+      existsSync(resolve(artifactResources, 'backend/assets/fonts', file)),
+      'Packaged reading font: ' + file,
+    );
+}
 // #2599: LAN devices load the web UI from the backend, which serves this
 // build from the app's resources. Without it they only get an error page.
 const webUi = config.extraResources.find((item) => item.to === 'frontend/dist');

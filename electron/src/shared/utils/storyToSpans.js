@@ -22,9 +22,16 @@ import { parseChapterBody } from './longformParser';
  * per-track speed of its own — a per-track slider still overrides it. Pass null
  * (or 1.0×, the engine default) to leave every track at the engine default.
  *
+ * ``layout`` (the render's plan, like the server parser's ``layout=True``) also
+ * says where each line starts — ``break_before: 'paragraph'`` on its first span
+ * after the chapter's first — and who says it: ``speaker: { name, accent }``,
+ * the line's character and its slot in the cast (the editor's colour). Display
+ * only: the rendered timeline carries them for the HTML book's turns; no take
+ * or cache key reads them.
+ *
  * @returns Array<{ title, spans: [{ voice_id, text, pause_ms_after, speed }] }>
  */
-export function storyToSpans(tracks, cast, globalSpeed = null) {
+export function storyToSpans(tracks, cast, globalSpeed = null, { layout = false } = {}) {
   const chapters = [];
   let cur = { title: '', spans: [] };
   const flush = () => {
@@ -46,6 +53,8 @@ export function storyToSpans(tracks, cast, globalSpeed = null) {
     // (falsy 0 → fall through to global/null, per the #27 zero-is-default rule.)
     const speed = tk.speed || gspeed || null;
     const spans = parseChapterBody(text, { defaultVoice: voiceId, defaultSpeed: speed });
+    const speaker = layout ? lineSpeaker(tk, cast) : null;
+    let opens = layout;
     spans.forEach((s, i) => {
       const prev = cur.spans[cur.spans.length - 1];
       // Cross-track fold: a track that *leads* with a pause merges that silence
@@ -53,10 +62,20 @@ export function storyToSpans(tracks, cast, globalSpeed = null) {
       if (i === 0 && s.text === '' && s.pause_ms_after > 0 && prev) {
         prev.pause_ms_after += s.pause_ms_after;
       } else {
+        if (opens && prev) s.break_before = 'paragraph';
+        opens = false;
+        if (speaker) s.speaker = speaker;
         cur.spans.push(s);
       }
     });
   }
   flush();
   return chapters;
+}
+
+/** The character a line is cast to, by name and cast slot; null for none or a blank name. */
+function lineSpeaker(track, cast) {
+  const accent = (cast || []).findIndex((member) => member.id === track.character);
+  const name = accent < 0 ? '' : String(cast[accent].name || '').trim();
+  return name ? { name: name.slice(0, 200), accent } : null;
 }

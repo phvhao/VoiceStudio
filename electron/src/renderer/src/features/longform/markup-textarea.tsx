@@ -227,6 +227,63 @@ function splitLines(
   return lines;
 }
 
+// A line with a tag left open: `[` with no `]` after it. The tag may run on
+// into the lines below, which then read in its kind.
+const OPEN_TAG_RE = /\[[^\]]*$/;
+
+/** The overlay's lines of one text, by line text, and what they were read with. */
+interface LineCache {
+  options: string;
+  lines: Map<string, LineSegment[]>;
+}
+
+/**
+ * `splitLines` with each line kept by its text: a tag ends on the line it
+ * starts on, so a line reads the same wherever it stands, and typing reads
+ * again the one line it changes — not the manuscript — while the other lines
+ * keep their segments (and their overlay line skips rendering). While a line
+ * holds a tag left open, which may carry on into the lines below, the whole
+ * text is read at once, as `splitLines` reads it.
+ */
+function cachedLines(
+  cache: { current: LineCache | null },
+  text: string,
+  headings: boolean,
+  voices: readonly string[] | undefined,
+  chapterBands: boolean,
+  unsupported: readonly MarkupKind[] | undefined,
+): LineSegment[][] {
+  const options = JSON.stringify([headings, voices ?? null, chapterBands, unsupported ?? null]);
+  const known = cache.current?.options === options ? cache.current.lines : undefined;
+  const kept = new Map<string, LineSegment[]>();
+  const lines: LineSegment[][] = [];
+  for (const line of text.split('\n')) {
+    let segments = kept.get(line) ?? known?.get(line);
+    if (!segments) {
+      if (OPEN_TAG_RE.test(line))
+        return splitLines(text, headings, voices, chapterBands, unsupported);
+      segments = splitLines(line, headings, voices, chapterBands, unsupported)[0];
+    }
+    kept.set(line, segments);
+    lines.push(segments);
+  }
+  cache.current = { options, lines: kept };
+  return lines;
+}
+
+// The voice switches of the last text read: the editor and its status bar
+// read the same script on every keystroke.
+let lastSwitches: { text: string; headings: boolean; switches: VoiceSwitch[] } | null = null;
+
+/** `voiceSwitches(text, { headings })`, once per text for every reader of it. */
+export function textVoiceSwitches(text: string, headings: boolean): VoiceSwitch[] {
+  if (lastSwitches?.text === text && lastSwitches.headings === headings)
+    return lastSwitches.switches;
+  const switches = voiceSwitches(text, { headings });
+  lastSwitches = { text, headings, switches };
+  return switches;
+}
+
 function lineStarts(text: string): number[] {
   const starts = [0];
   for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1))
@@ -709,13 +766,14 @@ interface LineProps {
 }
 
 const sameSegments = (a: readonly LineSegment[], b: readonly LineSegment[]) =>
-  a.length === b.length &&
-  a.every(
-    (segment, index) =>
-      segment.text === b[index].text &&
-      segment.kind === b[index].kind &&
-      segment.className === b[index].className,
-  );
+  a === b ||
+  (a.length === b.length &&
+    a.every(
+      (segment, index) =>
+        segment.text === b[index].text &&
+        segment.kind === b[index].kind &&
+        segment.className === b[index].className,
+    ));
 
 /**
  * One logical line of the overlay. Lines only re-render when their own text
@@ -857,13 +915,15 @@ export function MarkupTextarea({
   const interactive = editable && Boolean(tools?.onTokenActivate);
   // Without tools to open a tag, hovering still explains the ones not read.
   const hints = interactive || (editable && Boolean(unsupported?.length));
+  const lineCache = useRef<LineCache | null>(null);
   const lines = useMemo(
-    () => (highlight ? splitLines(text, headings, voices, activeLine, unsupported) : []),
+    () =>
+      highlight ? cachedLines(lineCache, text, headings, voices, activeLine, unsupported) : [],
     [text, headings, voices, activeLine, unsupported, highlight],
   );
   const starts = useMemo(() => lineStarts(text), [text]);
   const switches = useMemo(
-    () => (highlight && gutter ? voiceSwitches(text, { headings }) : []),
+    () => (highlight && gutter ? textVoiceSwitches(text, headings) : []),
     [text, headings, gutter, highlight],
   );
   // The caret's line and the tag it touches (line-relative), while focused.
@@ -1064,16 +1124,25 @@ export function MarkupTextarea({
     return () => observer.disconnect();
   }, [autoGrow, fit]);
   const lane = useVoiceLane(gutter && highlight, overlay, rows, model, text, layout);
+  // Each chapter's gutter label, written once per language.
+  const chapterLabel = useMemo(() => {
+    const written = new Map<number, string>();
+    return (n: number) => {
+      let label = written.get(n);
+      if (label === undefined) written.set(n, (label = t('editor.gutter_chapter', { n })));
+      return label;
+    };
+  }, [t]);
   const labels = useMemo(
     () =>
       gutter
         ? gutterLabels(lines, headings, {
-            chapter: (n) => t('editor.gutter_chapter', { n }),
+            chapter: chapterLabel,
             section: SECTION_MARK,
             intro: t('editor.gutter_intro'),
           })
         : null,
-    [gutter, lines, headings, t],
+    [gutter, lines, headings, chapterLabel, t],
   );
 
   const scrollbarGutter = autoGrow ? '' : '[scrollbar-gutter:stable]';

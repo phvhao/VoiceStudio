@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react';
+import { memo, useSyncExternalStore } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import { useTranslation } from 'react-i18next';
 import { CheckIcon, MinusIcon, PlusIcon } from 'lucide-react';
@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { castVoice } from './cast-map';
 import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, ZOOM_PRESETS, ZOOM_STEP } from './editor-zoom';
-import { caretPosition, normalizeNewlines, voiceInEffect, voiceSwitches } from './script-markup';
+import { textVoiceSwitches } from './markup-textarea';
+import { caretPosition, normalizeNewlines, voiceInEffect } from './script-markup';
 import { voiceAccent } from './voice-palette';
 
 /**
@@ -86,7 +87,8 @@ export function EditorStatusBar({
   const { t } = useTranslation();
   const offset = useSyncExternalStore(caret.subscribe, caret.get);
   const source = normalizeNewlines(text);
-  const switches = useMemo(() => voiceSwitches(source, { headings }), [source, headings]);
+  // The editor above has read them for the same text.
+  const switches = textVoiceSwitches(source, headings);
   const { line, column } = caretPosition(source, offset);
   const voice = voiceInEffect(switches, offset);
   const defaultVoice = defaultVoiceName
@@ -136,8 +138,11 @@ export function EditorStatusBar({
 const ZOOM_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs tabular-nums outline-none data-highlighted:bg-accent';
 
-/** − / NN% / +: the editor's text size; the percentage opens the list of sizes. */
-export function ZoomControl({
+/**
+ * − / NN% / +: the editor's text size; the percentage opens the list of sizes.
+ * It renders when the zoom changes, not with every keystroke in the editor.
+ */
+export const ZoomControl = memo(function ZoomControl({
   zoom,
   onChange,
   className,
@@ -201,4 +206,4 @@ export function ZoomControl({
       </Button>
     </span>
   );
-}
+});
