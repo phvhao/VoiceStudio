@@ -1539,6 +1539,14 @@ class OmniVoice(PreTrainedModel):
         ]
 
         c_lens = [inp["input_ids"].size(2) for inp in inputs_list]
+
+        # VoiceStudio (not upstream): pack each item's cond and uncond halves
+        # into one row when that is cheaper. See _generate_iterative_packed_cfg.
+        if _use_packed_cfg(self, c_lens, task.target_lens):
+            return self._generate_iterative_packed_cfg(
+                task, gen_config, inputs_list, c_lens
+            )
+
         max_c_len = max(c_lens)
         pad_id = self.config.audio_mask_id  # Or any other tokens
 
@@ -1676,10 +1684,219 @@ class OmniVoice(PreTrainedModel):
 
         return pred_tokens, confidence_scores
 
+    # -------------------------------------------------------------------
+    # VoiceStudio (not upstream): packed classifier-free guidance
+    # -------------------------------------------------------------------
+
+    def _generate_iterative_packed_cfg(
+        self,
+        task: GenerationTask,
+        gen_config: OmniVoiceGenerationConfig,
+        inputs_list: List[dict],
+        c_lens: List[int],
+    ) -> List[torch.Tensor]:
+        """``_generate_iterative`` with each item's halves packed into one row.
+
+        Upstream runs 2B rows: B conditional rows and B unconditional rows,
+        the latter (target tokens only) padded to the longest conditional
+        length. With a clone reference most of every unconditional row is
+        padding, and the LLM, the audio heads and the fp32 upcast all run on
+        it. Here row i is ``[cond_i | uncond_i]``: a block-diagonal mask keeps
+        the two documents apart, the unconditional positions restart at 0 as
+        they do upstream, and the audio heads run only on the positions the
+        scoring reads. This is the layout of ``_generate_iterative_packed`` in
+        omnivoice_flashinfer.py on the plain SDPA path.
+
+        The scoring and unmasking are the same per-item code as upstream, in
+        the same order, so random draws line up. Logits match upstream to
+        floating-point tolerance and fp32 tokens almost always match too. In
+        fp16 the different GEMM and attention shapes round differently, and
+        decoding amplifies that into a different take for a pinned seed, as
+        batching the same item with others already does upstream.
+        """
+        B = task.batch_size
+        C = self.config.num_audio_codebook
+        mask_id = self.config.audio_mask_id
+        u_lens = list(task.target_lens)
+        row_len = max(c + u for c, u in zip(c_lens, u_lens))
+        device = self.device
+
+        batch_input_ids = torch.full(
+            (B, C, row_len), mask_id, dtype=torch.long, device=device
+        )
+        batch_audio_mask = torch.zeros((B, row_len), dtype=torch.bool, device=device)
+        batch_attention_mask = torch.zeros(
+            (B, 1, row_len, row_len), dtype=torch.bool, device=device
+        )
+        position_ids = torch.zeros((B, row_len), dtype=torch.long, device=device)
+
+        for i, inp in enumerate(inputs_list):
+            c_len, u_len = c_lens[i], u_lens[i]
+            end = c_len + u_len
+
+            batch_input_ids[i, :, :c_len] = inp["input_ids"][0]
+            batch_audio_mask[i, :c_len] = inp["audio_mask"][0]
+            batch_attention_mask[i, :, :c_len, :c_len] = True
+            position_ids[i, :c_len] = torch.arange(c_len, device=device)
+
+            batch_input_ids[i, :, c_len:end] = inp["input_ids"][0, :, -u_len:]
+            batch_audio_mask[i, c_len:end] = inp["audio_mask"][0, -u_len:]
+            batch_attention_mask[i, :, c_len:end, c_len:end] = True
+            position_ids[i, c_len:end] = torch.arange(u_len, device=device)
+
+            if row_len > end:
+                # Every padding position attends to itself, so no softmax row
+                # is fully masked (an all-False row gives NaN in SDPA).
+                pad_diag = torch.arange(end, row_len, device=device)
+                batch_attention_mask[i, :, pad_diag, pad_diag] = True
+
+        # (row, position) of every logit the scoring reads, laid out as
+        # [cond targets of all items | uncond targets of all items].
+        gather_rows, gather_cols = [], []
+        for half in ("cond", "uncond"):
+            for i in range(B):
+                c_len, u_len = c_lens[i], u_lens[i]
+                start = c_len - u_len if half == "cond" else c_len
+                gather_rows.append(
+                    torch.full((u_len,), i, dtype=torch.long, device=device)
+                )
+                gather_cols.append(
+                    torch.arange(start, start + u_len, device=device)
+                )
+        gather_rows = torch.cat(gather_rows)
+        gather_cols = torch.cat(gather_cols)
+        flat_offsets = [sum(u_lens[:i]) for i in range(B)]
+        total_targets = sum(u_lens)
+
+        tokens = torch.full(
+            (B, C, max(u_lens)), mask_id, dtype=torch.long, device=device
+        )
+        schedules = _cfg_unmask_schedules(u_lens, C, gen_config)
+        layer_ids = torch.arange(C, device=device).view(1, -1, 1)
+
+        for step in range(gen_config.num_step):
+            hidden_states = self.llm(
+                inputs_embeds=self._prepare_embed_inputs(
+                    batch_input_ids, batch_audio_mask
+                ),
+                attention_mask=batch_attention_mask,
+                position_ids=position_ids,
+                use_cache=False,
+                return_dict=True,
+            )[0]
+            # [2T, C * V] -> [1, C, 2T, V], the layout forward() returns.
+            target_logits = (
+                self.audio_heads(hidden_states[gather_rows, gather_cols])
+                .view(-1, C, self.config.audio_vocab_size)
+                .permute(1, 0, 2)
+                .unsqueeze(0)
+                .to(torch.float32)
+            )
+
+            for i in range(B):
+                k = schedules[i][step]
+                if k <= 0:
+                    continue
+
+                c_len, t_len = c_lens[i], u_lens[i]
+                off = flat_offsets[i]
+                c_logits = target_logits[:, :, off : off + t_len, :]
+                u_off = total_targets + off
+                u_logits = target_logits[:, :, u_off : u_off + t_len, :]
+
+                pred_tokens, scores = self._predict_tokens_with_scoring(
+                    c_logits, u_logits, gen_config
+                )
+
+                scores = scores - (layer_ids * gen_config.layer_penalty_factor)
+
+                if gen_config.position_temperature > 0.0:
+                    scores = _gumbel_sample(scores, gen_config.position_temperature)
+
+                sample_tokens = tokens[i : i + 1, :, :t_len]
+                scores.masked_fill_(sample_tokens != mask_id, -float("inf"))
+
+                _, topk_idx = torch.topk(scores.flatten(), k)
+                flat_tokens = sample_tokens.flatten()
+                flat_tokens[topk_idx] = pred_tokens.flatten()[topk_idx]
+                sample_tokens.copy_(flat_tokens.view_as(sample_tokens))
+
+                tokens[i : i + 1, :, :t_len] = sample_tokens
+                batch_input_ids[i : i + 1, :, c_len - t_len : c_len] = sample_tokens
+                batch_input_ids[i : i + 1, :, c_len : c_len + t_len] = sample_tokens
+
+        return [tokens[i, :, : u_lens[i]] for i in range(B)]
+
 
 # ---------------------------------------------------------------------------
 # Standalone helpers
 # ---------------------------------------------------------------------------
+
+
+# VoiceStudio (not upstream): when _generate_iterative packs its CFG halves.
+# OMNIVOICE_PACKED_CFG=0 forces the upstream padded layout (for diagnosis);
+# =1 forces packing on any device and attention kernel (for validating one).
+_PACKED_CFG_ENV = "OMNIVOICE_PACKED_CFG"
+# Pack when a packed row is shorter than 1.4x the padded one. For one item
+# that is u < 0.4c: a typical clone reference. Without a reference u is close
+# to c and the longer attention row cancels the saved positions.
+_PACKED_CFG_MAX_ROW_GROWTH = 1.4
+
+
+def _use_packed_cfg(model, c_lens: List[int], u_lens: List[int]) -> bool:
+    mode = os.environ.get(_PACKED_CFG_ENV, "").strip().lower()
+    if mode in ("0", "false", "off", "no"):
+        return False
+    if mode in ("1", "true", "on", "yes"):
+        return True
+    # Validated on CUDA (eager) and CPU only. ROCm, MPS, DirectML, other
+    # attention kernels and torch.compile (which would recompile for the new
+    # shapes) keep the upstream layout until measured there. Outputs agree
+    # either way to floating-point tolerance; only the speed differs.
+    llm = model.llm
+    if hasattr(llm, "_orig_mod"):  # torch.compile's OptimizedModule
+        return False
+    if getattr(llm.config, "_attn_implementation", None) not in ("sdpa", "eager"):
+        return False
+    device = model.device
+    if device.type == "cuda":
+        if torch.version.hip:
+            return False
+    elif device.type != "cpu":
+        return False
+    packed_row = max(c + u for c, u in zip(c_lens, u_lens))
+    return packed_row < _PACKED_CFG_MAX_ROW_GROWTH * max(c_lens)
+
+
+def _cfg_unmask_schedules(
+    target_lens: List[int], num_codebooks: int, gen_config
+) -> List[List[int]]:
+    """Tokens to unmask per item per step: the schedule _generate_iterative
+    builds inline (num_step + 1 timesteps; the last step takes the rest)."""
+    timesteps = _get_time_steps(
+        t_start=0.0,
+        t_end=1.0,
+        num_step=gen_config.num_step + 1,
+        t_shift=gen_config.t_shift,
+    ).tolist()
+    schedules = []
+    for t_len in target_lens:
+        total_mask = t_len * num_codebooks
+        rem = total_mask
+        sched = []
+        for step in range(gen_config.num_step):
+            num = (
+                rem
+                if step == gen_config.num_step - 1
+                else min(
+                    math.ceil(total_mask * (timesteps[step + 1] - timesteps[step])),
+                    rem,
+                )
+            )
+            sched.append(int(num))
+            rem -= int(num)
+        schedules.append(sched)
+    return schedules
 
 
 def _get_packed_mask(document_ids):
