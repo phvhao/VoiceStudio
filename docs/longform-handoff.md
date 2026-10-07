@@ -1,8 +1,8 @@
 # Bàn giao: nâng cấp Sách nói / Truyện (fork phvhao)
 
 Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
-`phvhao/VoiceStudio` trỏ cùng commit `3ed6a2fc`). Bản cài đặt Windows cuối:
-`electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `3ed6a2fc`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
+`phvhao/VoiceStudio` trỏ cùng commit mới nhất). Bản cài đặt Windows cuối:
+`electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `95cbf842`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
 
 ## Trạng thái nhanh
 
@@ -39,6 +39,7 @@ Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (
 | `6c6525e3`, `9f13229b` | Đợt 4: nghe thử không khóa, tiến độ trong chương, bố cục Nhân bản, menu sửa chữ, quay lại/tới, nút báo thiếu gì, thẻ mô hình, Lồng tiếng dịch từng câu + co/giãn hai chiều |
 | `f1ec3cd3` | Đợt 5: 6 mẫu HTML + 14 phông OFL, Truyện xuất HTML, editor nhanh hơn, rà tiếng Việt |
 | `3ed6a2fc` | Đợt 6: bộ giải mã OmniVoice nhanh hơn 26–31% (CUDA), 35–39% (CPU) |
+| `95cbf842` | Nhân bản/Thiết kế/API chuẩn hóa theo mức lời nói −20 dBFS (chênh 9,2 → 2,2 LU); tiêu đề trang không bị cắt |
 
 ## Đã làm
 
@@ -112,9 +113,8 @@ bản thu khác trước (`OMNIVOICE_PACKED_CFG=0` để trở lại); máy GPU 
 | Kéo thả sắp xếp chương trong Mục lục | Đã nói để sau |
 | Karaoke khớp từng từ bằng ASR | Hiện từ được ước lượng trong từng câu (câu thì chính xác); có thể tận dụng bước kiểm tra lời đọc |
 | Gợi ý chính tả trong menu riêng của editor markup | Ô nhập thường đã có (menu hệ thống); editor Sách nói/Truyện chưa |
-| Chuẩn hóa âm lượng Nhân bản/Thiết kế (Q4) | Chờ chọn mức chuẩn (đề xuất −20 dBFS) |
-| Tiêu đề trang Nhân bản bị cắt ở 900×700 khi mở khung mẫu giọng (vi/ru/uk) | Cần chọn cách xử lý |
 | Bật bộ giải mã mới cho ROCm/MPS/DirectML/torch.compile | Cần kiểm tra trên máy tương ứng (`OMNIVOICE_PACKED_CFG=1`) |
+| Lồng tiếng chuyển sang chuẩn hóa theo mức lời nói | Còn dùng đỉnh −2 dBFS; cần thêm phiên bản mastering vào khóa cache lồng tiếng |
 | L1–L12 của bản rà soát (CUDA graph, FLAC cache, giới hạn cache…) | Để sau |
 | Lưu mức âm lượng đo được vào hồ sơ giọng | Chờ quyết định; chỉ để tham khảo, không thay cân bằng |
 | PR lên repo gốc | Chưa gửi |
