@@ -2902,7 +2902,7 @@
     "sample": "Selamat datang di pelajaran ini. Mari mulai.",
     "hint": "Langkah disimpan lokal. Coba lagi setelah membatalkan atau keluar untuk melanjutkan.",
     "scripts_hint": "Pisahkan klip dengan baris --- atau impor naskah.",
-    "normalized": "Ucapan memakai mesin saat ini, mastering dan normalisasi puncak.",
+    "normalized": "Ucapan memakai mesin saat ini, mastering dan normalisasi level ucapan.",
     "progress": "{{done}} / {{total}} klip siap",
     "changed": "Pengaturan berubah. Eksekusi membuat keluaran baru.",
     "incomplete": "Ucapan tidak lengkap. Coba lagi sebelum ekspor.",

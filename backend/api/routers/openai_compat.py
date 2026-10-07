@@ -520,7 +520,7 @@ def _typed_speech_http_error(e: Exception) -> Optional[HTTPException]:
 
 def _run_tts(backend, text: str, kw: dict):
     """Run TTS inference in the GPU thread pool."""
-    from services.audio_dsp import apply_mastering, normalize_audio
+    from services.audio_dsp import apply_mastering, normalize_speech_level
     from services.watermark import mark_synthetic
     wav = backend.generate(text, **kw)
     sr = backend.sample_rate
@@ -528,11 +528,11 @@ def _run_tts(backend, text: str, kw: dict):
     # native 48 kHz) opt out of apply_mastering via `applies_own_mastering`.
     # That chain's highpass + Compressor is tuned for VoiceStudio's 24 kHz clone
     # output; applied to a studio engine it adds an audible level pump that
-    # degrades the very output we want clean. Loudness normalisation still
-    # runs — it's a benign peak scale, not dynamics.
+    # degrades the very output we want clean. Speech-level normalisation still
+    # runs — it is one gain, not dynamics.
     if not getattr(backend, "applies_own_mastering", False):
         wav = apply_mastering(wav, sample_rate=sr)
-    wav = normalize_audio(wav, target_dBFS=-2.0)
+    wav = normalize_speech_level(wav, sr)
     # Invisible AudioSeal provenance mark at the tensor stage, before any
     # container encoding (#1169 — this route used to return unmarked audio
     # while /generate marked the same text). Same failure semantics as

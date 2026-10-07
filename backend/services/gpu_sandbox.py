@@ -48,7 +48,7 @@ def _worker(conn, request: dict):
 
         from services.audio_io import _safe_torchaudio_save
         from services.model_manager import _load_model_sync
-        from services.audio_dsp import apply_mastering, normalize_audio
+        from services.audio_dsp import apply_mastering, normalize_speech_level
 
         model = _load_model_sync()
 
@@ -69,7 +69,7 @@ def _worker(conn, request: dict):
 
         sr = getattr(model, "sampling_rate", 24000)
         mastered = apply_mastering(audio_out, sample_rate=sr)
-        final = normalize_audio(mastered, target_dBFS=-2.0)
+        final = normalize_speech_level(mastered, sr)
 
         # Write to temp file and return path
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")

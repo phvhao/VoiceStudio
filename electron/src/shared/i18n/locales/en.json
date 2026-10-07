@@ -3372,7 +3372,7 @@
     "sample": "Welcome to this lesson. Let’s get started.",
     "hint": "Steps save locally. Retry after cancelling or leaving to resume.",
     "scripts_hint": "Separate clips with a line containing ---, or import scripts.",
-    "normalized": "Speech uses the current engine, mastering and peak normalization.",
+    "normalized": "Speech uses the current engine, mastering and speech-level normalization.",
     "progress": "{{done}} / {{total}} clips ready",
     "changed": "Settings changed. Running again creates new outputs.",
     "incomplete": "Incomplete speech. Retry before exporting.",

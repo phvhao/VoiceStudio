@@ -28,13 +28,39 @@ export function fitSteps(element: HTMLElement, steps: readonly string[], parts =
 }
 
 /**
+ * The width `element` needs once every step is taken: everything in it at its
+ * full width, except a part that may shorten, counted at its `data-fit-min`.
+ * It depends on the content alone, never on the width the element has now, so
+ * a neighbour that gives the element this much room (a side pane narrowing)
+ * does not change it.
+ */
+export function fitRoom(element: HTMLElement, steps: readonly string[]) {
+  const { fit } = element.dataset;
+  const { width } = element.style;
+  element.dataset.fit = steps.join(' ');
+  element.style.width = 'max-content';
+  let room = element.getBoundingClientRect().width;
+  for (const part of element.querySelectorAll<HTMLElement>('[data-fit-min]'))
+    room -= Math.max(0, part.getBoundingClientRect().width - Number(part.dataset.fitMin));
+  element.style.width = width;
+  if (fit === undefined) delete element.dataset.fit;
+  else element.dataset.fit = fit;
+  return Math.ceil(room);
+}
+
+/**
  * A ref that keeps `fitSteps` current while its element is mounted: when it
  * resizes, when its text or children change (a language switch, a count
  * arriving) and when a font finishes loading. A label therefore shows because
  * it fits in this language at this width, not because the window crossed a
- * breakpoint chosen for English.
+ * breakpoint chosen for English. `onRoom`, when given, hears `fitRoom` each
+ * time, so a neighbour can make way once every step is not enough.
  */
-export function useFitSteps<T extends HTMLElement>(steps: readonly string[], parts = '') {
+export function useFitSteps<T extends HTMLElement>(
+  steps: readonly string[],
+  parts = '',
+  onRoom?: (room: number) => void,
+) {
   const key = steps.join(' ');
   return useCallback(
     (element: T | null) => {
@@ -43,6 +69,7 @@ export function useFitSteps<T extends HTMLElement>(steps: readonly string[], par
       let frame = 0;
       const fit = () => {
         frame = 0;
+        if (onRoom) onRoom(fitRoom(element, list));
         fitSteps(element, list, parts);
       };
       // Observers report after layout; refitting on the next frame keeps a
@@ -64,6 +91,6 @@ export function useFitSteps<T extends HTMLElement>(steps: readonly string[], par
         fonts?.removeEventListener('loadingdone', refit);
       };
     },
-    [key, parts],
+    [key, parts, onRoom],
   );
 }

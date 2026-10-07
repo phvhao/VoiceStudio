@@ -26,13 +26,13 @@ from core import archetypes  # noqa: E402
 from api.routers import archetypes as arch_router  # noqa: E402
 
 
-def _wav_bytes() -> bytes:
+def _wav_bytes(frames: int = 64) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(2)
         wav.setframerate(24_000)
-        wav.writeframes(b"\x00\x01" * 64)
+        wav.writeframes(b"\x00\x01" * frames)
     return buf.getvalue()
 
 
@@ -153,12 +153,37 @@ def test_preview_serves_cached_wav_without_model(client):
     key = arch_router._preview_key(sample)
     cache_dir = Path(arch_router._PREVIEW_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    dummy = _write_wav(cache_dir / f"{key}.wav")
+    dummy = _write_wav(arch_router._preview_cache_path(key))
 
     r = client.get(f"/archetypes/{sample['id']}/preview")
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/wav"
     assert r.content == dummy
+
+
+def test_preview_from_an_earlier_render_version_renders_once_more(client, monkeypatch):
+    """Previews rendered before speech-level normalization are peak-normalized
+    and much louder than a take now is: the render version in the cache name
+    makes each one render once more, and the stale file is removed."""
+    sample = archetypes.list_archetypes()[-1]
+    key = arch_router._preview_key(sample)
+    legacy = Path(arch_router._PREVIEW_DIR) / f"{key}.wav"
+    _write_wav(legacy)
+    assert arch_router._preview_cache_path(key) != legacy
+    rendered = []
+
+    async def _fake_render(a, out_path, *, prefix):
+        rendered.append(a["id"])
+        out_path.write_bytes(_wav_bytes(frames=96))
+        return out_path
+
+    monkeypatch.setattr(arch_router, "_render_wav_atomic", _fake_render)
+    for _ in range(2):
+        r = client.get(f"/archetypes/{sample['id']}/preview")
+        assert r.status_code == 200
+        assert r.content == _wav_bytes(frames=96)
+    assert rendered == [sample["id"]]
+    assert not legacy.exists()
 
 
 # ── Materialize-on-use idempotency (dedup, no re-render) ───────────────────────

@@ -8,9 +8,9 @@ import { GithubStar } from './github-star';
 export function SupportShortcut() {
   const { t } = useTranslation();
   return (
-    // A title bar too narrow for its screen's own title and controls keeps
-    // them, dropping these words first and these shortcuts last (titlebar-fit.ts).
-    <div className="flex shrink-0 items-center gap-2 group-data-[fit~=shortcuts]/titlebar:hidden">
+    // A title bar too narrow for its screen's own title drops these words
+    // first; its "More actions" menu takes these shortcuts last (titlebar-fit.ts).
+    <div className="flex shrink-0 items-center gap-2">
       <Tooltip>
         <TooltipTrigger
           render={

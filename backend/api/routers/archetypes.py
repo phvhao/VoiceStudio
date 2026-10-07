@@ -41,6 +41,7 @@ from fastapi.responses import FileResponse
 from core import archetypes
 from core.audio_validation import is_playable_wav, resolve_regular_file
 from core.config import OUTPUTS_DIR, VOICES_DIR
+from core.file_cleanup import FileCleanupError, unlink_if_present
 from services import gallery
 
 logger = logging.getLogger("omnivoice.archetypes")
@@ -65,12 +66,34 @@ _PREVIEW_NUM_STEP = 32
 _DEGENERATE_FLATNESS = 1e-7
 
 
+#: Version of the local preview renders. A change to how a preview is rendered
+#: (2: speech-level normalization in place of peak) bumps it so each cached
+#: render is redone once. The gallery's published clips keep the bare key.
+_PREVIEW_RENDER_VERSION = 2
+
+
 def _preview_key(a: dict) -> str:
     # Deterministic cache key, not a security digest. SHA-256 (not SHA-1) so the
     # SAST scanners don't flag it as a weak hash.
     return hashlib.sha256(
         f"{a['instruct']}|{a['language']}".encode("utf-8")
     ).hexdigest()[:16]
+
+
+def _preview_cache_path(key: str) -> Path:
+    """Where the local render of preview *key* is cached."""
+    return _PREVIEW_DIR / f"{key}.v{_PREVIEW_RENDER_VERSION}.wav"
+
+
+def _drop_stale_previews(key: str) -> None:
+    """Delete renders of *key* from earlier render versions; best effort."""
+    current = _preview_cache_path(key).name
+    for stale in _PREVIEW_DIR.glob(f"{key}.*wav"):
+        if stale.name != current:
+            try:
+                unlink_if_present(stale)
+            except FileCleanupError:
+                logger.debug("Could not delete stale preview %s", stale.name)
 
 
 def _design_profile_values(a: dict) -> tuple[str, str]:
@@ -229,11 +252,11 @@ _FALLBACK_SCRIPT = "Here's a quick sample of this voice so you can hear how it s
 def _is_blank_audio(audio_tensor) -> bool:
     """True if a render came back effectively silent / empty / non-finite.
 
-    After ``normalize_audio``'s silence-floor guard a dead render stays at the
-    noise floor instead of being amplified to hiss, so a near-zero peak is a
-    reliable "no audible speech" signal. A real, normalized clip peaks near
-    -2 dBFS (~0.79), so the 0.02 threshold has a wide margin and won't flag
-    legitimately quiet (e.g. whisper) voices.
+    After ``normalize_speech_level``'s silence-floor guard a dead render stays
+    at the noise floor instead of being amplified to hiss, so a near-zero peak
+    is a reliable "no audible speech" signal. A real, normalized clip's speech
+    sits at -20 dBFS RMS (~0.1) and peaks above that, so the 0.02 threshold
+    has a wide margin and won't flag legitimately quiet (e.g. whisper) voices.
     """
     try:
         import torch
@@ -297,7 +320,7 @@ def _is_unusable_audio(audio_tensor) -> bool:
     """True if a render is silent/non-finite OR a degenerate tonal buzz.
 
     The blank guard alone misses the tonal-collapse failure mode: a buzz is
-    *loud* (peaks near -2 dBFS after normalize), so it sails past the silence
+    *loud* (normalized like speech), so it sails past the silence
     floor and — without this — gets cached and served as the preview.
     """
     if _is_blank_audio(audio_tensor):
@@ -426,7 +449,7 @@ def _preview_source(a: dict) -> tuple[str, str]:
             "Pre-rendered preview from the voice gallery — a fixed reference "
             "rendering, not a render from your current engine."
         )
-    if is_playable_wav(_PREVIEW_DIR / f"{key}.wav"):
+    if is_playable_wav(_preview_cache_path(key)):
         return "cached", ""
     if _no_voice_model_downloaded():
         return "no_model", (
@@ -558,10 +581,11 @@ async def preview_archetype(
                      "X-OmniVoice-Preview-Source": "gallery"},
         )
 
-    cache_path = _PREVIEW_DIR / f"{key}.wav"
+    cache_path = _preview_cache_path(key)
     if not is_playable_wav(cache_path):
         try:
             await _render_wav_atomic(a, cache_path, prefix=".preview-")
+            _drop_stale_previews(key)
         except Exception as e:  # model missing / OOM / inference failure
             logger.error("Archetype preview render failed", exc_info=True)
             # Two different failures, two different answers. Without a model

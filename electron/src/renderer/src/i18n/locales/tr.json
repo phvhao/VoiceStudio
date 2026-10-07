@@ -976,6 +976,7 @@
     "unsupported_translation_language": "NLLB şunu desteklemiyor: {{languages}}. Başka bir dil veya çeviri motoru seçin."
   },
   "common": {
+    "more_actions": "Daha fazla işlem",
     "stop": "Durdur",
     "resume": "Sürdür",
     "paused": "Duraklatıldı",
@@ -3833,7 +3834,7 @@
     "sample": "Bu derse hoş geldiniz. Başlayalım.",
     "hint": "Adımlar yerel kaydedilir. İptal veya çıkış sonrası devam etmek için yeniden deneyin.",
     "scripts_hint": "Klipleri --- satırıyla ayırın veya metinleri içe aktarın.",
-    "normalized": "Konuşma mevcut motoru, mastering ve tepe normalizasyonunu kullanır.",
+    "normalized": "Konuşma mevcut motoru, mastering ve konuşma seviyesi normalizasyonunu kullanır.",
     "progress": "{{done}} / {{total}} klip hazır",
     "changed": "Ayarlar değişti. Çalıştırmak yeni çıktılar oluşturur.",
     "incomplete": "Konuşma eksik. Dışa aktarmadan önce yeniden deneyin.",

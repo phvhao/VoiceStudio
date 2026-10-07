@@ -1,7 +1,4 @@
-import { SupportShortcut } from '@/components/app-shell/support-shortcut';
-import { SidebarToggle } from '@/components/app-shell/sidebar-toggle';
-import { HistoryNav } from '@/components/app-shell/history-nav';
-import { useTitlebarFit } from '@/components/app-shell/titlebar-fit';
+import { WorkspaceHeader } from '@/components/app-shell/workspace-header';
 import { EditProfile } from './edit-profile';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { VoiceSetup } from './voice-setup';
@@ -14,15 +11,7 @@ import { TakeDetails } from './take-details';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from '@tanstack/react-router';
-import {
-  HistoryIcon,
-  AudioLinesIcon,
-  ChevronDownIcon,
-  PencilIcon,
-  SearchIcon,
-} from 'lucide-react';
-import { isMac } from '@/components/bridge';
-import { cn } from '@/lib/utils';
+import { HistoryIcon, AudioLinesIcon, ChevronDownIcon, PencilIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WorkspacePane } from '@/components/workspace-pane';
 import { useProfiles } from '@/hooks/use-profiles';
@@ -127,7 +116,9 @@ export function ClonePage() {
   const wasGenerating = useRef(false);
   if (isGenerating) wasGenerating.current = true;
   const focused = useEditorFocus();
-  const titlebarFit = useTitlebarFit();
+  // The width the title bar needs for the title in full: a pane beside it
+  // narrows rather than cut the title (WorkspacePane `room`).
+  const [titleRoom, setTitleRoom] = useState(0);
   // Asking for a pane (voice sample, take details, profile editor) leaves focus mode.
   useEffect(() => {
     if (panel || editingProfileId || selectedTake) setEditorFocus(false);
@@ -168,49 +159,26 @@ export function ClonePage() {
     <div className="flex h-full min-h-0 overflow-hidden">
       <div className="flex min-w-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col">
-          <header
-            ref={titlebarFit}
-            className={cn(
-              'group/titlebar workspace-titlebar flex shrink-0 items-center justify-between gap-3 px-5',
-              (focused || (!editingProfile && !selectedTake && (!panel || choosingVoice))) &&
-                !isMac() &&
-                'native-controls-right',
-            )}
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <SidebarToggle />
-              <HistoryNav />
-              <h1 className="truncate text-sm font-medium">{t('clone.title')}</h1>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <SupportShortcut />
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={t('preferences.search')}
-                title="Ctrl/Cmd + K"
-                onClick={() => window.dispatchEvent(new Event('voicestudio:commands'))}
-              >
-                <SearchIcon />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                title={t('clone.history_title')}
-                onClick={() => {
+          <WorkspaceHeader
+            className="border-b-0"
+            nativeControls={
+              focused || (!editingProfile && !selectedTake && (!panel || choosingVoice))
+            }
+            onRoom={setTitleRoom}
+            actions={[
+              {
+                label: t('clone.history_title'),
+                icon: HistoryIcon,
+                onSelect: () => {
                   setEditorFocus(false);
                   setLibraryTab('takes');
                   setWorkspace({ libraryOpen: true });
-                }}
-              >
-                <HistoryIcon data-icon="inline-start" />
-                {/* A crowded title bar keeps the page title in view instead. */}
-                <span className="group-data-[fit~=controls]/titlebar:sr-only">
-                  {t('clone.history_title')}
-                </span>
-              </Button>
-            </div>
-          </header>
+                },
+              },
+            ]}
+          >
+            <h1 className="text-sm font-medium">{t('clone.title')}</h1>
+          </WorkspaceHeader>
           {choosingVoice ? (
             // The chooser takes the window's width; the page scrolls, not the list.
             <div
@@ -311,6 +279,7 @@ export function ClonePage() {
           {editingProfile && (
             <WorkspacePane
               layout="editor"
+              room={titleRoom}
               title={t('paneActions.edit')}
               icon={PencilIcon}
               onClose={() => setWorkspace({ editingProfileId: null })}
@@ -324,6 +293,7 @@ export function ClonePage() {
           )}
           {!editingProfile && selectedTake && (
             <WorkspacePane
+              room={titleRoom}
               title={t('clone.history_title')}
               icon={HistoryIcon}
               onClose={() => openTake(null)}
@@ -334,6 +304,7 @@ export function ClonePage() {
           {!editingProfile && panel && !choosingVoice && !savingUpload && (
             <WorkspacePane
               collapsible
+              room={titleRoom}
               title={t('cloneFlow.voice_sample')}
               icon={AudioLinesIcon}
               onClose={() => setPanel(null)}

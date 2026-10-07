@@ -1004,6 +1004,7 @@
     "unsupported_translation_language": "NLLB 不支持：{{languages}}。请选择其他语言或翻译引擎。"
   },
   "common": {
+    "more_actions": "更多操作",
     "stop": "停止",
     "resume": "恢复",
     "paused": "已暂停",
@@ -3833,7 +3834,7 @@
     "sample": "欢迎来到本课。让我们开始吧。",
     "hint": "已完成的步骤保存在本地。取消或离开页面后，重试即可继续。",
     "scripts_hint": "用单独一行 --- 分隔片段，或导入脚本。",
-    "normalized": "语音使用当前引擎，并进行母带处理和峰值归一化。",
+    "normalized": "语音使用当前引擎，并进行母带处理和语音电平归一化。",
     "progress": "{{done}} / {{total}} 个片段已就绪",
     "changed": "设置已更改。运行将生成新输出。",
     "incomplete": "语音不完整。请在导出前重试。",

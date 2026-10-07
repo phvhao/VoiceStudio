@@ -976,6 +976,7 @@
     "unsupported_translation_language": "NLLB không hỗ trợ: {{languages}}. Hãy chọn ngôn ngữ hoặc engine dịch khác."
   },
   "common": {
+    "more_actions": "Thao tác khác",
     "stop": "Dừng",
     "resume": "Tiếp tục",
     "paused": "Đã tạm dừng",
@@ -3833,7 +3834,7 @@
     "sample": "Chào mừng đến với bài học. Hãy bắt đầu.",
     "hint": "Các bước được lưu cục bộ. Thử lại sau khi hủy hoặc rời trang để tiếp tục.",
     "scripts_hint": "Tách các đoạn bằng dòng --- hoặc nhập kịch bản.",
-    "normalized": "Giọng nói dùng engine hiện tại, xử lý hoàn thiện và chuẩn hóa đỉnh.",
+    "normalized": "Giọng nói dùng engine hiện tại, xử lý hoàn thiện và chuẩn hóa mức giọng nói.",
     "progress": "{{done}} / {{total}} đoạn đã sẵn sàng",
     "changed": "Cài đặt đã thay đổi. Chạy lại sẽ tạo đầu ra mới.",
     "incomplete": "Giọng nói chưa đầy đủ. Thử lại trước khi xuất.",

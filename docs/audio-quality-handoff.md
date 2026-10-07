@@ -59,6 +59,13 @@ Mastering, broadcast effects, peak normalization to -2 dBFS, and
 The same float samples were written using SoundFile `PCM_16` and `FLOAT`.
 There was no resampling, independent normalization, or added dither.
 
+Peak normalization to -2 dBFS was the generation default when these files were
+made. Clone, Design, API and streaming takes are now normalized by speech
+level instead (`audio_dsp.normalize_speech_level`: gated speech RMS to
+the audiobook leveling target of -20 dBFS, peaks capped at -1 dBFS), so a fresh
+render of the same request plays at a different level. Compare at matched
+loudness.
+
 Text:
 
 > The morning sunlight filled the quiet room. A gentle breeze moved through
@@ -111,7 +118,7 @@ A second generation used the same text, seed 42, explicit English, guidance 2,
 **32 steps**, denoise and model postprocessing enabled. The preceding float
 sample and its text were supplied as the cloning reference to retain a similar
 voice. No mastering compressor or broadcast effects were added; processing was
-peak normalization and `mark_synthetic` only. Export: mono 24 kHz, 32-bit float,
+peak normalization (the default then) and `mark_synthetic` only. Export: mono 24 kHz, 32-bit float,
 12.93 seconds, peak -2.0343 dBFS, no clipping.
 
 This changes steps, reference conditioning, and effects together. It cannot

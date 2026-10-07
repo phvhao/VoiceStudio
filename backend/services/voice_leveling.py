@@ -22,7 +22,9 @@ from typing import Iterable, Mapping, Optional
 
 #: Speech level every voice is brought to, in dBFS (gated RMS). OmniVoice
 #: treats a reference at RMS 0.1 (-20 dBFS) as full level, and speech peaks
-#: from there stay under :data:`PEAK_CEILING`.
+#: from there stay under :data:`PEAK_CEILING`. Clone, Design and API takes are
+#: brought to it too (``services.audio_dsp.normalize_speech_level``), so every
+#: surface speaks at one level.
 TARGET_SPEECH_DB = -20.0
 #: Largest cut or boost the leveling applies — and, separately, the largest a
 #: user's own volume for one voice may be.

@@ -1,6 +1,6 @@
 import { render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { fitSteps, useFitSteps } from './use-fit-steps';
+import { fitRoom, fitSteps, useFitSteps } from './use-fit-steps';
 import {
   TITLEBAR_FIT_PARTS,
   TITLEBAR_FIT_STEPS,
@@ -116,4 +116,26 @@ it('refits when its text changes, as a language switch does', async () => {
   rerender(<Bar label="Xuất" />);
   await waitFor(() => expect(getByTestId('bar').dataset.fit).toBe(''));
   unmount();
+});
+
+it('measures the room the bar needs with every step taken, whatever its width', () => {
+  // Laid out at max-content, the bar is as wide as its content; a name
+  // beside the title counts only down to its minimum.
+  const bar = document.createElement('header');
+  const name = bar.appendChild(document.createElement('span'));
+  name.dataset.fitMin = '96';
+  bar.dataset.fit = 'labels';
+  bar.style.width = '320px';
+  const seen: string[] = [];
+  bar.getBoundingClientRect = () => {
+    seen.push(`${bar.dataset.fit}@${bar.style.width}`);
+    return { width: bar.style.width === 'max-content' ? 500.4 : 320 } as DOMRect;
+  };
+  name.getBoundingClientRect = () => ({ width: 180 }) as DOMRect;
+
+  expect(fitRoom(bar, TITLEBAR_FIT_STEPS)).toBe(Math.ceil(500.4 - (180 - 96)));
+  expect(seen).toEqual([`${TITLEBAR_FIT_STEPS.join(' ')}@max-content`]);
+  // The bar keeps the steps and width it had.
+  expect(bar.dataset.fit).toBe('labels');
+  expect(bar.style.width).toBe('320px');
 });

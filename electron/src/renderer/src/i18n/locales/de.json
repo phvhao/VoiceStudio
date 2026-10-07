@@ -976,6 +976,7 @@
     "unsupported_translation_language": "NLLB unterstützt {{languages}} nicht. Wähle eine andere Sprache oder Übersetzungs-Engine."
   },
   "common": {
+    "more_actions": "Weitere Aktionen",
     "stop": "Stopp",
     "resume": "Fortsetzen",
     "paused": "Pausiert",
@@ -3833,7 +3834,7 @@
     "sample": "Willkommen zu dieser Lektion. Fangen wir an.",
     "hint": "Schritte werden lokal gespeichert. Nach Abbruch oder Verlassen erneut versuchen.",
     "scripts_hint": "Clips mit einer Zeile --- trennen oder Skripte importieren.",
-    "normalized": "Sprache nutzt die aktuelle Engine, Mastering und Spitzennormalisierung.",
+    "normalized": "Sprache nutzt die aktuelle Engine, Mastering und Sprachpegel-Normalisierung.",
     "progress": "{{done}} / {{total}} Clips bereit",
     "changed": "Einstellungen geändert. Erneutes Ausführen erzeugt neue Ausgaben.",
     "incomplete": "Sprache unvollständig. Vor dem Export erneut versuchen.",

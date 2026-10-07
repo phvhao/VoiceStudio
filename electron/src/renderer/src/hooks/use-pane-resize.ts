@@ -8,6 +8,8 @@ export function usePaneResize({
   initial = 360,
   maximum = Infinity,
   reserve = 320,
+  room = 0,
+  floor = minimum,
   enabled = true,
 }: {
   storageKey: string;
@@ -16,11 +18,20 @@ export function usePaneResize({
   initial?: number;
   maximum?: number;
   reserve?: number;
+  /**
+   * The width the content beside the pane cannot do without — its title bar
+   * with the title in full. Past `reserve`, the pane narrows for it, below the
+   * `minimum` a drag reaches, down to `floor`.
+   */
+  room?: number;
+  floor?: number;
   enabled?: boolean;
 }) {
   const host = useRef<HTMLElement>(null);
   const drag = useRef<{ x: number; width: number } | null>(null);
-  const [limit, setLimit] = useState(initial);
+  const [available, setAvailable] = useState<number | null>(null);
+  const limit =
+    available === null ? initial : Math.max(minimum, Math.min(maximum, available - reserve));
   const [preferred, setPreferred] = useState(() => {
     try {
       const width = Number(localStorage.getItem(storageKey));
@@ -29,7 +40,11 @@ export function usePaneResize({
       return initial;
     }
   });
-  const width = Math.max(minimum, Math.min(preferred, limit));
+  const chosen = Math.max(minimum, Math.min(preferred, limit));
+  const width =
+    available === null || room <= 0
+      ? chosen
+      : Math.max(Math.min(floor, chosen), Math.min(chosen, available - room));
   useLayoutEffect(() => {
     let parent = host.current?.parentElement ?? null;
     while (
@@ -38,13 +53,12 @@ export function usePaneResize({
     )
       parent = parent.parentElement;
     if (!enabled || !parent) return;
-    const measure = () =>
-      setLimit(Math.max(minimum, Math.min(maximum, parent.clientWidth - reserve)));
+    const measure = () => setAvailable(parent.clientWidth);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(parent);
     return () => observer.disconnect();
-  }, [enabled, maximum, minimum, reserve]);
+  }, [enabled]);
   const resize = (value: number) => {
     const next = Math.max(minimum, Math.min(value, limit));
     setPreferred(next);
@@ -58,7 +72,7 @@ export function usePaneResize({
     role: 'separator',
     tabIndex: 0,
     'aria-orientation': 'vertical',
-    'aria-valuemin': minimum,
+    'aria-valuemin': Math.min(minimum, width),
     'aria-valuemax': limit,
     'aria-valuenow': width,
     onPointerDown: (event) => {

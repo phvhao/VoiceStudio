@@ -1,6 +1,7 @@
 // Long translations keep each screen's title, its main action's words and the
-// dub segment toolbar whole. The title bar gives up the Get Pro and Star words
-// before the title, Synthesize widens instead of cutting its label, and the
+// dub segment toolbar whole. The title bar gives up the Get Pro and Star words,
+// then moves its buttons into a menu, then narrows a side pane, before the
+// title; Synthesize widens instead of cutting its label, and the
 // segment toolbar drops words, then wraps, before anything overlaps or clips.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -187,25 +188,40 @@ const overlapping = (page, selector) =>
   });
 
 try {
-  // Clone with the voice sample pane open leaves the title bar its narrowest.
-  for (const locale of ['vi', 'ru']) {
+  // Clone with the voice sample pane open leaves the title bar its narrowest:
+  // at 900x700 the bar has already moved Get Pro, Star, Search and Recent
+  // takes into its menu, and the pane narrows (never past its floor) so the
+  // title still shows in full.
+  for (const locale of ['vi', 'ru', 'uk']) {
     const strings = await catalog(locale);
-    const { context, page, errors } = await open(locale, { width: 1280, height: 800 }, 'clone');
-    await page.locator('[data-choose]').first().click({ timeout: 30000 });
-    await page.locator('[data-clone-script]').fill('Hello there. How are you today?');
-    await page.locator(`main button[title="${strings.cloneFlow.voice_sample}"]`).click();
-    await page.waitForFunction(
-      () => document.querySelector('main header')?.dataset.fit !== undefined,
-    );
-    await page.waitForTimeout(300);
-    assert.deepEqual(await clipped(page, 'main header h1'), [], `${locale}: Clone title cut short`);
-    assert.deepEqual(
-      await clipped(page, '[data-clone-generate] span.truncate'),
-      [],
-      `${locale}: Synthesize label cut short`,
-    );
-    assert.deepEqual(errors, [], `${locale} Clone emitted renderer errors`);
-    await context.close();
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 900, height: 700 },
+    ]) {
+      const size = `${locale} ${viewport.width}x${viewport.height}`;
+      const { context, page, errors } = await open(locale, viewport, 'clone');
+      await page.locator('[data-choose]').first().click({ timeout: 30000 });
+      await page.locator('[data-clone-script]').fill('Hello there. How are you today?');
+      await page.locator(`main button[title="${strings.cloneFlow.voice_sample}"]`).click();
+      await page.waitForFunction(
+        () => document.querySelector('main header')?.dataset.fit !== undefined,
+      );
+      await page.waitForTimeout(300);
+      assert.deepEqual(await clipped(page, 'main header h1'), [], `${size}: Clone title cut short`);
+      assert.deepEqual(
+        await clipped(page, '[data-clone-generate] span.truncate'),
+        [],
+        `${size}: Synthesize label cut short`,
+      );
+      const pane = await page.locator('aside[data-slot=workspace-pane]').boundingBox();
+      assert.ok(pane && pane.width >= 272, `${size}: the voice sample pane is ${pane?.width}px`);
+      if (viewport.width === 900)
+        await page
+          .getByRole('button', { name: strings.common.more_actions, exact: true })
+          .waitFor({ timeout: 5000 });
+      assert.deepEqual(errors, [], `${size} Clone emitted renderer errors`);
+      await context.close();
+    }
   }
 
   for (const viewport of [

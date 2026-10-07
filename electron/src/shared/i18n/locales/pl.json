@@ -2902,7 +2902,7 @@
     "sample": "Witaj na tej lekcji. Zaczynajmy.",
     "hint": "Kroki zapisują się lokalnie. Ponów po anulowaniu lub wyjściu, aby kontynuować.",
     "scripts_hint": "Rozdziel klipy wierszem --- lub zaimportuj skrypty.",
-    "normalized": "Mowa używa bieżącego silnika, masteringu i normalizacji szczytów.",
+    "normalized": "Mowa używa bieżącego silnika, masteringu i normalizacji poziomu mowy.",
     "progress": "{{done}} / {{total}} klipów gotowych",
     "changed": "Zmieniono ustawienia. Uruchomienie utworzy nowe wyniki.",
     "incomplete": "Mowa niepełna. Ponów przed eksportem.",

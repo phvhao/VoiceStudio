@@ -13,6 +13,7 @@ export function WorkspacePane({
   collapsible = false,
   layout = 'inspector',
   icon: Icon,
+  room = 0,
 }: {
   title: string;
   children: ReactNode;
@@ -20,6 +21,8 @@ export function WorkspacePane({
   collapsible?: boolean;
   layout?: 'inspector' | 'editor';
   icon?: LucideIcon;
+  /** The width the screen's title bar beside the pane needs (`useTitlebarFit`). */
+  room?: number;
 }) {
   const { t } = useTranslation();
   const editor = layout === 'editor';
@@ -30,6 +33,11 @@ export function WorkspacePane({
     initial: editor ? 540 : 400,
     maximum: editor ? 760 : 560,
     reserve: editor ? 520 : 320,
+    // The screen's title outranks the pane's width: a title bar that has
+    // already moved its buttons into its menu narrows the pane, as far as
+    // its content still fits (the profile editor's form needs more).
+    room,
+    floor: editor ? 320 : 272,
   });
   return (
     <aside

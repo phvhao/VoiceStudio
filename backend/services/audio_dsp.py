@@ -12,7 +12,11 @@ All effects use Spotify's `pedalboard` library. When pedalboard isn't
 installed, every function degrades gracefully (returns audio unmodified).
 """
 import logging
+import math
+
 import torch
+
+from services.voice_leveling import TARGET_SPEECH_DB, apply_gain, speech_level_db
 
 logger = logging.getLogger("omnivoice.dsp")
 
@@ -125,6 +129,17 @@ def apply_mastering(audio_tensor, sample_rate=24000):
         return audio_tensor
 
 
+#: -50 dBFS ≈ 0.00316 linear. A take peaking at or below this is silence / the
+#: noise floor, and no normalization amplifies it (see :func:`normalize_audio`).
+SILENCE_FLOOR = 10 ** (-50.0 / 20.0)
+#: A take leveled by :func:`normalize_speech_level` never peaks above this
+#: (dBFS): its speech stays quieter than the target rather than clip.
+SPEECH_PEAK_CEILING_DB = -1.0
+#: Peak (dBFS) of a take with too little speech to measure (under 0.3 s) —
+#: about where speech at the target level peaks.
+SHORT_SPEECH_PEAK_DB = -7.0
+
+
 def normalize_audio(audio_tensor, target_dBFS=-2.0):
     """Peak-normalizes the audio to a standard broadcasting level (-2 dB) to fix F5TTS volume fluctuations.
 
@@ -139,12 +154,39 @@ def normalize_audio(audio_tensor, target_dBFS=-2.0):
     if audio_tensor.numel() == 0:
         return audio_tensor
     max_val = torch.abs(audio_tensor).max()
-    # -50 dBFS ≈ 0.00316 linear. Anything at/below this is silence / noise floor.
-    silence_floor = 10 ** (-50.0 / 20.0)
-    if max_val > silence_floor:
+    if max_val > SILENCE_FLOOR:
         target_amp = 10 ** (target_dBFS / 20.0)
         audio_tensor = audio_tensor * (target_amp / max_val)
     return audio_tensor
+
+
+def normalize_speech_level(audio_tensor, sample_rate: int):
+    """Scale a finished take so its speech sits at ``TARGET_SPEECH_DB``.
+
+    The level is the gated speech RMS that audiobook voice leveling brings
+    every voice to (``services.voice_leveling``), so a Clone, Design or API
+    take plays as loud as an audiobook chapter, and repeat takes, short and
+    long ones, match. Peak normalization did not: one loud sample decided the
+    gain, so loudness varied by take length and delivery.
+
+    One gain, a boost or a cut, capped so the loudest sample stays at or under
+    :data:`SPEECH_PEAK_CEILING_DB`. A take peaking at or below
+    :data:`SILENCE_FLOOR` is returned untouched (a dead render must stay
+    inaudible for the blank-render guards); one with too little speech to
+    measure is peak-scaled to :data:`SHORT_SPEECH_PEAK_DB`.
+    """
+    if audio_tensor.numel() == 0:
+        return audio_tensor
+    peak = float(torch.abs(audio_tensor).max())
+    if not math.isfinite(peak) or peak <= SILENCE_FLOOR:
+        return audio_tensor
+    peak_db = 20.0 * math.log10(peak)
+    level_db = speech_level_db(audio_tensor, sample_rate)
+    if level_db is None:
+        gain_db = SHORT_SPEECH_PEAK_DB - peak_db
+    else:
+        gain_db = min(TARGET_SPEECH_DB - level_db, SPEECH_PEAK_CEILING_DB - peak_db)
+    return apply_gain(audio_tensor, gain_db)
 
 
 def trim_trailing_silence(
@@ -171,8 +213,7 @@ def trim_trailing_silence(
     """
     if audio_tensor.numel() == 0:
         return audio_tensor
-    # -50 dBFS ≈ 0.00316 linear — matches normalize_audio's silence floor.
-    floor = 10 ** (-50.0 / 20.0)
+    floor = SILENCE_FLOOR
     envelope = torch.abs(audio_tensor)
     if envelope.ndim > 1:
         envelope = envelope.amax(dim=tuple(range(envelope.ndim - 1)))

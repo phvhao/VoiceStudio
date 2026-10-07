@@ -63,8 +63,9 @@ now retried once with a fresh client. See
   the [VoxCPM 2.0.3 examples](https://github.com/OpenBMB/VoxCPM/blob/2.0.3/README.md#-voice-design)
   in both the managed sidecar and in-process adapter.
 - VoxCPM2 emits mastered, studio-grade audio, so VoiceStudio **skips its
-  shared mastering chain** (which is tuned for 24 kHz engines) — only benign
-  loudness normalization applies.
+  shared mastering chain** (which is tuned for 24 kHz engines) — only
+  speech-level normalization applies: one gain that brings its speech to the
+  same -20 dBFS level as every other engine, without clipping.
 - A trailing-silence guard trims long near-silent tails from generations,
   keeping a short natural tail.
 

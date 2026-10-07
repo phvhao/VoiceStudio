@@ -16,6 +16,7 @@ metadata and the backend fallback mirror it.
 - Editing or retaking one sentence of a book renders just that sentence again; the rest of its chapter is reused
 
 ### Changed
+- Long page titles stay whole in a crowded title bar: buttons drop their words, then move into a More actions menu, then a side pane narrows
 - Stories and Audiobook share one markup toolbar: pause presets or a custom length, a searchable voice picker that voices just the selected text, slow/fast/emphasis/spell, grouped expressions, chapters and a markup guide
 - Script editors highlight voice, pause, delivery, expression and chapter markup as you type, flag unrecognized tags, and toolbar inserts undo with Ctrl+Z
 - Stories lines set character, voice and speed from one compact row, are color-coded by character, and chapters show as titled dividers
@@ -30,6 +31,7 @@ metadata and the backend fallback mirror it.
 - Clicking a tag, or Alt+Enter on it, opens a card to recast a voice, set its volume, listen to or select its part, change a pause or delivery, or respell a word; right-click offers the same
 - Typing [ in a script suggests voices, profiles, pauses, delivery and reactions
 - Audiobook and Stories even out voice volume per chapter (on by default), and Cast sets a −12 to +12 dB volume per voice; local renders reassemble chapters from takes already made
+- Takes from Clone, Voice Design, the API and streamed speech are leveled to the same speech level as audiobook voices instead of a fixed peak, so repeat, short and long takes match in loudness; most come out quieter than before, short takes the most, and locally rendered voice gallery previews render once more
 - `[volume -6dB]…[/volume]` reads one passage quieter or louder, set from the toolbar, a tag card, the right-click menu or `[` suggestions; Cast shows what leveling added to each voice in the last render
 - The finished audiobook plays from a compact card with chapter marks, chapter skips and speed; Open reader shows the whole text, follows the voice word by word, and plays from any word you click
 - Optional speech check listens to each sentence with the installed speech recognizer, re-renders mismatches up to twice, and lists the sentences still worth a listen

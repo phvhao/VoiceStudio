@@ -978,6 +978,7 @@
     "unsupported_translation_language": "NLLB ne prend pas en charge : {{languages}}. Choisissez une autre langue ou un autre moteur de traduction."
   },
   "common": {
+    "more_actions": "Plus d’actions",
     "stop": "Arrêter",
     "resume": "Reprendre",
     "paused": "En pause",
@@ -3847,7 +3848,7 @@
     "sample": "Bienvenue dans cette leçon. Commençons.",
     "hint": "Étapes enregistrées localement. Réessayez après annulation ou départ pour reprendre.",
     "scripts_hint": "Séparez les clips par une ligne --- ou importez des scripts.",
-    "normalized": "La voix utilise le moteur actuel, le mastering et la normalisation des crêtes.",
+    "normalized": "La voix utilise le moteur actuel, le mastering et la normalisation du niveau de parole.",
     "progress": "{{done}} / {{total}} clips prêts",
     "changed": "Paramètres modifiés. Relancer crée de nouvelles sorties.",
     "incomplete": "Voix incomplète. Réessayez avant d’exporter.",

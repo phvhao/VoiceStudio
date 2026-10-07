@@ -595,16 +595,17 @@ def _sanitize_audio(audio_out):
 @_render_timed('effects')
 def _apply_effect_chain(audio_out, sample_rate, effect_preset, *, skip_mastering=False):
     """Shared post-DSP for /generate: preset validation → mastering →
-    effect chain → loudness normalization.
+    effect chain → speech-level normalization.
 
     ``skip_mastering`` honors a backend's ``applies_own_mastering`` flag
     (issue #312): studio engines (e.g. VoxCPM2's native 48 kHz output)
     opt out of the broadcast highpass + Compressor pre-stage that's tuned
-    for VoiceStudio's 24 kHz clone output. Loudness normalization still runs —
-    it's a benign peak scale. Mirrors ``_run_tts`` in openai_compat.py.
+    for VoiceStudio's 24 kHz clone output. Speech-level normalization still
+    runs — it is one gain, not dynamics. Mirrors ``_run_tts`` in
+    openai_compat.py.
     """
     from services.audio_dsp import (
-        EFFECT_PRESETS, apply_mastering, normalize_audio,
+        EFFECT_PRESETS, apply_mastering, normalize_speech_level,
         apply_effects_chain, get_effect_chain,
     )
 
@@ -634,7 +635,7 @@ def _apply_effect_chain(audio_out, sample_rate, effect_preset, *, skip_mastering
         audio_out = apply_effects_chain(
             audio_out, sample_rate=sample_rate, chain=chain,
         )
-    return normalize_audio(audio_out, target_dBFS=-2.0)
+    return normalize_speech_level(audio_out, sample_rate)
 
 
 def _safe_exc_text(e: BaseException) -> str:

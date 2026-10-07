@@ -976,6 +976,7 @@
     "unsupported_translation_language": "NLLB ondersteunt {{languages}} niet. Kies een andere taal of vertaalengine."
   },
   "common": {
+    "more_actions": "Meer acties",
     "stop": "Stop",
     "resume": "Hervatten",
     "paused": "Gepauzeerd",
@@ -3833,7 +3834,7 @@
     "sample": "Welkom bij deze les. Laten we beginnen.",
     "hint": "Stappen worden lokaal opgeslagen. Probeer na annuleren of verlaten opnieuw om verder te gaan.",
     "scripts_hint": "Scheid clips met een regel --- of importeer scripts.",
-    "normalized": "Spraak gebruikt de huidige engine, mastering en pieknormalisatie.",
+    "normalized": "Spraak gebruikt de huidige engine, mastering en spraakniveaunormalisatie.",
     "progress": "{{done}} / {{total}} clips gereed",
     "changed": "Instellingen gewijzigd. Uitvoeren maakt nieuwe uitvoer.",
     "incomplete": "Spraak onvolledig. Probeer opnieuw vóór export.",

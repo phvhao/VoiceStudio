@@ -976,6 +976,7 @@
     "unsupported_translation_language": "NLLB stöder inte: {{languages}}. Välj ett annat språk eller en annan översättningsmotor."
   },
   "common": {
+    "more_actions": "Fler åtgärder",
     "stop": "Sluta",
     "resume": "Återuppta",
     "paused": "Pausad",
@@ -3833,7 +3834,7 @@
     "sample": "Välkommen till lektionen. Nu börjar vi.",
     "hint": "Steg sparas lokalt. Försök igen efter avbrott eller sidbyte för att fortsätta.",
     "scripts_hint": "Separera klipp med en rad --- eller importera manus.",
-    "normalized": "Tal använder aktuell motor, mastering och toppnormalisering.",
+    "normalized": "Tal använder aktuell motor, mastering och normalisering av talnivå.",
     "progress": "{{done}} / {{total}} klipp klara",
     "changed": "Inställningar ändrade. Körning skapar nya resultat.",
     "incomplete": "Talet är ofullständigt. Försök igen före export.",
