@@ -28,6 +28,8 @@ import type {
 } from '@/lib/api/types';
 import { effectiveSamplingSteps } from '@/lib/audio/quality';
 import { cachedTtsLanguagesSupported } from '@/lib/language-options';
+import i18next from 'i18next';
+import { engineRoutingText } from '@/lib/engine-reasons';
 import { tr } from '@/lib/i18n-text';
 import { queryKeys } from '@/lib/query';
 import { cloneSettingsStore } from '@/lib/store/clone-settings';
@@ -138,7 +140,14 @@ function announceResultNotices(result: GenerateResult): void {
   // with-caveat, so their presence is the signal.
   if (result.routing && result.routing.status !== lastRoutingStatus) {
     lastRoutingStatus = result.routing.status;
-    const { status, reason } = result.routing;
+    const { status } = result.routing;
+    // The engine's own reason is English and may name the device; its code
+    // is this app's translation, as Settings shows it.
+    const reason =
+      engineRoutingText(i18next.t, {
+        routing_reason: result.routing.reason,
+        routing_reason_code: result.routing.code,
+      }) ?? '';
     if (status === 'cpu_fallback') {
       toast.info(tr('tts.routingFallback', { reason }));
     } else if (status === 'accelerated' && reason) {

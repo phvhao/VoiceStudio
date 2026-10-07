@@ -122,6 +122,14 @@ _FIT_PARAM_DEFAULTS = {
     "allow_video_retime": True,
 }
 
+# Knobs added after fit fingerprints shipped: hashed only away from their
+# default, so every fit_fp already stored for a default config stays valid.
+# ``video_fit`` is the per-segment override list, "id:mode" joined.
+_FIT_PARAM_LATER_DEFAULTS = {
+    "video_speed_cap": 1.25,
+    "video_fit": "",
+}
+
 
 def fit_fingerprint(params: dict) -> str:
     """Deterministic hash of the fit configuration for one dub track.
@@ -137,6 +145,10 @@ def fit_fingerprint(params: dict) -> str:
         if v is None or v == "":
             v = _FIT_PARAM_DEFAULTS[k]
         payload[k] = _canon_value(k, v)
+    for k, default in _FIT_PARAM_LATER_DEFAULTS.items():
+        v = _canon_value(k, params.get(k))
+        if v != "" and v != _canon_value(k, default):
+            payload[k] = v
     blob = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha1(blob.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 

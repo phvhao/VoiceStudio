@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   BackendStatus,
   DataRelocationStage,
+  HistoryCommand,
   SaveAudioRequest,
   SaveAudioResult,
   UpdateState,
@@ -49,6 +50,12 @@ const bridge: VoiceStudioBridge = {
   spellcheck: {
     setEnabled: (enabled) => ipcRenderer.invoke('spellcheck:setEnabled', enabled),
   },
+  editMenu: {
+    labels: (labels) => ipcRenderer.invoke('edit-menu:labels', labels),
+  },
+  clipboard: {
+    readText: () => ipcRenderer.invoke('clipboard:readText') as Promise<string>,
+  },
   permissions: {
     getState: () => ipcRenderer.invoke('permissions:getState'),
     openSettings: (kind) => ipcRenderer.invoke('permissions:openSettings', kind),
@@ -74,6 +81,7 @@ const bridge: VoiceStudioBridge = {
     platform: process.platform,
     isDev: process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL,
     onNavigate: (callback) => subscribe<string>('app:navigate', callback),
+    onHistory: (callback) => subscribe<HistoryCommand>('app:history', callback),
     onPersistenceFlush: (callback) => {
       const listener = (_event: IpcRendererEvent, token: string) => {
         void (async () => {

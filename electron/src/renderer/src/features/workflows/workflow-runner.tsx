@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DownloadIcon, PlayIcon, SquareIcon, RotateCcwIcon, XIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { GatedAction, revealGateTarget, type ActionBlocker } from '@/components/gated-action';
 import { saveLocalFile } from '@/lib/local-export';
 import { describeError } from '@/lib/api/client';
 import { useTtsReadiness } from '@/hooks/use-tts-readiness';
@@ -22,8 +23,12 @@ function AudioOutput({ audio }: { audio: Blob }) {
   return <audio controls preload="none" src={url} className="h-8 w-full" />;
 }
 
-export function WorkflowRunner({ document, onClose, onBusy, storageReady = true }: {
+export function WorkflowRunner({ document, onClose, onBusy, storageReady = true, cleanupFailed = false, onShowStep }: {
   document: WorkflowDocument; onClose(): void; onBusy(busy: boolean): void; storageReady?: boolean;
+  /** Removing a deleted workflow's files failed; the page offers the retry. */
+  cleanupFailed?: boolean;
+  /** Select a step on the canvas: where a draft that cannot run gets fixed. */
+  onShowStep?(id: string, problem: WorkflowValidationError['code']): void;
 }) {
   const { t } = useTranslation();
   const engines = useEngines();
@@ -36,8 +41,12 @@ export function WorkflowRunner({ document, onClose, onBusy, storageReady = true 
   const mounted = useRef(true);
   let plan: ReturnType<typeof compileWorkflow> | null = null;
   let validation = '';
+  let invalid: WorkflowValidationError | undefined;
   try { plan = compileWorkflow(document, JSON.stringify(engines.data ? Object.entries(engines.data).map(([family, state]) => [family, state.active, state.active_model]) : [])); }
-  catch (error) { validation = t(`workflowRun.invalid_${error instanceof WorkflowValidationError ? error.code : 'graph'}`); }
+  catch (error) {
+    validation = t(`workflowRun.invalid_${error instanceof WorkflowValidationError ? error.code : 'graph'}`);
+    if (error instanceof WorkflowValidationError) invalid = error;
+  }
   useEffect(() => {
     mounted.current = true;
     void readWorkflowRun(document.id).then((saved) => {
@@ -67,6 +76,26 @@ export function WorkflowRunner({ document, onClose, onBusy, storageReady = true 
   const needsSpeech = document.steps.some((step) => ['speak', 'convert'].includes(step.kind));
   const matches = plan?.signature === run?.signature;
   const done = run?.items.filter((item) => item.state === 'done').length ?? 0;
+  // Why Run cannot start yet, each with the way to its fix (see GatedAction).
+  const show = (target: string) => ({ label: t('gatedAction.show'), onSelect: () => { revealGateTarget(target); } });
+  const blockers: ActionBlocker[] = [];
+  if (!storageReady) blockers.push(cleanupFailed
+    ? { id: 'storage', message: t('gatedAction.workflow_cleanup_failed'), fix: show('workflow-cleanup') }
+    : { id: 'storage', message: t('gatedAction.workflow_cleanup') });
+  if (loading) blockers.push({ id: 'loading', message: t('gatedAction.workflow_loading') });
+  if (!engines.data) blockers.push(engines.isError
+    ? { id: 'engines', message: t('gatedAction.engines_failed'), fix: show('workflow-engines') }
+    : { id: 'engines', message: t('gatedAction.engines_loading') });
+  const invalidStep = invalid?.stepId;
+  const problem = invalid?.code;
+  if (validation) blockers.push({
+    id: 'invalid', message: validation,
+    fix: invalidStep && problem && onShowStep
+      ? { label: t('gatedAction.show_step'), onSelect: () => onShowStep(invalidStep, problem) } : undefined,
+  });
+  if (needsSpeech && blocker) blockers.push(blocker === 'loading'
+    ? { id: 'tts', message: t('gatedAction.tts_loading') }
+    : { id: 'tts', message: t('gatedAction.tts_engine'), fix: show('engine-notice') });
   return <section className="workflow-runner studio-scrollbar" aria-label={t('dub.export')}>
     <div className="workflow-panel-heading"><span>{t('dub.export')}</span>
       <Button size="icon-xs" variant="ghost" disabled={busy} onClick={onClose} aria-label={t('common.close')}><XIcon /></Button>
@@ -74,12 +103,12 @@ export function WorkflowRunner({ document, onClose, onBusy, storageReady = true 
     <div className="workflow-runner__body">
       {validation && <p role="alert" className="text-xs text-destructive">{validation}</p>}
       {error && <p role="alert" className="text-xs text-destructive">{error.startsWith('workflowRun.') ? t(error) : error}</p>}
-      {engines.isError && <p role="alert" className="text-xs text-destructive">{describeError(engines.error)}<Button size="sm" variant="ghost" onClick={engines.retry}>{t('common.retry')}</Button></p>}
+      {engines.isError && <p role="alert" data-gate-target="workflow-engines" className="text-xs text-destructive">{describeError(engines.error)}<Button size="sm" variant="ghost" onClick={engines.retry}>{t('common.retry')}</Button></p>}
       {needsSpeech && <EngineNotice operation="tts" />}
       <div className="flex gap-2">
         {busy ? <Button className="flex-1" variant="outline" onClick={() => controller.current?.abort()}><SquareIcon />{t('common.cancel')}</Button>
-          : <Button className="flex-1" disabled={!storageReady || loading || !engines.data || !plan || (needsSpeech && blocker !== null)} onClick={() => void start(Boolean(matches && run && done === run.items.length))}><PlayIcon />{t(matches && run ? done === run.items.length ? 'workflowRun.restart' : 'common.retry' : 'workflowRun.run')}</Button>}
-        {!busy && run && done < run.items.length && <Button size="icon-sm" variant="outline" disabled={!storageReady || !engines.data || !plan || (needsSpeech && blocker !== null)} onClick={() => void start(true)} aria-label={t('workflowRun.restart')} title={t('workflowRun.restart')}><RotateCcwIcon /></Button>}
+          : <GatedAction className="flex-1" side="bottom" blockers={blockers} onClick={() => void start(Boolean(matches && run && done === run.items.length))}><PlayIcon />{t(matches && run ? done === run.items.length ? 'workflowRun.restart' : 'common.retry' : 'workflowRun.run')}</GatedAction>}
+        {!busy && run && done < run.items.length && <GatedAction size="icon-sm" variant="outline" side="bottom" align="end" blockers={blockers} onClick={() => void start(true)} aria-label={t('workflowRun.restart')} title={t('workflowRun.restart')}><RotateCcwIcon /></GatedAction>}
       </div>
       {run && <>
         <p role="status" aria-live="polite" className="text-xs tabular-nums">{t('workflowRun.progress', { done, total: run.items.length })}</p>

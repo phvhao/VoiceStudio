@@ -97,8 +97,11 @@ try {
       },
     }),
   );
-  await page.route('**/api/audiobook/preview', (route) => {
+  let releasePreview;
+  const previewHeld = new Promise((resolve) => (releasePreview = resolve));
+  await page.route('**/api/audiobook/preview', async (route) => {
     previewBody = route.request().postDataJSON();
+    await previewHeld;
     return route.fulfill({ json: { output: 'longform-fixture.m4b', title: 'Chapter one' } });
   });
   let auditions = 0;
@@ -134,18 +137,28 @@ try {
   await page.getByText('Production overrides', { exact: true }).click();
   await page.getByLabel('Seed', { exact: true }).fill('0');
   await page.getByRole('button', { name: 'Preview chapter: Chapter one', exact: true }).click();
+  // While it renders the editor stays open, and Generate waits for it.
+  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+  assert(await page.getByRole('textbox', { name: 'Script', exact: true }).isEnabled());
+  assert(await page.getByRole('button', { name: 'Create audiobook', exact: true }).isDisabled());
+  releasePreview();
   await page.getByRole('button', { name: 'Play', exact: true }).waitFor();
   assert.deepEqual(previewBody.voice_map, { Mara: 'actor' });
   assert.deepEqual(previewBody.lexicon, { SQL: 'sequel' });
   assert.equal(previewBody.chapter_index, 0);
   assert.equal(previewBody.seed, 0);
-  // Editing synthesis inputs clears the audition and chapter plan.
+  // Editing the chapter dates its audition instead of dropping it, and the
+  // label goes once the chapter reads as it did; Close puts the audition away.
+  const audition = page.locator('[data-slot=chapter-preview]');
   await page
     .getByRole('textbox', { name: 'Script', exact: true })
     .fill('# Chapter one\n[voice:Mara] Hello from this book. ');
+  await audition.getByText('Outdated', { exact: true }).waitFor();
   await page
     .getByRole('textbox', { name: 'Script', exact: true })
     .fill('# Chapter one\n[voice:Mara] Hello from this book.');
+  await audition.getByText('Outdated', { exact: true }).waitFor({ state: 'detached' });
+  await audition.getByRole('button', { name: 'Close', exact: true }).click();
   await page.getByRole('button', { name: 'Create audiobook', exact: true }).click();
   await page.getByRole('heading', { name: 'Audiobook ready', exact: true }).waitFor();
   assert.equal(bodies[0].default_voice, 'voice');

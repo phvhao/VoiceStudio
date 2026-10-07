@@ -138,9 +138,23 @@ describe('ScriptPanel', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('shows the character count', () => {
+  it('counts characters, words, sentences and the time read aloud under the script', () => {
+    script = 'Hello world. [laughter] Hi [pause 1s] there!\nNew line';
+    const { container } = render(<ScriptPanel />);
+    const status = container.querySelector('[data-slot="script-status"]') as HTMLElement;
+    expect(status).toHaveTextContent(`${script.length} chars · 6 words · 3 sentences · ~0:02`);
+    expect(within(status).getByText('About 0:02 when read aloud')).toHaveClass('sr-only');
+    expect(within(status).getByRole('button', { name: 'Zoom in' })).toBeInTheDocument();
+  });
+
+  it('offers focus mode from the script toolbar', () => {
     render(<ScriptPanel />);
-    expect(screen.getByText('11 characters')).toBeInTheDocument();
+    const focus = screen.getByRole('button', { name: 'Focus' });
+    expect(focus).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(focus);
+    expect(focus).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(focus);
+    expect(focus).toHaveAttribute('aria-pressed', 'false');
   });
 
   describe('tags', () => {

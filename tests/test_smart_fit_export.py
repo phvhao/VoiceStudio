@@ -489,6 +489,30 @@ class TestRetimeExecutorIntegration:
         durs = _probe_stream_durations(str(out))
         assert durs["video"] == pytest.approx(_EXPECTED_DUR, abs=0.05)
 
+    def test_sped_up_plan_is_retimed_and_shortens_the_video(self, test_video, tmp_path):
+        """A short line's chunk speeds up (ratio < 1). It used to count as
+        "no retime needed", so the export streamed the source unchanged and
+        the shortened dub track drifted ahead of the picture."""
+        plan = [{"orig_start": 1.0, "orig_end": 3.0, "new_start": 1.0,
+                 "new_end": 2.6, "stretch_ratio": 0.8}]
+        decision = asyncio.run(prepare_smart_fit_video(
+            job_id=None, ffmpeg=_FFMPEG, video_path=str(test_video),
+            plan=plan, orig_dur=_ORIG_DUR, track_dur=9.6,
+            work_path=str(tmp_path / "retimed_fast.mp4"),
+        ))
+        assert decision is not None and decision.mode == "filter"
+        assert "setpts=0.800000*PTS" in decision.graph
+        assert decision.video_dur == pytest.approx(9.6, abs=0.05)
+        out = tmp_path / "sped_up.mp4"
+        subprocess.run(
+            [_FFMPEG, "-y", "-i", str(test_video),
+             "-filter_complex", decision.graph, "-map", decision.label, "-an",
+             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+             str(out)],
+            check=True, capture_output=True, timeout=300,
+        )
+        assert _probe_stream_durations(str(out))["video"] == pytest.approx(9.6, abs=0.05)
+
     def test_batched_path_with_batch_size_two(self, test_video, tmp_path):
         out_path = tmp_path / "retimed_batched.mp4"
         decision = asyncio.run(prepare_smart_fit_video(
@@ -622,3 +646,104 @@ class TestDownloadEndpointIntegration:
         res = client.get(f"/dub/srt/{job_id}", params={"lang": "de"})
         assert res.status_code == 200
         assert _last_cue_end_s(res.text) <= _EXPECTED_DUR + 0.05
+
+
+# A short line's chunk sped up: the fitted timeline is shorter than the source.
+_SPED_UP_PLAN = [{"orig_start": 1.0, "orig_end": 3.0, "new_start": 1.0,
+                  "new_end": 2.6, "stretch_ratio": 0.8}]
+_SPED_UP_DUR = 9.6
+
+
+@pytest.fixture(scope="module")
+def sounding_video(tmp_path_factory):
+    """A 10 s clip with its own sound, as a dub's source has."""
+    if not (_FFMPEG and _FFPROBE):
+        pytest.skip("ffmpeg/ffprobe not available")
+    path = tmp_path_factory.mktemp("retime_sound") / "source.mp4"
+    subprocess.run(
+        [_FFMPEG, "-y", "-f", "lavfi", "-i", "testsrc=duration=10:size=160x120:rate=30",
+         "-f", "lavfi", "-i", "sine=frequency=330:duration=10",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(path)],
+        check=True, capture_output=True, timeout=120,
+    )
+    return path
+
+
+def _audio_durations(path: str) -> list[float]:
+    out = subprocess.run(
+        [_FFPROBE, "-v", "error", "-select_streams", "a", "-show_entries",
+         "stream=duration", "-of", "json", path],
+        check=True, capture_output=True, text=True, timeout=60,
+    )
+    return [float(s["duration"]) for s in json.loads(out.stdout).get("streams", [])]
+
+
+def _seed_timeline_job(dc, tmp_path: Path, video: Path, plan: list, track_dur: float) -> str:
+    job_id = _seed_retime_job(dc, tmp_path, video, track_dur)
+    job = dc._dub_jobs[job_id]
+    job["fit_plans"]["de"]["plan"] = [dict(p) for p in plan]
+    bed = tmp_path / "dub_jobs" / job_id / "no_vocals.wav"
+    _make_sine_wav(bed, _ORIG_DUR)
+    job["no_vocals_path"] = str(bed)
+    return job_id
+
+
+@needs_ffmpeg
+class TestOriginalSoundFollowsTheDubTimeline:
+    """Smart Fit speeds short lines up by default, so its tracks commonly run
+    shorter than the source. The MP4's Original track and the stems' bed
+    stayed on the source's timeline: they drifted from the retimed picture
+    and the dub, and the Original ran past the picture's end."""
+
+    @pytest.mark.parametrize("plan, expected", [(_PLAN, _EXPECTED_DUR), (_SPED_UP_PLAN, _SPED_UP_DUR)])
+    def test_original_track_is_retimed_with_the_picture(self, export_app, sounding_video, plan, expected):
+        client, dc, tmp_path = export_app
+        job_id = _seed_timeline_job(dc, tmp_path, sounding_video, plan, expected)
+        res = client.get(
+            f"/dub/download/{job_id}",
+            params={"default_track": "de", "include_tracks": "original,de", "preserve_bg": 0},
+        )
+        assert res.status_code == 200, res.text[:500]
+        exports = list((tmp_path / "dub_jobs" / job_id / "exports").glob("dubbed_video_*.mp4"))
+        assert len(exports) == 1
+        assert _probe_stream_durations(str(exports[0]))["video"] == pytest.approx(expected, abs=0.1)
+        original, dub = _audio_durations(str(exports[0]))
+        assert original == pytest.approx(expected, abs=0.1)
+        assert dub == pytest.approx(expected, abs=0.1)
+
+    def test_a_shorter_dub_beside_the_original_picture_does_not_cut_the_file(
+        self, export_app, sounding_video,
+    ):
+        """Original as the default track keeps the source's picture; the
+        shorter dub track used to end the whole file (-shortest) early."""
+        client, dc, tmp_path = export_app
+        job_id = _seed_timeline_job(dc, tmp_path, sounding_video, _SPED_UP_PLAN, _SPED_UP_DUR)
+        res = client.get(
+            f"/dub/download/{job_id}",
+            params={"default_track": "original", "include_tracks": "original,de", "preserve_bg": 0},
+        )
+        assert res.status_code == 200, res.text[:500]
+        exports = list((tmp_path / "dub_jobs" / job_id / "exports").glob("dubbed_video_*.mp4"))
+        assert _probe_stream_durations(str(exports[0]))["video"] == pytest.approx(_ORIG_DUR, abs=0.1)
+        assert all(d == pytest.approx(_ORIG_DUR, abs=0.15) for d in _audio_durations(str(exports[0])))
+
+    def test_stems_background_follows_the_dubbed_stem(self, export_app, sounding_video):
+        import io
+        import wave
+        import zipfile
+
+        client, dc, tmp_path = export_app
+        job_id = _seed_timeline_job(dc, tmp_path, sounding_video, _SPED_UP_PLAN, _SPED_UP_DUR)
+        res = client.get(f"/dub/export-stems/{job_id}", params={"lang": "de"})
+        assert res.status_code == 200, res.text[:500]
+        with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+            names = set(zf.namelist())
+            assert names == {"vocals_dubbed_de.wav", "background_original.wav"}
+            with wave.open(io.BytesIO(zf.read("vocals_dubbed_de.wav"))) as dub:
+                dub_s = dub.getnframes() / dub.getframerate()
+            bed = tmp_path / "bed.wav"
+            bed.write_bytes(zf.read("background_original.wav"))
+        bed_s = _probe_stream_durations(str(bed))["audio"]
+        assert dub_s == pytest.approx(_SPED_UP_DUR, abs=0.05)
+        assert bed_s == pytest.approx(_SPED_UP_DUR, abs=0.1)

@@ -1,20 +1,27 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '@/i18n';
-import { ActionBar, ProductionSettings, VoiceControls } from './action-bar';
+import {
+  ActionBar,
+  ProductionSettings,
+  VoiceControls,
+  explainBlockedSynthesis,
+} from './action-bar';
 
+const navigate = vi.hoisted(() => vi.fn());
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ to, children, className }: { to: string; children: ReactNode; className?: string }) => (
     <a href={to} className={className}>
       {children}
     </a>
   ),
+  useNavigate: () => navigate,
 }));
 
 const failure = vi.hoisted(() => ({ error: null as string | null }));
 const readiness = vi.hoisted(() => ({
-  blocker: null as null | 'reference' | 'text' | 'preparing',
+  blocker: null as null | 'reference' | 'text' | 'preparing' | 'engine' | 'cloning' | 'loading',
 }));
 vi.mock('@/hooks/use-clone-readiness', () => ({ useCloneReadiness: () => readiness.blocker }));
 vi.mock('@/hooks/use-clone-demo', () => ({ useCloneDemo: () => false }));
@@ -87,7 +94,9 @@ describe('ActionBar', () => {
   beforeEach(() => {
     readiness.blocker = null;
     failure.error = null;
+    settings.text = '';
     generate.mockClear();
+    navigate.mockClear();
   });
   beforeEach(() => {
     Object.assign(runtime, {
@@ -99,18 +108,70 @@ describe('ActionBar', () => {
       modelProgress: null,
     });
   });
-  it.each(['reference', 'text', 'preparing'] as const)(
-    'blocks generation while %s is missing or unfinished',
-    (blocker) => {
-      readiness.blocker = blocker;
-      render(<ActionBar />);
-      const button = screen.getByRole('button', { name: 'Synthesize audio' });
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute('aria-describedby');
-      fireEvent.click(button);
-      expect(generate).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    ['reference', 'Choose a voice first: upload a reference clip or pick a saved voice.'],
+    ['text', 'Write the script first.'],
+    ['preparing', 'The voice sample is still recording or loading. Wait a moment.'],
+    ['loading', 'The voice engine is still starting. Wait a moment.'],
+    ['cloning', 'Choose a ready text-to-speech model that supports voice cloning.'],
+  ] as const)('explains instead of synthesizing while %s blocks it', async (blocker, reason) => {
+    readiness.blocker = blocker;
+    if (blocker !== 'text') settings.text = 'Hello there';
+    render(<ActionBar />);
+    const button = screen.getByRole('button', { name: 'Synthesize audio' });
+    // Not greyed out and unfocusable: the reason is part of the control.
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).toHaveAccessibleDescription(`Not ready yet: ${reason}`);
+    expect(screen.getByRole('status')).toHaveTextContent(reason);
+    // The shortcut hint gives way to the not-ready mark.
+    expect(button.querySelector('[data-slot="kbd"]')).toBeNull();
+    fireEvent.click(button);
+    expect(generate).not.toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: 'Not ready yet' })).toHaveTextContent(reason);
+  });
+
+  it('lists every missing piece at once, each leading to its fix', async () => {
+    readiness.blocker = 'engine';
+    const script = document.createElement('textarea');
+    script.dataset.gateTarget = 'clone-script';
+    document.body.append(script);
+    render(<ActionBar />);
+    const button = screen.getByRole('button', { name: 'Synthesize audio' });
+    fireEvent.click(button);
+    const dialog = await screen.findByRole('dialog', { name: 'Not ready yet' });
+    expect(dialog).toHaveTextContent('Set up a text-to-speech engine first.');
+    expect(dialog).toHaveTextContent('Write the script first.');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Show me' })[1]);
+    await waitFor(() => expect(document.activeElement).toBe(script));
+    // No engine notice on the page: the engine's fix opens the engine settings.
+    fireEvent.click(button);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Show me' }))[0]);
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith({
+        to: '/settings/models/$family',
+        params: { family: 'tts' },
+      }),
+    );
+    script.remove();
+  });
+
+  it('lets the Ctrl+Enter shortcut explain a blocked Synthesize instead of doing nothing', async () => {
+    readiness.blocker = 'text';
+    const view = render(<ActionBar />);
+    act(() => {
+      expect(explainBlockedSynthesis()).toBe(true);
+    });
+    expect(await screen.findByRole('dialog', { name: 'Not ready yet' })).toHaveTextContent(
+      'Write the script first.',
+    );
+    expect(generate).not.toHaveBeenCalled();
+    view.unmount();
+    // Ready, the shortcut synthesizes: there is nothing to explain.
+    readiness.blocker = null;
+    render(<ActionBar />);
+    expect(explainBlockedSynthesis()).toBe(false);
+  });
   it('renders a short backend error once without duplicate diagnostics', () => {
     failure.error = 'LibsndfileError: C:\\private\\outputs\\take.wav';
     const view = render(<ActionBar />);

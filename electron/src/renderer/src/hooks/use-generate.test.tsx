@@ -1,3 +1,4 @@
+import i18next from 'i18next';
 import { toast } from 'sonner';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -133,6 +134,45 @@ describe('shared generation lifecycle', () => {
     expect(generateClone).toHaveBeenCalledTimes(1);
     expect(setLatestOutput).toHaveBeenCalledWith(result, 'Hello');
     expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it("says where a take ran in the app's language, never the engine's English reason", async () => {
+    patchCloneSettings({ text: 'Hello', selectedProfileId: 'voice-1', autoPlay: false });
+    const t = vi.spyOn(i18next, 't').mockImplementation(((key: string, options?: object) => {
+      const values = (options ?? {}) as { reason?: string; defaultValue?: string };
+      if (key === 'engineReason.routing.accelerator_low_vram') return 'VRAM có thể không đủ';
+      if (key === 'tts.routingCaveat') return `Dùng GPU nhưng: ${values.reason}`;
+      return values.defaultValue ?? key;
+    }) as never);
+    vi.mocked(generateClone).mockResolvedValueOnce({
+      blob: new Blob(),
+      id: 'take-routed',
+      audioPath: 'take.wav',
+      durationSeconds: 1,
+      genTimeSeconds: 1,
+      seed: 1,
+      routing: {
+        status: 'accelerated',
+        reason: 'NVIDIA GeForce RTX 3050 has 4.0 GB VRAM; this engine wants about 6 GB.',
+        code: 'accelerator_low_vram',
+      },
+      dropped: null,
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <GenerationProvider>
+          <Consumer name="routed" />
+        </GenerationProvider>
+      </QueryClientProvider>,
+    );
+    try {
+      fireEvent.click(screen.getByText('routed:idle'));
+      await waitFor(() =>
+        expect(toast.warning).toHaveBeenCalledWith('Dùng GPU nhưng: VRAM có thể không đủ'),
+      );
+    } finally {
+      t.mockRestore();
+    }
   });
 
   it('surfaces the backend model-loading sub-stage and progress', async () => {

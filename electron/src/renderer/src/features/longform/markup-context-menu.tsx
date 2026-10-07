@@ -22,7 +22,9 @@ import {
   WandSparklesIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { MAX_VOICE_GAIN_DB } from '@shared/utils/longformOverrides';
+import { readClipboardText } from '@/lib/clipboard';
 import { useVoiceGainText } from './cast-settings';
 import { applyMarkupEdit, castProfileVoice } from './markup-toolbar';
 import {
@@ -495,10 +497,12 @@ export function MarkupContextMenu({
     void navigator.clipboard?.writeText(selectedText());
     run((value, start, end) => replaceRange(value, start, end, ''));
   };
+  // The desktop shell reads the clipboard when the page's Clipboard API is refused.
   const paste = () =>
-    void navigator.clipboard
-      ?.readText()
-      .then((clip) => run((value, start, end) => replaceRange(value, start, end, clip)));
+    void readClipboardText().then(
+      (clip) => run((value, start, end) => replaceRange(value, start, end, clip)),
+      () => toast.error(t('clone.paste_failed')),
+    );
   const selectAll = () => {
     const element = getTarget()?.element;
     element?.focus();

@@ -30,7 +30,11 @@ export interface ExecutionPlan {
   branches: Record<string, Record<ConditionBranch, string>>;
 }
 export class WorkflowValidationError extends Error {
-  constructor(readonly code: 'graph' | 'unsupported' | 'scripts' | 'voice' | 'media' | 'language' | 'condition') {
+  /** `stepId` names the step to fix, when one step is at fault. */
+  constructor(
+    readonly code: 'graph' | 'unsupported' | 'scripts' | 'voice' | 'media' | 'language' | 'condition',
+    readonly stepId?: string,
+  ) {
     super(code);
   }
 }
@@ -70,7 +74,7 @@ export function compileWorkflow(document: WorkflowDocument, engine = ''): Execut
     // input node with any, or any other node with none, still is not.
     const entering = document.connections.filter((edge) => edge.target === step.id).length;
     if (['start', 'audio'].includes(step.kind) ? entering !== 0 : entering === 0)
-      throw new WorkflowValidationError('graph');
+      throw new WorkflowValidationError('graph', step.id);
   }
   const steps: WorkflowStep[] = [];
   const next: Record<string, string> = {};
@@ -81,17 +85,17 @@ export function compileWorkflow(document: WorkflowDocument, engine = ''): Execut
   // shared tail once per branch, which is what keeps this linear in graph size.
   const entered = new Map<string, ValueType>();
   const walk = (step: WorkflowStep, type: ValueType, path: ReadonlySet<string>) => {
-    if (path.has(step.id)) throw new WorkflowValidationError('graph');
+    if (path.has(step.id)) throw new WorkflowValidationError('graph', step.id);
     const seen = entered.get(step.id);
     if (seen !== undefined) {
-      if (seen !== type) throw new WorkflowValidationError('unsupported');
+      if (seen !== type) throw new WorkflowValidationError('unsupported', step.id);
       return; // Already validated from here, with the same input kind.
     }
     entered.set(step.id, type);
     steps.push(step);
     const edges = leaving(step.id);
     if (step.kind === 'end') {
-      if (edges.length) throw new WorkflowValidationError('graph');
+      if (edges.length) throw new WorkflowValidationError('graph', step.id);
       return;
     }
     const onward = new Set(path).add(step.id);
@@ -99,18 +103,18 @@ export function compileWorkflow(document: WorkflowDocument, engine = ''): Execut
       // Only a condition may fork, and only into exactly the two handles the
       // canvas draws: an unlabelled, duplicated or missing edge leaves a branch
       // with no defined destination, which must fail here rather than mid-run.
-      if (type !== 'text') throw new WorkflowValidationError('unsupported');
-      if (!step.text.trim()) throw new WorkflowValidationError('condition');
+      if (type !== 'text') throw new WorkflowValidationError('unsupported', step.id);
+      if (!step.text.trim()) throw new WorkflowValidationError('condition', step.id);
       if (edges.length !== 2 || CONDITION_BRANCHES.some(
         (branch) => edges.filter((edge) => edge.sourceHandle === branch).length !== 1))
-        throw new WorkflowValidationError('graph');
+        throw new WorkflowValidationError('graph', step.id);
       branches[step.id] = Object.fromEntries(CONDITION_BRANCHES.map((branch) =>
         [branch, edges.find((edge) => edge.sourceHandle === branch)!.target],
       )) as Record<ConditionBranch, string>;
       for (const branch of CONDITION_BRANCHES) walk(byId.get(branches[step.id][branch])!, type, onward);
       return;
     }
-    if (edges.length !== 1 || edges[0].sourceHandle) throw new WorkflowValidationError('graph');
+    if (edges.length !== 1 || edges[0].sourceHandle) throw new WorkflowValidationError('graph', step.id);
     // Explicit contracts prevent accidental audio→text coercion or marking human input synthetic.
     let forward: ValueType = type;
     if (['start', 'audio'].includes(step.kind)) {
@@ -120,27 +124,28 @@ export function compileWorkflow(document: WorkflowDocument, engine = ''): Execut
     else if (step.kind === 'transcribe' && type !== 'text') forward = 'text';
     else if (step.kind === 'translate' && type === 'text') {
       if (!step.sourceLanguage || !step.language || step.language === 'Auto')
-        throw new WorkflowValidationError('language');
+        throw new WorkflowValidationError('language', step.id);
     } else if (step.kind !== 'normalize' || type !== 'speech')
-      throw new WorkflowValidationError('unsupported');
+      throw new WorkflowValidationError('unsupported', step.id);
     if (['speak', 'convert'].includes(step.kind) && !step.voiceId?.trim())
-      throw new WorkflowValidationError('voice');
+      throw new WorkflowValidationError('voice', step.id);
     next[step.id] = edges[0].target;
     walk(byId.get(edges[0].target)!, forward, onward);
   };
   walk(starts[0], starts[0].kind === 'audio' ? 'audio' : 'text', new Set());
   // Every path ends at an `end` (a non-end node without exactly one edge out
   // already threw), so what is left to check is that nothing is stranded.
-  if (steps.length !== document.steps.length) throw new WorkflowValidationError('graph');
+  if (steps.length !== document.steps.length)
+    throw new WorkflowValidationError('graph', document.steps.find((step) => !entered.has(step.id))?.id);
   if (steps.length < 3) throw new WorkflowValidationError('unsupported');
   const scripts = steps[0].kind === 'audio'
     ? (steps[0].media || []).map((file) => ({ name: file.name.replace(/\.[^.]+$/, ''), text: '', sourceId: file.id }))
     : steps[0].scripts?.length ? steps[0].scripts : steps[0].text
       .split(/^\s*---\s*$/m).map((text, index) => ({ name: `${index + 1}`, text: text.trim() }));
   if (steps[0].kind === 'audio') {
-    if (!scripts.length || scripts.length > 50) throw new WorkflowValidationError('media');
+    if (!scripts.length || scripts.length > 50) throw new WorkflowValidationError('media', steps[0].id);
   } else if (!scripts.length || scripts.length > 50 || scripts.some((script) => !script.text.trim() || script.text.length > 20_000))
-    throw new WorkflowValidationError('scripts');
+    throw new WorkflowValidationError('scripts', steps[0].id);
   // Layout, names, and selection never invalidate generated audio; executable settings do.
   // Wiring counts as an executable setting now: with a fork in the graph, moving
   // an edge changes which steps a clip passes through without changing any of

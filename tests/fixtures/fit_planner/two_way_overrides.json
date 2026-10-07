@@ -1,0 +1,108 @@
+{
+  "orig_duration": 9.0,
+  "segments": [
+    {
+      "audio_rate": 0.9,
+      "effective_end": 2.95,
+      "index": 0,
+      "new_end": 2.1667,
+      "new_start": 0.5,
+      "orig_end": 2.5,
+      "orig_start": 0.5,
+      "overflow_s": 0.0,
+      "seg_id": "g0",
+      "status": "video_shrunk",
+      "video_ratio": 0.833333
+    },
+    {
+      "audio_rate": 0.85,
+      "effective_end": 4.45,
+      "index": 1,
+      "new_end": 4.1167,
+      "new_start": 2.6667,
+      "orig_end": 4.0,
+      "orig_start": 3.0,
+      "overflow_s": 0.0,
+      "seg_id": "g1",
+      "status": "audio_slowed",
+      "video_ratio": 1.0
+    },
+    {
+      "audio_rate": 0.85,
+      "effective_end": 5.95,
+      "index": 2,
+      "new_end": 5.6167,
+      "new_start": 4.1667,
+      "orig_end": 5.5,
+      "orig_start": 4.5,
+      "overflow_s": 0.0,
+      "seg_id": "g2",
+      "status": "audio_slowed",
+      "video_ratio": 1.0
+    },
+    {
+      "audio_rate": 1.034483,
+      "effective_end": 7.45,
+      "index": 3,
+      "new_end": 7.1167,
+      "new_start": 5.6667,
+      "orig_end": 7.0,
+      "orig_start": 6.0,
+      "overflow_s": 0.0,
+      "seg_id": "g3",
+      "status": "audio_stretched",
+      "video_ratio": 1.0
+    },
+    {
+      "audio_rate": 0.9,
+      "effective_end": 9.0,
+      "index": 4,
+      "new_end": 7.9667,
+      "new_start": 7.1667,
+      "orig_end": 8.5,
+      "orig_start": 7.5,
+      "overflow_s": 0.0,
+      "seg_id": "g4",
+      "status": "video_shrunk",
+      "video_ratio": 0.8
+    }
+  ],
+  "total_duration": 8.4667,
+  "video_plan": [
+    {
+      "new_end": 2.1667,
+      "new_start": 0.5,
+      "orig_end": 2.5,
+      "orig_start": 0.5,
+      "stretch_ratio": 0.8333
+    },
+    {
+      "new_end": 4.1167,
+      "new_start": 2.6667,
+      "orig_end": 4.45,
+      "orig_start": 3.0,
+      "stretch_ratio": 1.0
+    },
+    {
+      "new_end": 5.6167,
+      "new_start": 4.1667,
+      "orig_end": 5.95,
+      "orig_start": 4.5,
+      "stretch_ratio": 1.0
+    },
+    {
+      "new_end": 7.1167,
+      "new_start": 5.6667,
+      "orig_end": 7.45,
+      "orig_start": 6.0,
+      "stretch_ratio": 1.0
+    },
+    {
+      "new_end": 7.9667,
+      "new_start": 7.1667,
+      "orig_end": 8.5,
+      "orig_start": 7.5,
+      "stretch_ratio": 0.8
+    }
+  ]
+}

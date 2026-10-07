@@ -32,6 +32,29 @@ def _public_routing_reason(status: object, diagnostic: object) -> str:
     return _ROUTING_BY_STATUS.get(status, _ROUTING_UNAVAILABLE)
 
 
+# Every public sentence has a stable code beside it in the response. The
+# sentence stays for API clients; the desktop app shows its own translation of
+# the code (engineReason.routing.<code> in every locale), so a code keeps its
+# meaning for good and a sentence can be reworded without stranding them.
+ROUTING_REASON_CODES = {
+    _ROUTING_BY_STATUS["cpu_fallback"]: "cpu_fallback",
+    _ROUTING_BY_STATUS["cpu_only"]: "cpu_only",
+    _ROUTING_BY_STATUS["unavailable"]: "no_device",
+    _ROUTING_UNAVAILABLE: "unknown",
+    _ACCELERATOR_KERNEL_RISK: "accelerator_kernel_risk",
+    _ACCELERATOR_LOW_VRAM: "accelerator_low_vram",
+    _ACCELERATOR_ADVISORY: "accelerator_advisory",
+}
+
+
+def public_routing_reason(status: object, diagnostic: object) -> tuple[str | None, str | None]:
+    """The public sentence and code for a routing diagnostic; Nones for none."""
+    if diagnostic is None:
+        return None, None
+    reason = _public_routing_reason(status, diagnostic)
+    return reason, ROUTING_REASON_CODES[reason]
+
+
 # Categories for WHY an engine is unavailable. The probe's own sentence cannot
 # cross the boundary — it carries exception text, local paths and sometimes
 # credentials — but "Engine unavailable. Check installation and configuration."
@@ -92,6 +115,22 @@ _MANUAL_INSTALL_VARIANT = {
     _UNAVAILABLE_FILE_MISSING: _UNAVAILABLE_FILE_MISSING_MANUAL,
 }
 
+# Stable codes for the sentences above, sent beside them as ``reason_code``
+# (engineReason.unavailable.<code> in every desktop locale). The sentences
+# stay too: API clients read them, and so does the license matcher pinned in
+# test_engine_unavailable_reason_1866.
+UNAVAILABLE_REASON_CODES = {
+    _UNAVAILABLE: "unavailable",
+    _UNAVAILABLE_NOT_INSTALLED: "not_installed",
+    _UNAVAILABLE_NOT_INSTALLED_MANUAL: "not_installed_manual",
+    _UNAVAILABLE_LICENSE: "license_not_accepted",
+    _UNAVAILABLE_PLATFORM: "platform_unsupported",
+    _UNAVAILABLE_NO_MPS: "mps_unavailable",
+    _UNAVAILABLE_NEEDS_CONFIG: "needs_config",
+    _UNAVAILABLE_FILE_MISSING: "file_missing",
+    _UNAVAILABLE_FILE_MISSING_MANUAL: "file_missing_manual",
+}
+
 # Matched against the lowered probe text. Ordered most specific first: a
 # missing file often also says "not installed", and the file case has the more
 # useful remedy of the two.
@@ -115,7 +154,7 @@ _UNAVAILABLE_SIGNATURES = (
     )),
     (_UNAVAILABLE_NEEDS_CONFIG, (
         "environment variable", "configure a server endpoint", "api key",
-        "unconfigured", "set the", "base url",
+        "unconfigured", "not configured", "set the", "base url",
     )),
     (_UNAVAILABLE_NOT_INSTALLED, (
         "not installed", "package missing", "not available", "no module named",
@@ -133,6 +172,20 @@ def _public_unavailable_reason(diagnostic: object) -> str:
     return _UNAVAILABLE
 
 
+def public_unavailable_reason(
+    diagnostic: object, *, one_click_install: object = None
+) -> tuple[str, str]:
+    """The public sentence and code for a private availability probe."""
+    reason = _public_unavailable_reason(diagnostic)
+    # Only a row that explicitly says it has NO one-click install gets the
+    # manual wording. Rows without the field (ASR, LLM, translation — some of
+    # which have installers of their own) keep the line that points at Model
+    # Catalogue.
+    if one_click_install is False:
+        reason = _MANUAL_INSTALL_VARIANT.get(reason, reason)
+    return reason, UNAVAILABLE_REASON_CODES[reason]
+
+
 def public_backends(entries: list[dict]) -> list[dict]:
     """Copy registry entries while replacing service diagnostics.
 
@@ -147,18 +200,13 @@ def public_backends(entries: list[dict]) -> list[dict]:
     for entry in entries:
         item = dict(entry)
         if item.get("reason") is not None:
-            reason = _public_unavailable_reason(item["reason"])
-            # Only a row that explicitly says it has NO one-click install gets
-            # the manual wording. Rows without the field (ASR, LLM,
-            # translation — some of which have installers of their own) keep
-            # the line that points at Model Catalogue.
-            if item.get("one_click_install") is False:
-                reason = _MANUAL_INSTALL_VARIANT.get(reason, reason)
-            item["reason"] = reason
+            item["reason"], item["reason_code"] = public_unavailable_reason(
+                item["reason"], one_click_install=item.get("one_click_install")
+            )
         if item.get("last_error") is not None:
             item["last_error"] = _PREVIOUS_FAILURE
         if item.get("routing_reason") is not None:
-            item["routing_reason"] = _public_routing_reason(
+            item["routing_reason"], item["routing_reason_code"] = public_routing_reason(
                 item.get("routing_status"), item["routing_reason"]
             )
         evidence = item.get("execution_evidence")
@@ -173,4 +221,10 @@ def public_backends(entries: list[dict]) -> list[dict]:
 
 
 def public_unavailability(detail: object) -> str | None:
-    return None if detail is None else _UNAVAILABLE
+    """The public sentence for a provider probe (translation, dictation)."""
+    return None if detail is None else public_unavailable_reason(detail)[0]
+
+
+def public_unavailability_code(detail: object) -> str | None:
+    """The stable code for :func:`public_unavailability`'s sentence."""
+    return None if detail is None else public_unavailable_reason(detail)[1]

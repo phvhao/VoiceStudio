@@ -5,13 +5,43 @@ an audio upload or recording. Saving selects the new profile; **Use without
 saving** proceeds with the temporary reference. **Change voice** opens the saved
 voice chooser without discarding the script.
 
-Saved voices use compact selectable rows, with separate preview/delete controls.
-The script editor fills the available workspace; generation controls and the
-compact latest-take player stay anchored at the bottom. Preserve this established
-layout when polishing visuals rather than moving the primary action. The reference pane includes saved-reference playback.
+The sidebar lists saved voices as compact selectable rows, with separate
+preview/delete controls. The voice chooser (**Choose a voice**) uses the window's
+width: cards fill as many columns as fit (four or five at 1500 px), the page
+scrolls instead of a box inside it, and only the rows in view are mounted once
+there are more than 30 voices. A card shows the whole name on up to two lines,
+the clip's length and a short date (the language too when the library mixes
+languages) and, on hover or focus, ▶ to audition the clip through one shared
+player and ✎ to edit. Chips filter by a name prefix that two or more voices
+share (`ktnb-…`, `chanel-…`). The arrow keys, Home and End move between cards,
+Enter chooses one, Tab leaves the grid from the card it is on, and `/` jumps to
+the search box. **Add a new voice** stays one row (Upload audio, Record and the
+5–15 s hint) until one of them is pressed or audio is dragged over the window;
+a library without voices shows the drop zone and recorder at once.
+
+Clone and Voice Design share one script frame: the editor column widens with
+the window up to 72rem and takes the height left over, its status line counts
+characters, words and sentences and estimates the time read aloud (at the voice
+controls' speed), and Ctrl/⌘ + − 0 or Ctrl+wheel in it size the script's text
+(the same per-viewer size as the Audiobook editor). Generation controls stay
+anchored under the editor. Preserve this layout when polishing visuals rather
+than moving the primary action. **Focus** hides the sidebar, the workspace's own
+panes and the takes until Esc, Focus again, opening a pane, or leaving the page.
+They are hidden, not closed: a take or voice preview playing in them plays on,
+and the library's search and filters, the takes' open row and an unsaved
+profile edit are as they were when they come back. Beside an open pane the
+script toolbar shows its buttons as icons (named in their tooltips), and the
+takes drop their voice and date by their own width, never the window's.
+The reference pane includes saved-reference playback.
 Language search measures its virtual list after the popover mounts.
-Latest take spans the full content pane. Closing it stops its playback and clears
-the current player without deleting the saved take from history.
+
+**Recent takes** sits under the composer behind a draggable edge (↑/↓ on it
+too), folds to one line, and remembers both per viewer. It lists the
+workspace's takes newest first, one row each with ▶ to audition it; only the
+chosen take opens with its waveform, file details, Save as…, Reuse script,
+Details and the folded **Check audio**. A new take opens chosen, as **Latest
+take**; closing it stops its playback and clears the current player without
+deleting the saved take from history.
 
 Initials are generated locally from the first and last words of the profile name.
 Optional JPEG, PNG and WebP uploads are limited to 5 MB and 16 megapixels,
@@ -54,13 +84,20 @@ Generation failures appear once in the composer, with technical details collapse
 The script is preserved for retry. Shared audio writers recreate missing parent
 directories before writing, including folders removed after backend startup.
 
-Playback belongs to the latest-take player. Synthesize always starts generation;
-playing a take never replaces that button with a playback control.
+Playback belongs to the takes under the composer. Synthesize always starts
+generation; playing a take never replaces that button with a playback control.
 
 The synthesis button reserves fixed space for its label and cancellation control.
 Elapsed time uses tabular digits below the button. During an active request,
 `/model/status` supplies the localized runtime sub-stage and model-load percentage;
 response-body progress takes over when audio delivery begins.
+
+Until it can run, Synthesize looks unfinished (dashed, its shortcut hint replaced by
+a not-ready mark) rather than greyed out, and the first reason shows above the
+controls. Pressing it, or Ctrl/⌘ + Enter, lists everything missing — the script, a
+voice, a voice sample still recording, an engine still starting, not set up or
+unable to clone — each with a button to the script, the voice, the engine notice or
+the engine settings. Esc returns to where you were.
 
 The voice selector labels the active voice explicitly. Voice sample opens its
 reference pane, and an empty script prompts with the selected voice name.
@@ -99,7 +136,10 @@ update, so an editor save commits every change or none. The old files are
 deleted only after the database update succeeds. The new filename also
 invalidates engine prompt caches and audiobook chapter caches, because those are
 keyed by the reference path. Profile records include a versioned `audio_url` so
-players reload the new clip, and `GET /profiles/{id}/audio` serves each clip with
+players reload the new clip, and `audio_duration_seconds`, that clip's length
+read from its header once per version (null when libsndfile cannot read the
+format, absent from older backends, which the chooser shows without a length).
+`GET /profiles/{id}/audio` serves each clip with
 its own media type. The route accepts WAV, MP3, M4A, FLAC, OGG, Opus, AAC and
 WebM up to 128 MiB, and requires libsndfile or FFmpeg to decode real samples
 before the clip replaces the old one; a file neither can decode returns 422.
@@ -120,7 +160,8 @@ uses the shared backend preferences and refreshes sidebar metadata.
 Script import supports TXT, Markdown, DOC, DOCX, PDF and EPUB (text documents,
 not scanned-image OCR). Paste inserts at the caret; Replace script offers Undo.
 Clicking in the script shows the expression picker near the caret without taking
-typing focus. The voice chooser and save-profile form share the editor width.
+typing focus. The save-profile form keeps the editor's width; the voice chooser
+takes the window's.
 
 Deleting a saved voice commits the profile and history changes before removing its reference, locked take, consent recording and portrait. A failed database transaction leaves those assets available. Cleanup after a successful deletion is best effort; one unavailable asset does not prevent cleanup of the others.
 

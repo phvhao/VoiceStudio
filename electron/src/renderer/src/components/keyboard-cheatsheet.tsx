@@ -1,11 +1,19 @@
-import { CommandIcon, KeyboardIcon, ScissorsIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  CommandIcon,
+  KeyboardIcon,
+  ScissorsIcon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isMac } from '@/components/bridge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
 
 interface Shortcut {
-  keys: string[];
+  /** Key caps; arrow keys as icons (an arrow glyph at key-cap size reads as a dash). */
+  keys: ReactNode[];
   label: string;
 }
 
@@ -29,6 +37,14 @@ export function KeyboardCheatsheet({
       shortcuts: [
         { keys: [modifier, 'K'], label: t('preferences.search') },
         { keys: [modifier, ','], label: t('nav.settings') },
+        {
+          keys: isMac() ? ['⌘', '['] : ['Alt', <ArrowLeftIcon key="arrow" aria-label="←" />],
+          label: t('historyNav.back'),
+        },
+        {
+          keys: isMac() ? ['⌘', ']'] : ['Alt', <ArrowRightIcon key="arrow" aria-label="→" />],
+          label: t('historyNav.forward'),
+        },
         { keys: ['?'], label: t('keyboard.nav_cheatsheet') },
         { keys: ['Esc'], label: t('keyboard.nav_closeModal') },
       ],
@@ -72,8 +88,8 @@ export function KeyboardCheatsheet({
                   >
                     <span className="text-xs text-muted-foreground">{shortcut.label}</span>
                     <span className="flex shrink-0 items-center gap-1">
-                      {shortcut.keys.map((key) => (
-                        <Kbd key={key}>{key}</Kbd>
+                      {shortcut.keys.map((key, index) => (
+                        <Kbd key={index}>{key}</Kbd>
                       ))}
                     </span>
                   </div>

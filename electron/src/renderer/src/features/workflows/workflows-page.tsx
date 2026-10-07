@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import en from '@/i18n/locales/en.json';
 import {
   Background, BackgroundVariant, Controls, Handle, MarkerType, MiniMap, Position,
-  ReactFlow, ReactFlowProvider, useNodesState,
+  ReactFlow, ReactFlowProvider, useNodesState, useReactFlow,
   type Connection, type Edge, type Node, type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { WorkspaceHeader } from '@/components/app-shell/workspace-header';
 import { Button } from '@/components/ui/button';
+import { revealGateTarget } from '@/components/gated-action';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
@@ -32,6 +33,7 @@ import { WorkflowRunner } from './workflow-runner';
 import { WorkflowInputs } from './workflow-inputs';
 import { makeSpeechWorkflow, makeProcessingWorkflow } from './workflow-model';
 import { deleteWorkflowArtifacts, deleteWorkflowRun } from './workflow-run-store';
+import type { WorkflowValidationError } from './workflow-runtime';
 
 const icons = {
   start: PlayIcon, agent: BotIcon, speak: MessageSquareIcon,
@@ -124,6 +126,24 @@ function WorkflowCanvas({ onCalls }: { onCalls: (call?: Pick<WorkflowStep, 'phon
   const document = library.documents.find((item) => item.id === library.activeId) ?? library.documents[0];
   const selected = document.steps.find((step) => step.id === selectedId) ?? null;
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([]);
+  const flow = useReactFlow();
+  // Run explains a draft it cannot start; "Show the step" lands here: the
+  // step selected and centred, its details open, and the field at fault (or
+  // the details, when the wiring is) focused and flashed.
+  const revealing = useRef<string | null>(null);
+  const showStep = (id: string, problem: WorkflowValidationError['code']) => {
+    revealing.current = ['voice', 'language', 'condition', 'scripts', 'media'].includes(problem)
+      ? 'workflow-step-inputs' : 'workflow-inspector';
+    setRunnerOpen(false);
+    setSelectedId(id);
+    void flow.fitView({ nodes: [{ id }], duration: 300, maxZoom: flow.getZoom() });
+  };
+  useEffect(() => {
+    const target = revealing.current;
+    if (!target || !selectedId || runnerOpen) return;
+    revealing.current = null;
+    if (!revealGateTarget(target)) revealGateTarget('workflow-inspector');
+  }, [selectedId, runnerOpen]);
 
   useEffect(() => {
     try { window.localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(library)); }
@@ -210,7 +230,7 @@ function WorkflowCanvas({ onCalls }: { onCalls: (call?: Pick<WorkflowStep, 'phon
       <h1 className="text-sm font-medium">{t('workflows.title')}</h1>
       <Button size="sm" variant="outline" disabled={running} onClick={() => onCalls()}><PhoneCallIcon aria-hidden="true" />{t('calls.title')}</Button>
     </WorkspaceHeader>
-    {cleanupError && <div role="alert" className="flex items-center gap-2 px-4 text-xs text-destructive">{cleanupError}<Button size="sm" variant="ghost" onClick={() => void retryCleanup()}>{t('common.retry')}</Button></div>}
+    {cleanupError && <div role="alert" data-gate-target="workflow-cleanup" className="flex items-center gap-2 px-4 text-xs text-destructive">{cleanupError}<Button size="sm" variant="ghost" onClick={() => void retryCleanup()}>{t('common.retry')}</Button></div>}
     <div className="workflow-intro">
       <div><h2>{t('workflows.heading')}</h2><p>{t('workflowRun.hint')}</p></div>
       <div className="workflow-intro__actions">
@@ -275,16 +295,16 @@ function WorkflowCanvas({ onCalls }: { onCalls: (call?: Pick<WorkflowStep, 'phon
           <MiniMap pannable zoomable nodeColor="var(--muted-foreground)" maskColor="color-mix(in srgb, var(--background) 58%, transparent)" />
         </ReactFlow>
       </section>
-      {runnerOpen && <WorkflowRunner key={document.id} document={document} storageReady={!library.cleanup?.length && !cleanupError} onBusy={setRunning} onClose={() => setRunnerOpen(false)} />}
+      {runnerOpen && <WorkflowRunner key={document.id} document={document} storageReady={!library.cleanup?.length && !cleanupError} cleanupFailed={Boolean(cleanupError)} onShowStep={showStep} onBusy={setRunning} onClose={() => setRunnerOpen(false)} />}
       {!runnerOpen && selected && <aside className="workflow-inspector studio-scrollbar" aria-label={t('workflows.inspector')}>
         <div className="workflow-panel-heading">{t('workflows.inspector')}</div>
-        <div className="workflow-inspector__content">
+        <div className="workflow-inspector__content" data-gate-target="workflow-inspector">
           <p className="workflow-eyebrow">{t(`workflows.step_${selected.kind}`)}</p>
           <label htmlFor="workflow-step-title">{t('workflows.step_name')}</label>
           <Input id="workflow-step-title" value={selected.title} placeholder={t(`workflows.step_${selected.kind}`)} onChange={(event) => editStep({ title: event.target.value })} />
           {selected.kind === 'call' && <><label htmlFor="workflow-step-phone">{t('calls.number_label')}</label><Input id="workflow-step-phone" value={selected.phone} onChange={(event) => editStep({ phone: event.target.value })} /></>}
           {!['start', 'end', 'speak', 'normalize', 'audio', 'transcribe', 'translate', 'convert', 'condition'].includes(selected.kind) && <><label htmlFor="workflow-step-text">{t(selected.kind === 'call' ? 'calls.brief_label' : 'workflows.instructions')}</label><Textarea id="workflow-step-text" value={selected.text} onChange={(event) => editStep({ text: event.target.value })} rows={5} /></>}
-          <WorkflowInputs key={selected.id} step={selected} onChange={editStep} />
+          <div data-gate-target="workflow-step-inputs" className="flex flex-col gap-[9px] empty:hidden"><WorkflowInputs key={selected.id} step={selected} onChange={editStep} /></div>
           {selected.kind === 'call' && <Button onClick={() => onCalls(selected)}><PhoneCallIcon aria-hidden="true" />{t('workflows.prepare_call')}</Button>}
           <Button variant="ghost" onClick={() => { updateDocument((current) => removeWorkflowStep(current, selected.id)); setSelectedId(null); }}><Trash2Icon aria-hidden="true" />{t('workflows.remove_step')}</Button>
         </div>

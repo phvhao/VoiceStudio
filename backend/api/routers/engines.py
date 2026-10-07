@@ -32,7 +32,13 @@ from core.engine_licenses import LICENSE_GATED_ENGINES
 from services import tts_backend, asr_backend, llm_backend, translation_engines
 from services.audio_dsp import list_effect_presets
 from api.schemas import EffectPresetsResponse
-from api.public_engine_metadata import public_backends, public_unavailability
+from api.public_engine_metadata import (
+    public_backends,
+    public_routing_reason,
+    public_unavailability,
+    public_unavailability_code,
+    public_unavailable_reason,
+)
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.engines_api")
@@ -196,6 +202,7 @@ def diarisation_status():
     from services.diarization_runtime import (
         PYANNOTE,
         SORTFORMER,
+        reason_fields,
         selected_backend,
         sortformer_status,
     )
@@ -209,19 +216,19 @@ def diarisation_status():
     # Polled every 30 s: read this one repo's directory, not the whole cache
     # (is_cached walks every installed model).
     pyannote_installed = _is_cached_on_disk(pyannote_repo) and cache_is_complete(spec)
-    pyannote_reason = None if pyannote_installed else "Install the pyannote model bundle"
+    pyannote_reason = reason_fields(None if pyannote_installed else "pyannote_not_installed")
     options.append({
         "id": PYANNOTE,
         "label": "pyannote 3.1",
         "model": pyannote_repo,
         "installed": pyannote_installed,
-        "reason": pyannote_reason,
+        **pyannote_reason,
     })
 
     native_status = sortformer_status()
     native_installed = native_status["installed"]
     native_model = native_status["model"]
-    native_reason = native_status["reason"]
+    native_reason = {key: native_status[key] for key in ("reason", "reason_code")}
     options.append({
         "id": SORTFORMER,
         "label": "Sortformer v1 (audio.cpp)",
@@ -229,7 +236,7 @@ def diarisation_status():
         "model_installed": native_status["model_installed"],
         "runtime_installed": native_status["runtime_installed"],
         "installed": native_installed,
-        "reason": native_reason,
+        **native_reason,
     })
 
     if native:
@@ -238,11 +245,11 @@ def diarisation_status():
                 "model": native_model, "installed": native_installed, "loaded": False,
                 "model_installed": native_status["model_installed"],
                 "runtime_installed": native_status["runtime_installed"],
-                "busy": is_running(), "reason": native_reason, "options": options}
+                "busy": is_running(), **native_reason, "options": options}
     from services import model_manager
     return {"active": PYANNOTE, "label": "pyannote 3.1", "model": pyannote_repo,
             "installed": pyannote_installed,
-            "loaded": model_manager._diar_pipeline is not None, "reason": pyannote_reason,
+            "loaded": model_manager._diar_pipeline is not None, **pyannote_reason,
             "options": options}
 
 
@@ -288,7 +295,13 @@ def list_translation_engines():
     return {
         "active": prefs.get("translation_backend", "argos"),
         "engines": [
-            {**entry, "availability_reason": public_unavailability(entry.get("availability_reason"))}
+            {
+                **entry,
+                "availability_reason": public_unavailability(entry.get("availability_reason")),
+                "availability_reason_code": public_unavailability_code(
+                    entry.get("availability_reason")
+                ),
+            }
             for entry in translation_engines.list_engines()
         ],
         "sandboxed": translation_engines.is_frozen(),
@@ -880,6 +893,7 @@ class SelectEngineResponse(BaseModel):
     routing_status: str = "cpu_only"
     effective_device: str = "cpu"
     routing_reason: str | None = None
+    routing_reason_code: str | None = None
 
 
 @router.post(
@@ -910,13 +924,24 @@ def select_engine(req: SelectEngineRequest):
     if req.backend_id not in available:
         raise HTTPException(400, f"Unknown {req.family} backend: {req.backend_id!r}")
     entry = available[req.backend_id]
+    # Errors carry the public sentences /engines lists, never the probe text:
+    # that can hold exception detail, local paths and credentials.
     if not entry["available"]:
-        reason = entry.get("reason") or "unavailable"
+        reason = (
+            public_unavailable_reason(
+                entry["reason"], one_click_install=entry.get("one_click_install")
+            )[0]
+            if entry.get("reason")
+            else "unavailable"
+        )
         raise HTTPException(400, f"Backend {req.backend_id} not ready: {reason}")
     # Host-routing gate (no silent CPU fallback). `.get` is defensive so an
     # older/legacy payload without routing keys still selects cleanly.
     if entry.get("routing_status") == "unavailable":
-        why = entry.get("routing_reason") or "requires a GPU this host doesn't have"
+        why = (
+            public_routing_reason("unavailable", entry.get("routing_reason"))[0]
+            or "requires a GPU this host doesn't have"
+        ).rstrip(".")
         raise HTTPException(
             400,
             f"Backend {req.backend_id} can't run on this machine: {why}. "
@@ -958,12 +983,19 @@ def select_engine(req: SelectEngineRequest):
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
     prefs.set_(pref_key, req.backend_id)
+    routing_status = entry.get("routing_status", "cpu_only")
+    # The same public sentence and code /engines lists for this row: the
+    # registry's own routing text can carry device names and local paths.
+    routing_reason, routing_reason_code = public_routing_reason(
+        routing_status, entry.get("routing_reason")
+    )
     return {
         "family": req.family,
         "active": module.active_backend_id(),
         "env_override": bool(__import__("os").environ.get(f"OMNIVOICE_{req.family.upper()}_BACKEND")),
         # Echo the routing verdict so the UI can warn on a cpu_fallback pick.
-        "routing_status": entry.get("routing_status", "cpu_only"),
+        "routing_status": routing_status,
         "effective_device": entry.get("effective_device", "cpu"),
-        "routing_reason": entry.get("routing_reason"),
+        "routing_reason": routing_reason,
+        "routing_reason_code": routing_reason_code,
     }

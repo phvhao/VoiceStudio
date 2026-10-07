@@ -1,0 +1,38 @@
+/* A blocked action's fix flashes the control that clears it (revealGateTarget). */
+[data-gate-highlight] {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  animation: gate-highlight 0.8s ease-out 2;
+}
+
+@keyframes gate-highlight {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 10px color-mix(in oklab, var(--primary) 0%, transparent);
+  }
+}
+
+/* A script editor fills a frame that clips its overflow: the mark goes inside. */
+textarea[data-gate-highlight] {
+  outline-offset: -2px;
+  animation-name: gate-highlight-inside;
+}
+
+@keyframes gate-highlight-inside {
+  from {
+    box-shadow: inset 0 0 0 0 color-mix(in oklab, var(--primary) 45%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 10px color-mix(in oklab, var(--primary) 0%, transparent);
+  }
+}
+
+/* The outline alone still marks the spot. */
+@media (prefers-reduced-motion: reduce) {
+  [data-gate-highlight],
+  textarea[data-gate-highlight] {
+    animation: none;
+  }
+}

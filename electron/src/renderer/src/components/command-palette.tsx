@@ -75,7 +75,9 @@ export function CommandPalette() {
       const editing =
         target instanceof HTMLElement &&
         (target.matches('input, textarea') || target.isContentEditable);
-      if (!editing && (event.key === '?' || (event.shiftKey && event.key === '/'))) {
+      // `?` only: where `/` itself needs Shift (German, French, Russian…),
+      // Shift+/ is the `/` that jumps to a search box, not a `?`.
+      if (!editing && event.key === '?') {
         event.preventDefault();
         setOpen(false);
         setShortcutsOpen((value) => !value);

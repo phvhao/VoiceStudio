@@ -22,6 +22,7 @@ from services.ffmpeg_utils import (
     bed_mix_filter,
     explain_ffmpeg_failure,
     find_ffmpeg,
+    probe_duration,
     run_ffmpeg,
 )
 from services.karaoke_ass import build_ass, scale_words
@@ -41,6 +42,17 @@ router = APIRouter()
 logger = logging.getLogger("omnivoice.api")
 
 
+def _track_timeline(job: dict, lang: str) -> "tuple[list[dict], float]":
+    """The chunk plan dub track ``lang``'s timeline follows (Smart Fit or
+    Stretch Video) and the source duration it was planned on. An empty plan:
+    the track keeps the source's own timeline."""
+    track = (job.get("dubbed_tracks") or {}).get(lang) or {}
+    strategy = track.get("timing_strategy") or job.get("timing_strategy")
+    plans = job.get("fit_plans" if strategy == "smart_fit" else "video_stretch_plans") or {}
+    entry = (plans.get(lang) or {}) if strategy in {"smart_fit", "stretch_video"} else {}
+    return entry.get("plan") or [], float(entry.get("orig_duration") or job.get("duration") or 0)
+
+
 async def _preserved_background(job: dict, job_id: str, lang: str, *, prepare: bool = True) -> str:
     """All mixed preview/download paths share the same dialogue-only bed."""
     from services.dub_background import surgical_background
@@ -55,15 +67,31 @@ async def _preserved_background(job: dict, job_id: str, lang: str, *, prepare: b
         raise HTTPException(status_code=409, detail={"code": "dub_background_unavailable", "message": "Dialogue timing is required"})
     if not prepare:
         return bed
-    strategy = track.get("timing_strategy") or job.get("timing_strategy")
-    plans = job.get("fit_plans" if strategy == "smart_fit" else "video_stretch_plans") or {}
-    entry = (plans.get(lang) or {}) if strategy in {"smart_fit", "stretch_video"} else {}
+    plan, duration = _track_timeline(job, lang)
     directory = os.path.join(_existing_job_dir_or_404(job_id), "exports")
     os.makedirs(directory, exist_ok=True)
     try:
-        return await surgical_background(source, bed, directory, segments, entry.get("plan") or [], float(entry.get("orig_duration") or job.get("duration") or 0))
+        return await surgical_background(source, bed, directory, segments, plan, duration)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail={"code": "dub_background_unavailable", "message": str(exc)}) from exc
+
+
+async def _on_dub_timeline(path: str, job_id: str, plan: list[dict], duration: float) -> str:
+    """``path``'s audio retimed onto a dub's timeline (``plan``), so an export
+    keeps it in step with the retimed picture and the dub."""
+    from services.dub_background import retimed_audio
+
+    directory = os.path.join(_existing_job_dir_or_404(job_id), "exports")
+    os.makedirs(directory, exist_ok=True)
+    try:
+        return await retimed_audio(path, directory, plan, duration)
+    except (ValueError, RuntimeError, OSError) as exc:
+        logger.warning("Could not retime audio onto the dub timeline for job %s: %s", log_safe(job_id), exc)
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "dub_timeline_audio_unavailable",
+                    "message": "The audio could not be put on the dub's timeline."},
+        ) from exc
 
 
 def _unique_stamp() -> str:
@@ -895,6 +923,22 @@ async def dub_download(
                 log_safe(job_id),
             )
 
+    # The Original track follows the picture: when the video is retimed
+    # (Smart Fit speeds short lines up and slows long ones down, Stretch Video
+    # either), the source's own sound is retimed with the same plan, or it
+    # would drift from the picture and run past its end.
+    original_audio = None
+    if include_original:
+        if stretch_entry:
+            original_audio = await _on_dub_timeline(
+                video_path, job_id, stretch_entry["plan"],
+                float(stretch_entry.get("orig_duration") or job.get("duration") or 0.0),
+            )
+        elif retime_decision is not None and retime_entry:
+            original_audio = await _on_dub_timeline(
+                video_path, job_id, retime_entry["plan"], smart_orig_dur,
+            )
+
     cmd = [ffmpeg, "-i", video_path]
     input_idx = 1
 
@@ -902,6 +946,12 @@ async def dub_download(
     if retime_decision is not None and retime_decision.mode == "file":
         cmd += ["-i", retime_decision.file_path]
         retimed_idx = input_idx
+        input_idx += 1
+
+    original_map = "0:a:0"
+    if original_audio and original_audio != video_path:
+        cmd += ["-i", original_audio]
+        original_map = f"{input_idx}:a:0"
         input_idx += 1
 
     bg_idx = None
@@ -964,7 +1014,7 @@ async def dub_download(
 
     cmd += ["-map", video_map]
     if include_original:
-        cmd += ["-map", "0:a:0"]
+        cmd += ["-map", original_map]
 
     # Smart Fit drift absorption, audio side: when the retimed video runs
     # longer than the fitted track (its tail passes through at 1.0× beyond
@@ -977,20 +1027,30 @@ async def dub_download(
         and retime_decision.video_dur - smart_track_dur > DRIFT_TOLERANCE_S
     ):
         apad_dur = retime_decision.video_dur
+    retimed = bool(stretch_entry) or retime_decision is not None
+    pad = f"apad=whole_dur={apad_dur:.4f}" if apad_dur else ""
+    if not retimed:
+        # Without a retime the mux ends with its shortest stream (-shortest
+        # below). A dub can end before the picture — a Smart Fit track on its
+        # shorter timeline beside the unretimed source — and must not cut the
+        # whole file short: it runs on in silence to the picture's end. (An
+        # unbounded apad never ends a stream-copied mux: -shortest let it run.)
+        picture = await probe_duration(video_path, allowed_root=DUB_DIR)
+        pad = f"apad=whole_dur={picture:.4f}" if picture else ""
 
     if bg_idx is not None:
         for i, t in enumerate(tracks_to_process):
-            tail = f",apad=whole_dur={apad_dur:.4f}" if apad_dur else ""
             filter_parts.append(bed_mix_filter(
-                f"{t['bg_idx']}:a", f"{t['idx']}:a", out=f"aout{i}", tail=tail, uniq=str(i), bed_gain=1.0,
+                f"{t['bg_idx']}:a", f"{t['idx']}:a", out=f"aout{i}", tail=f",{pad}" if pad else "",
+                uniq=str(i), bed_gain=1.0,
             ))
             t["out_label"] = f"[aout{i}]"
         for t in tracks_to_process:
             cmd += ["-map", t["out_label"]]
-    elif apad_dur:
+    elif pad:
         for i, t in enumerate(tracks_to_process):
             out_label = f"[aout{i}]"
-            filter_parts.append(f"[{t['idx']}:a]apad=whole_dur={apad_dur:.4f}{out_label}")
+            filter_parts.append(f"[{t['idx']}:a]{pad}{out_label}")
             t["out_label"] = out_label
         for t in tracks_to_process:
             cmd += ["-map", t["out_label"]]
@@ -1045,8 +1105,9 @@ async def dub_download(
     # durations should match within sub-frame precision, but `-shortest`
     # can still cut off the trailing frame; let ffmpeg keep both streams.
     # Otherwise keep the legacy `-shortest` so a slightly-overrunning track
-    # doesn't extend the mux past the video.
-    if not stretch_entry and retime_decision is None:
+    # doesn't extend the mux past the video (the dubs are padded above, so
+    # the picture, not a dub, is the shortest stream).
+    if not retimed:
         cmd += ["-shortest"]
     cmd += [output_path, "-y"]
 
@@ -1653,6 +1714,17 @@ async def dub_qc_pass(job_id: str, lang: str = Query(None), drift_threshold: flo
     # holds whichever language was generated last, so QC of an earlier track
     # compared its speech with another language and flagged every line (#2574).
     scored_segments = _segments_for_lang(job, track_lang)
+    # Under Smart Fit and Stretch Video the track plays on the fitted timeline
+    # (lines sped up or slowed down shift every later one): match what was
+    # heard against where each line plays there, as the subtitles do.
+    fitted = _fitted_segments_for(job, track_lang)
+    if fitted:
+        scored_segments = _apply_fitted_times(scored_segments, fitted)
+    elif cues := _fitted_cue_times(job, track_lang):
+        scored_segments = [
+            {**seg, "start": start, "end": end}
+            for seg, (start, end) in zip(scored_segments, cues)
+        ]
 
     # TTS-only install: no ASR model on disk → typed 409 with a download CTA,
     # BEFORE any backend load could silently auto-download whisper weights.
@@ -2257,6 +2329,12 @@ async def dub_export_stems(job_id: str, lang: str = Query(None)):
         raise HTTPException(status_code=400, detail="No dubbed audio track")
 
     bg_path = _optional_dub_artifact(job.get("no_vocals_path"), job_id)
+    if bg_path:
+        # The background stem goes on the dubbed stem's timeline: a Smart Fit
+        # or Stretch Video track is shorter or longer than the source, and the
+        # two stems would drift apart line by line.
+        plan, duration = _track_timeline(job, lang_label)
+        bg_path = await _on_dub_timeline(str(bg_path), job_id, plan, duration)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:

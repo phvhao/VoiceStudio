@@ -60,13 +60,17 @@ export interface RailOutlineProps {
  * per viewer). Where the frame is narrow the rail stays folded, and the
  * toggle opens the contents over the editor until an entry is chosen.
  * `outline` renders the contents; it stays mounted while folded, so a chapter
- * preview rendering in it carries on.
+ * preview rendering in it carries on — and the folded toggle says so
+ * (`previewing`), since its progress and Stop are in the contents.
  */
 export function ContentsRail({
   outline,
+  previewing = false,
   children,
 }: {
   outline(props: RailOutlineProps): ReactNode;
+  /** A chapter preview renders in the contents. */
+  previewing?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -122,12 +126,20 @@ export function ContentsRail({
             ref={toggle}
             variant="ghost"
             size="icon-xs"
-            aria-label={t('book.show_contents')}
-            title={t('book.show_contents')}
+            className="relative"
+            aria-label={t(previewing ? 'audiobook.contents_previewing' : 'book.show_contents')}
+            title={t(previewing ? 'audiobook.contents_previewing' : 'book.show_contents')}
             aria-expanded={shown}
             onClick={show}
           >
             <ListTreeIcon />
+            {previewing && (
+              <span
+                aria-hidden="true"
+                data-slot="contents-previewing"
+                className="absolute end-0.5 top-0.5 size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
+              />
+            )}
           </Button>
         </div>
       )}

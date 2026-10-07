@@ -303,6 +303,20 @@ def list_loaded() -> dict:
             "degraded_sources": degraded_sources}
 
 
+# Why an unload declined: a stable code beside its English reason. The desktop
+# app shows its own translation of the code (engineReason.unload.<code>).
+UNLOAD_DECLINED = {
+    "not_loaded": "not loaded",
+    "busy": "not running or busy",
+    "in_use_dictation": "in use by dictation",
+    "in_use_speech_check": "in use by the speech check",
+}
+
+
+def _declined(code: str) -> dict:
+    return {"success": False, "reason": UNLOAD_DECLINED[code], "reason_code": code}
+
+
 async def unload(model_id: str) -> dict:
     """Unload one model by id. Preserves the original per-id response shapes.
 
@@ -312,20 +326,20 @@ async def unload(model_id: str) -> dict:
         from services.subprocess_backend import unload_all_sidecars, unload_sidecar
         n = unload_all_sidecars() if model_id == "sidecars" else unload_sidecar(model_id.split(":", 1)[1])
         return {"unloaded": model_id, "success": n > 0, "count": n,
-                **({} if n > 0 else {"reason": "not running or busy"})}
+                **({} if n > 0 else _declined("busy"))}
 
     if model_id == "tts":
         async with mm._model_lock:
             if mm.unload_shared_model():
                 return {"unloaded": "tts", "success": True}
-        return {"unloaded": "tts", "success": False, "reason": "not loaded"}
+        return {"unloaded": "tts", **_declined("not_loaded")}
 
     if model_id == "diarization":
         if mm._diar_pipeline is not None:
             mm._diar_pipeline = None
             mm.free_vram()
             return {"unloaded": "diarization", "success": True}
-        return {"unloaded": "diarization", "success": False, "reason": "not loaded"}
+        return {"unloaded": "diarization", **_declined("not_loaded")}
 
     # The warm dictation ASR (#1247, same defect). It is listed with
     # ``"unloadable": True`` and had no branch either — found by the contract
@@ -335,13 +349,13 @@ async def unload(model_id: str) -> dict:
         import services.asr_backend as ab
 
         if getattr(ab, "_capture_backend", None) is None:
-            return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+            return {"unloaded": model_id, **_declined("not_loaded")}
         # idle_s=0 → release now. Still declines while a dictation stream holds
         # a lease; yanking the model out from under an open session is exactly
         # what the lease exists to prevent.
         if ab.release_idle_capture_backend(0.0):
             return {"unloaded": model_id, "success": True}
-        return {"unloaded": model_id, "success": False, "reason": "in use by dictation"}
+        return {"unloaded": model_id, **_declined("in_use_dictation")}
 
     # A render that is still checking loads it again at its next check; only
     # a transcription in progress keeps it.
@@ -349,16 +363,16 @@ async def unload(model_id: str) -> dict:
         import services.asr_backend as ab
 
         if getattr(ab, "_check_backend", None) is None:
-            return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+            return {"unloaded": model_id, **_declined("not_loaded")}
         if ab.release_check_recognizer():
             return {"unloaded": model_id, "success": True}
-        return {"unloaded": model_id, "success": False, "reason": "in use by the speech check"}
+        return {"unloaded": model_id, **_declined("in_use_speech_check")}
 
     if model_id == "translation:nllb":
         from api.routers import dub_translate as dt
 
         if getattr(dt, "_nllb_model", None) is None:
-            return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+            return {"unloaded": model_id, **_declined("not_loaded")}
         dt._unload_nllb()
         return {"unloaded": model_id, "success": True}
 
@@ -380,10 +394,10 @@ async def unload(model_id: str) -> dict:
                 for attr in getattr(inst, "_MODEL_ATTRS", ("_model", "_tts"))
             )
             if not held:
-                return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+                return {"unloaded": model_id, **_declined("not_loaded")}
             inst.unload()  # idempotent by contract; frees device caches itself
             return {"unloaded": model_id, "success": True}
-        return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+        return {"unloaded": model_id, **_declined("not_loaded")}
 
     if model_id.startswith("active-engine:"):
         engine_id = model_id.split(":", 1)[1]
@@ -393,7 +407,7 @@ async def unload(model_id: str) -> dict:
             getattr(tb, "_active_instance", None) is None
             or getattr(tb, "_active_instance_id", None) != engine_id
         ):
-            return {"unloaded": model_id, "success": False, "reason": "not loaded"}
+            return {"unloaded": model_id, **_declined("not_loaded")}
         tb.reset_active_backend()
         return {"unloaded": model_id, "success": True}
 

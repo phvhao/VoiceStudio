@@ -851,7 +851,15 @@ async def run_on_gpu_pool_guarded(fn, *, what: str = "GPU job",
             with _abandon_lock:
                 _abandon_state["finished"] = True
                 abandoned = _abandon_state["requested"]
+                abandoned_at = _abandon_state.get("at")
             if abandoned:
+                if abandoned_at is not None:
+                    # How long a worker kept the device after its caller left
+                    # (a Stop, a timeout): a render checks its cancellation
+                    # between takes, so after a Stop it is the take in progress.
+                    logger.info("%s ended %.1fs after its caller stopped waiting; "
+                                "its GPU worker is free.", _log_safe(what),
+                                time.monotonic() - abandoned_at)
                 _fire_abandon_callback()
 
     from core.render_trace import bind as bind_render_trace
@@ -865,6 +873,7 @@ async def run_on_gpu_pool_guarded(fn, *, what: str = "GPU job",
         cancelled_before_start = concurrent_fut.cancel()
         with _abandon_lock:
             _abandon_state["requested"] = True
+            _abandon_state.setdefault("at", time.monotonic())
             finished = _abandon_state["finished"]
         fut.cancel()
         if cancelled_before_start or finished:

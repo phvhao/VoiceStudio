@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { apiJson, describeError } from '@/lib/api/client';
+import { unloadModel } from '@/lib/api/engines';
 import { useAppActivities } from '@/lib/app-activity';
 import { relaxWhenBackendBusy } from '@/lib/status-polling';
 import { SettingsSection, SettingsRow } from './settings-layout';
@@ -150,7 +151,12 @@ export function PerformanceSettings() {
           shadowed={!!info.data?.cpu_generate_timeout_shadowed}
         />
       </SettingsSection>
-      <SettingsSection icon={CpuIcon} title={t('engineSidebar.localDevice')} contentVariant="cards">
+      <SettingsSection
+        icon={CpuIcon}
+        title={t('engineSidebar.localDevice')}
+        contentVariant="cards"
+        cardAlign="stretch"
+      >
         <SettingsRow
           className="min-h-32"
           id="hardware-cpu"
@@ -304,12 +310,13 @@ function MemoryManagement() {
   const unload = async (model: LoadedModel) => {
     setBusy(model.id);
     try {
-      await apiJson('/model/unload/' + encodeURIComponent(model.id), { method: 'POST' });
-      await refresh();
+      // A refused unload (in use by dictation, busy) rejects with its reason.
+      await unloadModel(model.id, t);
       toast.success(t('modelMaintenance.unloaded'));
     } catch (error) {
       toast.error(t('modelMaintenance.unloadFailed', { message: describeError(error) }));
     } finally {
+      await refresh();
       setBusy(null);
     }
   };

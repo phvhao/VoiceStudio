@@ -15,6 +15,7 @@ import {
   engineSelectionFeedback,
   type EngineSelectionResult,
 } from '@/lib/engine-selection-feedback';
+import { providerUnavailableText } from '@/lib/engine-reasons';
 export interface TranslationEngine {
   id: string;
   display_name: string;
@@ -25,7 +26,9 @@ export interface TranslationEngine {
   ready?: boolean;
   needs_key: boolean;
   pip_package: string | null;
+  /** English fallback; show `providerUnavailableText`, which localizes the code. */
   availability_reason?: string | null;
+  availability_reason_code?: string | null;
 }
 export function useTranslationEngines() {
   const status = useBackendStatus();
@@ -85,7 +88,7 @@ export function TranslationSettings() {
       title={engine.display_name}
       description={[
         t('modelMaintenance.' + engine.category),
-        ready(engine) ? engine.configured_via : engine.availability_reason,
+        ready(engine) ? engine.configured_via : providerUnavailableText(t, engine),
       ]
         .filter(Boolean)
         .join(' · ')}

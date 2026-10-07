@@ -110,6 +110,36 @@ it('confirms a diarisation engine selection after the backend accepts it', async
   await waitFor(() => expect(mock.toast.success).toHaveBeenCalledWith('settings.engine_switched'));
 });
 
+it('shows each runtime reason in the app language, not the backend sentence', async () => {
+  mock.api.mockImplementation((path: string) =>
+    Promise.resolve(
+      path === '/engines/diarisation'
+        ? {
+            active: 'pyannote',
+            options: [
+              {
+                id: 'pyannote',
+                label: 'pyannote 3.1',
+                installed: false,
+                reason: 'Install the pyannote model bundle',
+                reason_code: 'pyannote_not_installed',
+              },
+            ],
+          }
+        : { installed: false, supported: false, job: { state: 'idle', progress: 0 } },
+    ),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DiarisationSettings />
+    </QueryClientProvider>,
+  );
+  expect(
+    await screen.findByText('engineReason.diarisation.pyannote_not_installed'),
+  ).toBeInTheDocument();
+  expect(screen.queryByText('Install the pyannote model bundle')).toBeNull();
+});
+
 it('explains remote native installation restrictions before a POST', async () => {
   mock.api.mockImplementation((path: string) =>
     Promise.resolve(

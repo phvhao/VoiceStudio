@@ -19,6 +19,7 @@ import { apiJson } from '@/lib/api/client';
 import { cn } from '@/lib/utils';
 import { ChapterPreview, useChapterPreview, type RetakenChapter } from './chapter-previews';
 import { outlineQueryKey, outlineRequest, type Draft } from './longform-session';
+import type { PreviewLock } from './preview-run';
 import { applyMarkupEdit, type MarkupTarget } from './markup-toolbar';
 import { revealOffset } from './markup-textarea';
 import {
@@ -100,17 +101,19 @@ const MENU_ITEM =
  * sentences a render has left to read. A row moves the editor's caret to its
  * heading and scrolls the editor, never the page; its menu renames, adds or
  * removes headings (undoable edits in the editor), and a chapter renders on
- * its own, filling the caches the full book reuses. The untitled text before
- * the first heading is the intro, never a "Chapter 1": its menu gives it a
- * heading.
+ * its own, filling the caches the full book reuses — under the page's
+ * preview lock (`previews`), with the editor open meanwhile. The untitled
+ * text before the first heading is the intro, never a "Chapter 1": its menu
+ * gives it a heading.
  */
 export function BookOutline({
   draft,
   disabled,
   canPreview,
-  onBusy,
+  previews,
   getTarget,
   retaken,
+  previewSettings = null,
   onCollapse,
   onReveal,
   className,
@@ -118,10 +121,13 @@ export function BookOutline({
   draft: Draft;
   disabled: boolean;
   canPreview: boolean;
-  onBusy: (busy: boolean) => void;
+  /** One preview renders at a time: a chapter's waits while another renders. */
+  previews: PreviewLock;
   getTarget: () => MarkupTarget | null;
   /** The last retake of a sentence: a preview of its chapter is out of date. */
   retaken?: RetakenChapter | null;
+  /** The engine, preset and reading a preview renders under (`usePreviewSettings`). */
+  previewSettings?: string | null;
   /** Fold the rail away. */
   onCollapse?: () => void;
   /** A row moved the editor's caret to its heading. */
@@ -155,9 +161,11 @@ export function BookOutline({
   const preview = useChapterPreview(draft, {
     disabled,
     canPreview,
-    onBusy,
+    previews,
     onRendered: () => void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] }),
     retaken,
+    outline,
+    settings: previewSettings,
   });
   const [renaming, setRenaming] = useState<number | null>(null);
   // The row whose title takes the focus back once its rename field is gone.
@@ -189,7 +197,11 @@ export function BookOutline({
     chapterCount > 0 ? t('book.intro_untitled') : t('audiobook.chapter_n', { n: 1 });
   const titleOf = (node: OutlineNode) =>
     node.title !== null ? displayTitle(node.title) || node.title : untitledName;
-  const previewed = outline.find((chapter) => chapter.plan === preview.output?.index);
+  // Named as the outline names it now — unless its chapter changed since,
+  // and another may stand at its place: then as it was named when rendered.
+  const previewed = preview.outdated
+    ? undefined
+    : outline.find((chapter) => chapter.plan === preview.output?.index);
 
   const row = (node: OutlineNode, chapter: OutlineChapter) => {
     const title = titleOf(node);
@@ -342,10 +354,10 @@ export function BookOutline({
           <Button
             variant="ghost"
             size="icon-xs"
-            disabled={disabled || !canPreview || preview.pending}
+            disabled={disabled || !canPreview || previews.busy}
             aria-label={t('audiobook.preview_chapter', { title })}
             title={t('book.render_chapter')}
-            onClick={() => void preview.render(chapter.plan as number)}
+            onClick={() => void preview.render(chapter.plan as number, title)}
           >
             <PlayIcon />
           </Button>

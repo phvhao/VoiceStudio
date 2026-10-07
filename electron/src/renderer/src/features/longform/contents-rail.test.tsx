@@ -44,6 +44,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it('says on its folded toggle that a chapter preview renders in the contents', () => {
+  const view = render(
+    <ContentsRail previewing outline={(props) => <div className={props.className} />}>
+      <textarea aria-label="Script" />
+    </ContentsRail>,
+  );
+  const busy = screen.getByRole('button', { name: t('audiobook.contents_previewing') });
+  expect(busy.querySelector('[data-slot=contents-previewing]')).toBeInTheDocument();
+  view.rerender(
+    <ContentsRail outline={(props) => <div className={props.className} />}>
+      <textarea aria-label="Script" />
+    </ContentsRail>,
+  );
+  expect(toggle().querySelector('[data-slot=contents-previewing]')).toBeNull();
+});
+
 it('moves the focus into the contents over the editor, and Escape gives it back', () => {
   render(<Harness />);
   open();

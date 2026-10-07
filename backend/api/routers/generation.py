@@ -16,7 +16,7 @@ import threading
 import traceback
 from pathlib import Path
 from typing import Optional, Literal
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -513,6 +513,24 @@ def _note_generate_progress() -> None:
         pass
 
 
+class GenerateCancelled(RuntimeError):
+    """The render's caller went away; it stopped before its next take."""
+
+
+def _stop_if_cancelled() -> None:
+    """Stop a render whose caller went away before it starts another take.
+
+    The pool guard cancels the job's scope when its caller stops waiting (a
+    client that disconnected, a timeout); an engine call in progress cannot
+    be interrupted, so the take in progress is the last one rendered.
+    """
+    from services.inference_cancellation import current_cancellation
+
+    scope = current_cancellation()
+    if scope is not None and scope.cancelled.is_set():
+        raise GenerateCancelled("Generate stopped before its next take: its caller went away.")
+
+
 def _render_with_pauses(gen_span, segments, sample_rate):
     """Synthesize ``[(text, pause_ms), ...]`` spans and stitch silence between
     them (issue #276).
@@ -528,6 +546,7 @@ def _render_with_pauses(gen_span, segments, sample_rate):
     items = []  # ('a', tensor) for audio, ('s', n_samples) for silence
     for span_text, pause_ms in segments:
         if span_text and span_text.strip():
+            _stop_if_cancelled()
             items.append(("a", gen_span(span_text)))
             _note_generate_progress()
         if pause_ms > 0:
@@ -1212,8 +1231,13 @@ def _reading_lease(reading: Optional[dict]):
 
 
 def _render_take(text: str, take, verifier):
-    """``take(attempt)`` → audio, through the speech check when one is on."""
-    return verifier.render(text, take) if verifier is not None else take(0)
+    """``take(attempt)`` → audio, through the speech check when one is on.
+    Every attempt, a retake too, first stops a render whose caller went away."""
+    def attempt(n):
+        _stop_if_cancelled()
+        return take(n)
+
+    return verifier.render(text, attempt) if verifier is not None else attempt(0)
 
 
 def _join_takes(parts, sample_rate, texts, gaps, crossfade_ms, sink):
@@ -1911,6 +1935,15 @@ def _apply_routing_headers(headers, engine_notice, decision):
     safe = header_safe_reason(notice[1]) if notice[1] else ""
     if safe:
         headers["X-OmniVoice-Routing-Reason"] = safe
+    if notice[0] in ("cpu_fallback", "accelerated"):
+        # The engine's own routing reason is an English sentence that can name
+        # the device: the code beside it is what the app shows, translated
+        # (engineReason.routing.*), as /engines and Settings already do.
+        from api.public_engine_metadata import public_routing_reason
+
+        code = public_routing_reason(notice[0], notice[1] or "")[1]
+        if code:
+            headers["X-OmniVoice-Routing-Reason-Code"] = code
     return headers
 
 
@@ -1970,6 +2003,9 @@ async def generate_speech(
     # classic flow, so streaming is purely a delivery channel — engine-agnostic
     # (text-level chunking, no per-engine token streaming).
     stream: bool = Form(False),
+    # Injected by FastAPI; ``None`` only for an in-process call (a test).
+    # A client that goes away cancels the classic render before its next take.
+    request: Request = None,
 ):
     # #502: NFC-normalize the input text so decomposed (NFD) diacritics — common
     # in pasted Vietnamese and other Latin-with-marks text — are composed to the
@@ -2927,10 +2963,15 @@ async def generate_speech(
     # fix for it.
     _dropped_text: list = []
     _already_marked = False
+    # A plain response is sent only once the render is done, so nothing would
+    # stop it when its client goes away (a Stories line preview's Stop): the
+    # render is cancelled then, here or on the worker, before its next take.
+    from api.disconnect import cancel_on_disconnect
+
     try:
         if _remote:
             # One op, one worker, the whole render — including the chunk loop.
-            audio_tensor, sample_rate = await _render_on_worker()
+            audio_tensor, sample_rate = await cancel_on_disconnect(request, _render_on_worker())
             _already_marked = True
         else:
             # The gateway owns the dispatch on both branches. Locally it still
@@ -2959,7 +3000,7 @@ async def generate_speech(
                     max_chunk_chars, crossfade_ms, dropped_sink=_dropped_text,
                     reading=_reading,
                 )
-            audio_tensor = await _run_with_reference_lease(
+            audio_tensor = await cancel_on_disconnect(request, _run_with_reference_lease(
                 ref_lease,
                 lambda release: gpu_gateway.run(
                     _REMOTE_OP,
@@ -2978,7 +3019,7 @@ async def generate_speech(
                     ),
                     decision=_decision,
                 )
-            )
+            ))
             # Read after generation: engines with lazy model loading report
             # their real rate only once weights are up.
             sample_rate = (_backend.sample_rate if _backend is not None

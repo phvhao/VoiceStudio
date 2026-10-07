@@ -13,6 +13,8 @@ export interface Profile {
   image_url?: string | null;
   /** Versioned `GET /profiles/{id}/audio` URL; changes when the clip is replaced. */
   audio_url?: string | null;
+  /** Length of that clip in seconds; null when unreadable, absent from older backends. */
+  audio_duration_seconds?: number | null;
   id: string;
   name: string;
   kind: ProfileKind;
@@ -67,7 +69,9 @@ export interface EngineBackend {
   id: string;
   display_name: string;
   available: boolean;
+  /** English fallback; show `engineUnavailableText`, which localizes `reason_code`. */
   reason: string | null;
+  reason_code?: string | null;
   hint?: string | null;
   supports_cloning?: boolean | null;
   /** False: needs a reference clip, so Voice Design is unavailable. Null/absent: undeclared. */
@@ -87,7 +91,9 @@ export interface EngineBackend {
   license_accepted?: boolean;
   effective_device?: string;
   routing_status?: string;
+  /** English fallback; show `engineRoutingText`, which localizes the code. */
   routing_reason?: string | null;
+  routing_reason_code?: string | null;
   isolation_mode?: 'in-process' | 'subprocess';
 }
 
@@ -183,7 +189,8 @@ export interface GenerateResult {
   durationSeconds: number | null;
   genTimeSeconds: number | null;
   seed: number | null;
-  routing: { status: string; reason: string } | null;
+  /** Where it ran when that is news; `code` names `reason` for the app's translation. */
+  routing: { status: string; reason: string; code?: string } | null;
   dropped: { count: number; text: string } | null;
 }
 

@@ -28,20 +28,20 @@
       "video_ratio": 1.17444
     },
     {
-      "audio_rate": 0.85,
+      "audio_rate": 0.9,
       "effective_end": 5.0,
       "index": 2,
-      "new_end": 5.2529,
+      "new_end": 4.0529,
       "new_start": 3.2529,
       "orig_end": 4.0,
       "orig_start": 3.0,
       "overflow_s": 0.0,
       "seg_id": "g2",
-      "status": "audio_slowed",
-      "video_ratio": 1.0
+      "status": "video_shrunk",
+      "video_ratio": 0.8
     }
   ],
-  "total_duration": 5.2529,
+  "total_duration": 5.0529,
   "video_plan": [
     {
       "new_end": 1.45,
@@ -58,11 +58,11 @@
       "stretch_ratio": 1.1744
     },
     {
-      "new_end": 5.2529,
+      "new_end": 4.0529,
       "new_start": 3.2529,
-      "orig_end": 5.0,
+      "orig_end": 4.0,
       "orig_start": 3.0,
-      "stretch_ratio": 1.0
+      "stretch_ratio": 0.8
     }
   ]
 }

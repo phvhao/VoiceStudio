@@ -28,6 +28,7 @@ import { scriptSize } from './story-clear';
 import { normalizeNewlines } from './script-markup';
 import { scriptOutline } from './script-outline';
 import type { RetakeChapter } from './take-retake';
+import { takeProgress, type TakeProgress } from './take-progress';
 import { ProjectMissingError, projectLibrary, type LongformProjectMeta } from './project-library';
 export type Mode = 'stories' | 'audiobook';
 export interface Character {
@@ -122,6 +123,8 @@ export interface RenderTiming {
   words: number[] | null;
   /** Whether the chapter cache held each chapter as the render started (`null`: not known). */
   cached: (boolean | null)[] | null;
+  /** The last word on the chapter rendering now: what it waits for, or its takes. */
+  progress?: TakeProgress | null;
 }
 interface Session {
   drafts: Record<Mode, Draft>;
@@ -849,6 +852,14 @@ export async function renderLongform(mode: Mode, resumeId?: string) {
             timing,
           });
         }
+        if (event.type === 'progress' && timing) {
+          // Inside a chapter: what it waits for, then take by take (newer backends).
+          const progress = takeProgress(event, performance.now());
+          if (progress && progress.index < outputChapters.length) {
+            timing = { ...timing, progress };
+            patch({ timing });
+          }
+        }
         if (event.type === 'assembling') patch({ stage: 'assembling' });
         if (event.type === 'stopped') {
           done = true;
@@ -928,7 +939,7 @@ export function dismissLongformError(): void {
 }
 
 export function chapterPreviewBody(draft: Draft, chapter_index: number) {
-  const body = renderBody('audiobook', draft);
+  const body = readingInputs('audiobook', draft);
   return {
     ...overridesToRequest(draft.overrides, draft.language),
     ...(body.voice_gains ? { voice_gains: body.voice_gains } : {}),
@@ -937,7 +948,9 @@ export function chapterPreviewBody(draft: Draft, chapter_index: number) {
     default_voice: body.default_voice,
     voice_map: body.voice_map,
     language: body.language,
-    lexicon: lexiconMap(draft.lexicon),
+    // Not strict: the outline and audition freshness read this on every edit,
+    // and a word typed twice must not take the page down (previews wait for it).
+    lexicon: lexiconMap(draft.lexicon, { strict: false }),
   };
 }
 
@@ -1045,6 +1058,7 @@ function renderTiming(mode: Mode, draft: Draft | null, count: number): RenderTim
     // Counted here the way the render splits the chapters; on any mismatch, unknown.
     words: words?.length === count ? words : null,
     cached: cached?.length === count ? cached : null,
+    progress: null,
   };
 }
 

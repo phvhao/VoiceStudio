@@ -228,6 +228,213 @@ async def test_nllb_mps_fallback_releases_the_old_allocator(monkeypatch):
     assert dub_translate._nllb_device == "cpu"
     flushed.assert_called_once_with(device="mps")
 
+
+_TWO_SENTENCES = (
+    "the opposite, which means that you forget as much as you learn. "
+    "But the important question is, what do you forget?"
+)
+
+
+def _fake_nllb(monkeypatch, translate=lambda text: f"<{text}>"):
+    """Install a fake NLLB tokenizer/model that records every forward pass."""
+    from api.routers import dub_translate
+    from services import translation_engines
+
+    class Tokenizer:
+        src_lang = None
+
+        def __call__(self, texts, **kwargs):
+            return {"input_ids": list(texts)}
+
+        def convert_tokens_to_ids(self, target):
+            return target
+
+        def batch_decode(self, tokens, **kwargs):
+            return list(tokens)
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, *, input_ids, **kwargs):
+            self.calls.append(list(input_ids))
+            return [translate(text) for text in input_ids]
+
+    model = Model()
+    monkeypatch.setattr(dub_translate, "_nllb_tokenizer", Tokenizer())
+    monkeypatch.setattr(dub_translate, "_nllb_model", model)
+    monkeypatch.setattr(dub_translate, "_nllb_device", "cpu")
+    monkeypatch.setattr(translation_engines, "is_installed", lambda _: True)
+    monkeypatch.setattr(translation_engines, "is_ready", lambda _: True)
+    monkeypatch.setenv("OMNIVOICE_UNLOAD_NLLB", "0")
+    return model
+
+
+@pytest.mark.asyncio
+async def test_nllb_translates_every_sentence_of_a_segment(monkeypatch):
+    """NLLB-200 is sentence-trained: handed both sentences of the user's
+    segment it returned only the second. Each sentence is now its own row
+    of one batch, joined back per segment."""
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+
+    model = _fake_nllb(monkeypatch)
+    monkeypatch.setenv("OMNIVOICE_NLLB_BATCH_SIZE", "8")
+    response = await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang="vi", quality="fast",
+        segments=[
+            {"id": "1", "text": _TWO_SENTENCES},
+            {"id": "2", "text": "See you at the station."},
+            {"id": "3", "text": "Thanks for coming over. See you at the station."},
+        ],
+    ))
+
+    assert len(model.calls) == 1  # four distinct sentences, one forward pass
+    assert sorted(model.calls[0]) == sorted([
+        "the opposite, which means that you forget as much as you learn.",
+        "But the important question is, what do you forget?",
+        "See you at the station.",
+        "Thanks for coming over.",
+    ])
+    rows = response["translated"]
+    assert [row["id"] for row in rows] == ["1", "2", "3"]
+    assert rows[0]["text"] == (
+        "<the opposite, which means that you forget as much as you learn.> "
+        "<But the important question is, what do you forget?>"
+    )
+    assert rows[2]["text"] == "<Thanks for coming over.> <See you at the station.>"
+
+
+@pytest.mark.asyncio
+async def test_nllb_never_gets_a_sentence_too_short_to_translate_alone(monkeypatch):
+    """Alone, NLLB answered "No." with "- Nein, ich weiß nicht." and a list's
+    "1." with "1. Das ist nicht der Fall."; with the sentence they belong to it
+    translated them faithfully."""
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+
+    model = _fake_nllb(monkeypatch)
+    await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang="de", quality="fast",
+        segments=[
+            {"id": "1", "text": "No. You cannot go out tonight, it is too late."},
+            {"id": "2", "text": "1. Open the box. 2. Take out the manual. 3. Read it."},
+            {"id": "3", "text": "(Laughs.) Okay, let's get started."},
+        ],
+    ))
+    rows = sorted(text for call in model.calls for text in call)
+    assert rows == sorted([
+        "No. You cannot go out tonight, it is too late.",
+        "1. Open the box.", "2. Take out the manual.", "3. Read it.",
+        "(Laughs.) Okay, let's get started.",
+    ])
+
+
+@pytest.mark.asyncio
+async def test_nllb_failed_sentence_keeps_its_segment_source_text(monkeypatch):
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+
+    def translate(text):
+        if text.startswith("But"):
+            raise RuntimeError("decoder blew up")
+        return f"<{text}>"
+
+    class Failing:
+        def __init__(self):
+            self.calls = []
+
+        def generate(self, *, input_ids, **kwargs):
+            self.calls.append(list(input_ids))
+            return [translate(text) for text in input_ids]
+
+    _fake_nllb(monkeypatch)
+    monkeypatch.setattr(dub_translate, "_nllb_model", Failing())
+    response = await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang="vi",
+        segments=[{"id": "1", "text": _TWO_SENTENCES}, {"id": "2", "text": "Fine."}],
+    ))
+    first, second = response["translated"]
+    assert first["text"] == _TWO_SENTENCES and "decoder blew up" in first["error"]
+    assert second == {"id": "2", "text": "<Fine.>"}
+
+
+@pytest.mark.asyncio
+async def test_nllb_retry_translates_clause_by_clause(monkeypatch):
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+
+    model = _fake_nllb(monkeypatch)
+    response = await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang="vi", retry_incomplete=True,
+        segments=[{"id": "1", "text": _TWO_SENTENCES}],
+    ))
+    rows = [text for call in model.calls for text in call]
+    assert sorted(rows) == sorted([
+        "the opposite,", "which means that you forget as much as you learn.",
+        "But the important question is,", "what do you forget?",
+    ])
+    assert response["translated"][0]["text"].count("<") == 4
+
+
+@pytest.mark.asyncio
+async def test_short_translation_is_flagged_as_missing_content(monkeypatch):
+    """Every engine's rows get the omission verdict; the NLLB failure mode
+    (second sentence only) is caught even when a translator returns it."""
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+
+    dropped = "Nhưng câu hỏi quan trọng là, bạn quên điều gì?"
+    _fake_nllb(monkeypatch, translate=lambda text: "" if text.startswith("the") else dropped)
+    response = await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang="vi",
+        segments=[{"id": "1", "text": _TWO_SENTENCES}, {"id": "2", "text": "Short line."}],
+    ))
+    flagged, short = response["translated"]
+    assert flagged["text"] == dropped
+    assert flagged["omission"]["reason"] == "short"
+    assert flagged["omission"]["source_sentences"] == 2
+    assert "omission" not in short  # too short to judge
+
+
+def _nllb_weights_installed() -> bool:
+    try:
+        import core.config  # noqa: F401 — points Hugging Face at the app's cache first
+        from services import translation_engines
+
+        return translation_engines.is_installed("nllb")
+    except Exception:
+        return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _nllb_weights_installed(), reason="NLLB-200 weights are not installed")
+@pytest.mark.parametrize("target", ["vi", "ja"])
+async def test_installed_nllb_keeps_both_sentences_on_cpu(monkeypatch, target):
+    """The reported case against the real model: before, NLLB returned only
+    "But the important question is, what do you forget?" in Vietnamese and
+    Japanese."""
+    import torch
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest
+    from services.translation_sentences import sentence_count
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(dub_translate, "_nllb_model", None)
+    monkeypatch.setattr(dub_translate, "_nllb_tokenizer", None)
+    monkeypatch.setattr(dub_translate, "_nllb_device", None)
+    monkeypatch.setenv("OMNIVOICE_UNLOAD_NLLB", "1")
+    response = await dub_translate.dub_translate(TranslateRequest(
+        provider="nllb", source_lang="en", target_lang=target, quality="fast",
+        segments=[{"id": "1", "text": _TWO_SENTENCES}],
+    ))
+    row = response["translated"][0]
+    assert not row.get("error")
+    assert sentence_count(row["text"]) == 2
+    assert "omission" not in row
+    assert dub_translate._nllb_model is None  # released after the run
+
 def test_resolve_source_lang_priority(monkeypatch):
     from api.routers import dub_translate
 
@@ -536,6 +743,46 @@ async def test_argos_cinematic_refines_with_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("quality", ["cinematic", "autofit", "agent"])
+async def test_translate_again_keeps_the_whole_line_out_of_the_rewrite_and_trim(monkeypatch, quality):
+    """Translate again asks for all of a line flagged as missing content. The
+    Cinematic rewrite and the Autofit/Agent trim shorten a line on purpose:
+    running them again cut it again and brought the flag straight back."""
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest, TranslateSegment
+    _install_fake_argos(monkeypatch)
+    refined, fitted = [], []
+
+    async def fake_refine_many(pairs, **kw):
+        refined.extend(pairs)
+        return [{"id": sid, "text": "short", "literal": lit} for sid, _src, lit in pairs]
+
+    async def fake_fit_pass(rows, *args, **kwargs):
+        fitted.extend(rows)
+
+    monkeypatch.setattr(dub_translate, "cinematic_available", lambda: True)
+    monkeypatch.setattr(dub_translate, "cinematic_refine_many", fake_refine_many)
+    monkeypatch.setattr(dub_translate, "_apply_fit_pass", fake_fit_pass)
+    line = "Well, I think so. But nobody asked me, and nobody cared."
+    request = dict(
+        segments=[TranslateSegment(id="s1", text=line, slot_seconds=2.0)],
+        target_lang="es", provider="argos", source_lang="en", quality=quality,
+    )
+
+    resp = await dub_translate.dub_translate(TranslateRequest(**request))
+    assert refined and fitted  # a first translation is rewritten and fitted
+
+    refined.clear()
+    fitted.clear()
+    resp = await dub_translate.dub_translate(TranslateRequest(**request, retry_incomplete=True))
+    assert refined == [] and fitted == []
+    row = resp["translated"][0]
+    assert row["text"] == "[es]Well, I think so. [es]But nobody asked me, [es]and nobody cared."
+    assert "rate_ratio" in row  # its badge still says how it fits
+    assert "cinematic_skipped" not in resp  # the session keeps its quality
+
+
+@pytest.mark.asyncio
 async def test_argos_cinematic_skipped_without_llm(monkeypatch):
     """DEFAULT engine + Cinematic + NO LLM → degrades to Fast with an explicit
     cinematic_skipped flag (not a silent success)."""
@@ -569,6 +816,85 @@ async def test_argos_fast_stamps_rate_ratio(monkeypatch):
     resp = await dub_translate.dub_translate(req)
     assert resp["quality_used"] == "fast"
     assert "rate_ratio" in resp["translated"][0]
+
+
+@pytest.mark.asyncio
+async def test_argos_translates_one_sentence_per_call(monkeypatch):
+    """Argos runs sentence-trained models too: each sentence is translated on
+    its own (a repeated one once) and joined back."""
+    import sys
+    from api.routers import dub_translate
+    from schemas.requests import TranslateRequest, TranslateSegment
+    _install_fake_argos(monkeypatch)
+    calls = []
+    fake = sys.modules["argostranslate.translate"]
+    monkeypatch.setattr(fake, "translate", lambda text, frm, to: calls.append(text) or f"[{to}]{text}")
+
+    req = TranslateRequest(
+        segments=[
+            TranslateSegment(id="s1", text="Hello there. How are you?"),
+            TranslateSegment(id="s2", text="Hello there."),
+        ],
+        target_lang="es", provider="argos", source_lang="en",
+    )
+    resp = await dub_translate.dub_translate(req)
+    assert calls == ["Hello there.", "How are you?"]
+    assert resp["translated"][0]["text"] == "[es]Hello there. [es]How are you?"
+    assert resp["translated"][1]["text"] == "[es]Hello there."
+
+
+@pytest.mark.asyncio
+async def test_online_translator_retry_goes_clause_by_clause(monkeypatch):
+    """Translate again on a flagged row: an online engine gets one call per
+    clause, so it cannot drop part of the line again; a normal run still
+    sends the whole segment once."""
+    from api.routers import dub_translate
+
+    sent = []
+
+    class FakeTranslator:
+        def __init__(self, source=None, target=None, **kwargs):
+            pass
+
+        def translate(self, text):
+            sent.append(text)
+            return f"<{text}>"
+
+    class FakeModule:
+        GoogleTranslator = FakeTranslator
+
+    monkeypatch.setitem(__import__('sys').modules, 'deep_translator', FakeModule)
+    seg = _FakeSeg("1", "Well, I think so. But nobody asked me, and nobody cared.")
+    req = _FakeReq([seg], "vi", source_lang="en")
+    resp = await dub_translate.dub_translate(req)
+    assert sent == [seg.text]
+    assert resp["translated"][0]["text"] == f"<{seg.text}>"
+
+    sent.clear()
+    req.retry_incomplete = True
+    resp = await dub_translate.dub_translate(req)
+    assert sent == ["Well, I think so.", "But nobody asked me,", "and nobody cared."]
+    assert resp["translated"][0]["text"] == "<Well, I think so.> <But nobody asked me,> <and nobody cared.>"
+
+
+@pytest.mark.asyncio
+async def test_translation_check_flags_agent_rows(monkeypatch):
+    """Translate with Agent runs outside /dub/translate; its rows get the
+    same omission verdict through /dub/translation-check."""
+    from api.routers import dub_translate
+    from schemas.requests import TranslationCheckRequest
+
+    monkeypatch.setattr(dub_translate, "_get_job", lambda job_id: {"source_lang": "en"})
+    dropped = "Nhưng câu hỏi quan trọng là, bạn quên điều gì?"
+    resp = await dub_translate.dub_translation_check(TranslationCheckRequest(
+        job_id="job1", target_lang="vi",
+        rows=[
+            {"id": "a", "source": _TWO_SENTENCES, "text": dropped},
+            {"id": "b", "source": "Hi.", "text": "Chào."},
+        ],
+    ))
+    assert set(resp["omissions"]) == {"a"}
+    assert resp["omissions"]["a"]["reason"] == "short"
 
 
 def _install_fake_openai(monkeypatch, *, content="hola mundo", raises=None):

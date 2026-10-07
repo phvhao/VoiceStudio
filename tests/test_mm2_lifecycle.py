@@ -174,7 +174,12 @@ def test_facade_unload_unknown_raises():
 def test_facade_unload_tts_not_loaded(monkeypatch):
     monkeypatch.setattr(mm, "model", None)
     r = _run(ml.unload("tts"))
-    assert r == {"unloaded": "tts", "success": False, "reason": "not loaded"}
+    assert r == {
+        "unloaded": "tts",
+        "success": False,
+        "reason": "not loaded",
+        "reason_code": "not_loaded",
+    }
 
 
 def test_facade_unload_sidecars_none_running():

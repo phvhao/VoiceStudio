@@ -23,6 +23,8 @@ import { MarkupEditorTools } from './markup-editor-tools';
 import { EditorStatusBar, createCaretSource } from './editor-status-bar';
 import { passageBounds, previewPassage } from './script-markup';
 import { usePassagePreview } from './passage-preview';
+import { usePreviewLock, usePreviewSettings, useRetakeHearing } from './preview-run';
+import { TakeProgressText } from './generation-progress';
 import { paragraphsAround, useRetakes } from './take-retake';
 import type { RetakenChapter } from './chapter-previews';
 import { storyVoicesReady } from './story-inputs';
@@ -58,7 +60,8 @@ import { Input } from '@/components/ui/input';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { SyncedAudiobookPlayer } from './synced-audiobook-player';
 import { GeneratePanel } from './generate-panel';
-import { generateBlocker } from './generate-blocker';
+import { generateBlockers } from './generate-blocker';
+import { LONGFORM_TARGET } from './generate-gates';
 import { EngineNotice } from '@/components/engine-notice';
 import { ValidationWarnings, type ScriptWarning } from './validation-warnings';
 import { getBridge } from '@/components/bridge';
@@ -146,8 +149,9 @@ export function LongformPage({ mode }: { mode: Mode }) {
       profiles.some((profile) => profile.id === castVoice(draft.voiceCast, name)),
   );
   const defaultVoice = profiles.find((profile) => profile.id === draft.voice);
-  const voicesReady =
-    castReady && (mode === 'stories' ? storyVoicesReady(draft, profiles) : Boolean(defaultVoice));
+  // Audiobook: its narrator. Stories: a voice for every spoken line.
+  const voiceReady = mode === 'stories' ? storyVoicesReady(draft, profiles) : Boolean(defaultVoice);
+  const voicesReady = castReady && voiceReady;
   // Stories reads a profile id inside [voice:…] directly; only readable names
   // need a mapping, so only those are listed for casting.
   const inlineNames = useMemo(
@@ -167,10 +171,14 @@ export function LongformPage({ mode }: { mode: Mode }) {
     [draft.script, draft.voiceCast, mode, profiles],
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const blocker = generateBlocker({
+  // One preview (a passage, a chapter, a Stories line) renders at a time and
+  // Generate waits for it; the editor, cast and settings stay open meanwhile.
+  const previews = usePreviewLock();
+  const blockers = generateBlockers({
     mode,
     busyElsewhere: Boolean(session.active) && session.active !== mode,
     importing,
+    previewing: previews.busy,
     tts: ttsBlocker,
     usable,
     voicesReady,
@@ -178,8 +186,12 @@ export function LongformPage({ mode }: { mode: Mode }) {
     castReady,
     duplicateLexicon: duplicateWords(draft.lexicon),
   });
+  const needsDefaultVoice = blockers.includes('default_voice');
   const canPreview = ttsBlocker === null && voicesReady && !duplicateWords(draft.lexicon);
-  const passage = usePassagePreview(draft, setImporting);
+  // The engine, preset and reading a preview renders under: one rendered
+  // under others is outdated.
+  const previewSettings = usePreviewSettings(draft.overrides.reading);
+  const passage = usePassagePreview(draft, previews);
   // Offsets come from the editor, so they index its (newline-normalized)
   // value. The passage goes with where it is read, so it reads the book's
   // own takes there.
@@ -202,6 +214,9 @@ export function LongformPage({ mode }: { mode: Mode }) {
   const phrases = (draft.overrides.reading ?? appReading).phraseRendering !== false;
   const queryClient = useQueryClient();
   const [retaken, setRetaken] = useState<RetakenChapter | null>(null);
+  const retakenNotice = (takes: number) =>
+    takes > 1 ? t('editor.retaken_many', { count: takes }) : t('editor.retaken');
+  const hearRetake = useRetakeHearing(previews, passage.stop);
   const retakes = useRetakes({
     chapterAt: (editor, offset) =>
       mode === 'audiobook'
@@ -210,21 +225,26 @@ export function LongformPage({ mode }: { mode: Mode }) {
     onRetaken: ({ chapter, takes }) => {
       if (mode === 'stories') {
         // A story is heard from its render, which reads them anew.
-        toast.success(
-          takes.length > 1
-            ? t('editor.retaken_many', { count: takes.length })
-            : t('editor.retaken'),
-        );
+        toast.success(retakenNotice(takes.length));
         return;
       }
       void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] });
       const index = chapter.index;
       if (index !== undefined) setRetaken((last) => ({ chapter: index, id: (last?.id ?? 0) + 1 }));
-      // Heard at once, where they are read: the paragraphs holding them —
-      // unless the script was edited meanwhile, and they are elsewhere now.
+      // Heard where they are read: the paragraphs holding them — at once, or
+      // once a preview reading the old take has stopped — unless the script
+      // was edited meanwhile, and they are elsewhere now.
       const input = audiobookInput.current;
-      if (input && input.value === chapter.sources[0]?.text)
-        previewRange(...paragraphsAround(input.value, takes));
+      if (!input || input.value !== chapter.sources[0]?.text) return;
+      const text = input.value;
+      const range = paragraphsAround(text, takes);
+      hearRetake(index, {
+        play: () => {
+          if (audiobookInput.current?.value === text) previewRange(...range);
+        },
+        // Another chapter's preview renders on: the next render reads it.
+        later: () => toast.success(retakenNotice(takes.length)),
+      });
     },
   });
   const canRetake = phrases && (mode === 'audiobook' ? canPreview : ttsBlocker === null);
@@ -232,7 +252,15 @@ export function LongformPage({ mode }: { mode: Mode }) {
     <GeneratePanel
       mode={mode}
       session={session}
-      blocker={blocker}
+      blockers={blockers}
+      setup={{
+        engine: ttsBlocker,
+        usable,
+        voiceReady,
+        // The Cast panel lists these names; Stories reads a profile id inline as is.
+        casting: (mode === 'audiobook' ? names : inlineNames).length > 0,
+        castReady,
+      }}
       onGenerate={() => void renderLongform(mode)}
       onStop={stopLongform}
     />
@@ -342,7 +370,8 @@ export function LongformPage({ mode }: { mode: Mode }) {
             <div
               role="group"
               aria-labelledby="longform-default-voice"
-              data-attention={blocker === 'default_voice' ? '' : undefined}
+              data-gate-target={LONGFORM_TARGET.defaultVoice}
+              data-attention={needsDefaultVoice ? '' : undefined}
               className="-mx-1.5 space-y-1 rounded-lg p-1.5 data-attention:bg-amber-500/8 data-attention:ring-1 data-attention:ring-amber-500/60"
             >
               <h2
@@ -355,7 +384,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
               <p
                 className={cn(
                   'pb-1 text-[11px] leading-snug',
-                  blocker === 'default_voice'
+                  needsDefaultVoice
                     ? 'text-amber-600 dark:text-amber-400'
                     : 'text-muted-foreground',
                 )}
@@ -372,7 +401,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 profiles={profiles}
                 disabled={locked}
                 loading={profilesLoading}
-                attention={blocker === 'default_voice'}
+                attention={needsDefaultVoice}
                 aria-label={t('audiobook.default_voice')}
               />
               <ProfilesFailure query={profilesQuery} />
@@ -465,7 +494,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={locked || ttsBlocker !== null}
+                  disabled={locked || ttsBlocker !== null || previews.busy}
                   // Into the book it belongs to, never the one that happens to be open.
                   onClick={() => void resumeLongform(mode, job)}
                 >
@@ -566,15 +595,26 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   allowNewCharacter
                   actions={
                     passage.pending ? (
-                      <Button size="xs" variant="secondary" onClick={passage.stop}>
-                        <SquareIcon className="fill-current" />
-                        {t('common.stop')}
-                      </Button>
+                      <>
+                        {passage.progress && (
+                          <span
+                            role="status"
+                            data-slot="passage-progress"
+                            className="truncate text-xs text-muted-foreground tabular-nums"
+                          >
+                            <TakeProgressText progress={passage.progress} timeLeft />
+                          </span>
+                        )}
+                        <Button size="xs" variant="secondary" onClick={passage.stop}>
+                          <SquareIcon className="fill-current" />
+                          {t('common.stop')}
+                        </Button>
+                      </>
                     ) : (
                       <Button
                         size="xs"
                         variant="ghost"
-                        disabled={locked || !canPreview}
+                        disabled={locked || !canPreview || previews.busy}
                         title={t('markup.preview_hint')}
                         onMouseDown={(event) => event.preventDefault()}
                         onClick={previewSelection}
@@ -611,7 +651,11 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   passage.empty) && (
                   <div className="shrink-0 space-y-2 border-b border-border/50 p-2">
                     {passage.error && (
-                      <PipelineFailure fallback={passage.error} onDismiss={passage.dismiss} />
+                      <PipelineFailure
+                        failure={passage.failure}
+                        fallback={passage.error}
+                        onDismiss={passage.dismiss}
+                      />
                     )}
                     <SpeechCheckReport
                       suspects={passage.suspects}
@@ -626,14 +670,16 @@ export function LongformPage({ mode }: { mode: Mode }) {
                   </div>
                 )}
                 <ContentsRail
+                  previewing={previews.holder === 'chapter'}
                   outline={(rail) => (
                     <BookOutline
                       {...rail}
                       draft={draft}
                       disabled={locked}
                       canPreview={canPreview}
-                      onBusy={setImporting}
+                      previews={previews}
                       retaken={retaken}
+                      previewSettings={previewSettings}
                       getTarget={() =>
                         audiobookInput.current && {
                           element: audiobookInput.current,
@@ -661,12 +707,13 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     voiceGains={draft.voiceGains}
                     onVoiceGains={(voiceGains) => set({ voiceGains })}
                     defaultVoiceName={defaultVoice?.name}
-                    onListen={canPreview ? previewSelection : undefined}
-                    onListenRange={canPreview ? previewRange : undefined}
+                    onListen={canPreview && !previews.busy ? previewSelection : undefined}
+                    onListenRange={canPreview && !previews.busy ? previewRange : undefined}
                     retakes={canRetake ? retakes.tools('script') : undefined}
                   >
                     <MarkupTextarea
                       textareaRef={audiobookInput}
+                      data-gate-target={LONGFORM_TARGET.script}
                       headings
                       gutter
                       activeLine
@@ -711,6 +758,8 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 retakes={canRetake ? retakes : undefined}
                 onChange={set}
                 onBusy={setImporting}
+                previews={previews}
+                previewSettings={previewSettings}
               />
             )}
             {/* Audiobook shows these in its editor's status bar. */}

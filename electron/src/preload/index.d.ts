@@ -224,6 +224,25 @@ export interface SpellcheckState {
   available: boolean;
 }
 
+/** The native edit menu's labels, in the app's language. */
+export interface EditMenuLabels {
+  undo: string;
+  redo: string;
+  cut: string;
+  copy: string;
+  paste: string;
+  selectAll: string;
+  addToDictionary: string;
+  noSuggestions: string;
+}
+
+/** A mouse Back/Forward button or Back/Forward key the window reported (Windows, Linux). */
+export interface HistoryCommand {
+  direction: 'back' | 'forward';
+  /** When it happened (`Date.now()` in main), so the page's report of the same press pairs with it. */
+  at: number;
+}
+
 export interface AuthorizedPathSelection {
   authorization: string;
   path: string;
@@ -328,6 +347,14 @@ export interface VoiceStudioBridge {
     /** Check script editors in Vietnamese and English, or go back to the default languages. */
     setEnabled(enabled: boolean): Promise<SpellcheckState>;
   };
+  editMenu: {
+    /** Label the native edit menu (Undo, Cut, Paste…) in the app's language. */
+    labels(labels: EditMenuLabels): Promise<void>;
+  };
+  clipboard: {
+    /** The clipboard's text, read by the shell for a Paste button the page's Clipboard API refused. */
+    readText(): Promise<string>;
+  };
   permissions: {
     getState(): Promise<NativePermissions>;
     openSettings(kind: 'microphone' | 'accessibility'): Promise<boolean>;
@@ -362,6 +389,8 @@ export interface VoiceStudioBridge {
     platform: NodeJS.Platform;
     isDev: boolean;
     onNavigate(callback: (path: string) => void): () => void;
+    /** Back/Forward mouse buttons and keys the window reports (Windows, Linux). */
+    onHistory(callback: (command: HistoryCommand) => void): () => void;
     onPersistenceFlush(callback: () => void | Promise<void>): () => void;
   };
   backend: {

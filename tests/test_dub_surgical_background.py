@@ -57,6 +57,13 @@ def test_real_ffmpeg_retime_and_cache_invalidation(tmp_path):
         assert sf.info(retimed).duration == pytest.approx(4, abs=.01)
         values,_=sf.read(retimed)
         assert values[int(3.5*sr),0] == pytest.approx(.1,abs=.001)
+        # Smart Fit speeds a short line's video up (ratio < 1): the bed
+        # shortens with it, so ambience after the line stays in sync.
+        sped=await surgical_background(src,bg,str(tmp_path),segments,[{'orig_start':1,'orig_end':2,'stretch_ratio':.8}],3)
+        assert sf.info(sped).duration == pytest.approx(2.8, abs=.01)
+        values,_=sf.read(sped)
+        assert values[int(1.4*sr),0] == pytest.approx(.02,abs=.001)
+        assert values[int(2.3*sr),0] == pytest.approx(.1,abs=.001)
     asyncio.run(run())
 
 

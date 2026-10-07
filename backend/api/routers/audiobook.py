@@ -37,17 +37,20 @@ epub/pdf ingest, ACX mastering shipped; the resume UI surface remains a follow-u
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import json
 import logging
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 
 from collections.abc import Awaitable, Callable
 
-from core import voice_leases
+from api.disconnect import DISCONNECT_POLL_S, cancel_on_disconnect, cancel_task, client_gone
+from core import render_trace, voice_leases
 from core.render_trace import call as trace_call, stage as trace_stage
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -1291,7 +1294,8 @@ def _chapter_cache_keys(chapter, sr, engine_id, resolve, cache_dir, *, lexicon=N
 
 def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, lexicon=None,
                            language=None, opts=None, voice_map=None, default_voice=None,
-                           request_opts=None, read_in: _ReadIn | None = None):
+                           request_opts=None, read_in: _ReadIn | None = None,
+                           progress: "_ChapterProgress | None" = None):
     """Render one chapter, content-addressed so a re-run reuses it (resume).
 
     Returns ``(wav_path, duration_s, was_cached, seg_stats)``. Two cache
@@ -1342,6 +1346,9 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
     recognizer answers (see :func:`services.audiobook.synthesize_chapter`) —
     a phrase take by listening to it, rendering it again only if it fails.
     ``opts`` / ``request_opts``: see :func:`_chapter_cache_keys`.
+
+    ``progress`` (a :class:`_ChapterProgress`) hears how many takes the
+    chapter synthesizes and each one it starts, once its cache is missed.
 
     Runs in the GPU-pool executor.
     """
@@ -1416,11 +1423,18 @@ def _render_chapter_cached(chapter, synth, sr, engine_id, resolve, cache_dir, le
                                          request_opts=request_opts)
             _cut_chapter_around(takes, around, take_cache, hold, cache_dir=cache_dir, opts=opts,
                                 lexicon=lexicon, checking=verifier is not None)
+        if progress is not None:
+            progress.begin(_takes_to_render(keys, takes, seg_cache, take_cache, opts=opts,
+                                            lexicon=lexicon, cache_dir=cache_dir),
+                           phrases=takes is not None)
+            synth = progress.counted(synth)
         audio, dur = synthesize_chapter(spans, synth, sr, lexicon=lexicon,
                                         segment_cache=seg_cache, verifier=verifier,
                                         voice_names=voice_names, timing=timing,
                                         recognizer=recognizer, take_cache=take_cache,
                                         takes=takes, **opts.join_kwargs())
+        if progress is not None:
+            progress.finished()
     # Invisible provenance mark on the assembled chapter (#1169), tensor stage,
     # before the WAV lands in the cache — this single site covers every
     # longform front door (/audiobook, /longform/render [Stories],
@@ -1741,6 +1755,165 @@ def _remote_chapter_call(chapter, *, engine_id, default_voice, voice_map,
     ), wav_path
 
 
+def _sse(payload: dict) -> str:
+    """``payload`` as one Server-Sent Event."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+class _ChapterProgress:
+    """Where one chapter's render stands while it renders, for the stream
+    that reports it: what it waits for — its voice model to load
+    (``loading``) or a free GPU worker (``queued``) — then, ``rendering``,
+    how many of the takes it synthesizes are done (``done`` of ``total``;
+    ``phrases`` when they are sentences, not parts of up to 800 characters)
+    and how long one takes on the wall clock (``rate``, in seconds: its
+    speech check and retakes included).
+
+    Told from the event loop and from the chapter's GPU worker; the stream
+    reads the latest state, never a backlog. Not job history: these events
+    never go through ``job_store.append_event``, whose cap would push out
+    the chapter events a resume reads."""
+
+    def __init__(self, index: int = 0) -> None:
+        self.index = index
+        #: Set once the client went away while the chapter rendered.
+        self.client_gone = False
+        self._loop = asyncio.get_running_loop()
+        self._changed = asyncio.Event()
+        self._lock = threading.Lock()
+        self._state: dict | None = None
+        self._total: int | None = None
+        self._phrases = False
+        self._started = 0
+        self._first: float | None = None
+        self._second: float | None = None
+        self._rate: float | None = None
+
+    def _publish(self, state: dict) -> None:
+        with self._lock:
+            self._state = state
+        try:
+            self._loop.call_soon_threadsafe(self._changed.set)
+        except RuntimeError:
+            pass  # the loop is closed: nobody listens any more
+
+    def waiting(self, phase: str) -> None:
+        """The chapter waits for its voice model (``loading``) or for a free
+        GPU worker (``queued``)."""
+        self._publish({"phase": phase})
+
+    def remote_state(self, state: dict) -> None:
+        """A remote worker's phase, as ``gpu_gateway`` reports it."""
+        phase = (state or {}).get("phase")
+        self._publish({"phase": phase if phase in ("queued", "loading") else "rendering"})
+
+    def begin(self, total: int | None, *, phrases: bool) -> None:
+        """The chapter's GPU worker started it, with ``total`` takes to
+        synthesize (``None``: not known)."""
+        with self._lock:
+            self._total, self._phrases = total, phrases
+            state = self._rendering(0)
+        self._publish(state)
+
+    def finished(self) -> None:
+        """Every take is rendered: the chapter is joined and saved now."""
+        with self._lock:
+            self._total = self._started
+            state = self._rendering(self._started)
+        self._publish(state)
+
+    def counted(self, synth):
+        """``synth``, telling this progress each take it starts; a retake the
+        speech check asks for is part of the take it replaces."""
+        @functools.wraps(synth)  # keeps the keywords synthesis reads off it
+        def take(*args, **kwargs):
+            if not kwargs.get("attempt"):
+                self._take_started()
+            return synth(*args, **kwargs)
+        return take
+
+    def _take_started(self) -> None:
+        now = time.monotonic()
+        with self._lock:
+            self._started += 1
+            if self._total is not None:
+                self._total = max(self._total, self._started)
+            if self._started == 1:
+                self._first = now
+                return  # none done yet, as begin() said
+            if self._started == 2:
+                self._second = now
+            done = self._started - 1
+            # The first take also sets up the voice (its reference is encoded
+            # then): once later takes are timed, the pace leaves it out.
+            self._rate = ((now - self._second) / (done - 1) if done > 1
+                          else now - self._first)
+            state = self._rendering(done)
+        self._publish(state)
+
+    def _rendering(self, done: int) -> dict:
+        state = {"phase": "rendering", "done": done, "phrases": self._phrases}
+        if self._total is not None:
+            state["total"] = self._total
+        if self._rate is not None:
+            state["rate"] = round(self._rate, 3)
+        return state
+
+    async def events(self, task, *, is_disconnected: Callable[[], Awaitable[bool]] | None = None):
+        """Each new state of the chapter ``task`` renders, as a ``progress``
+        event, until the task is done. Meanwhile the client's connection is
+        looked at (``is_disconnected``): once the client is gone,
+        ``client_gone`` is set and the events end with the task still
+        running — the caller cancels it."""
+        loop = asyncio.get_running_loop()
+        polled = loop.time()
+        while not task.done():
+            changed = asyncio.ensure_future(self._changed.wait())
+            try:
+                # Wake for a change, the end, or the next look at the client.
+                await asyncio.wait({task, changed}, return_when=asyncio.FIRST_COMPLETED,
+                                   timeout=max(0.0, polled + DISCONNECT_POLL_S - loop.time()))
+            finally:
+                changed.cancel()
+            if task.done():
+                return
+            if self._changed.is_set():
+                self._changed.clear()
+                with self._lock:
+                    state = self._state
+                if state is not None:
+                    yield {"type": "progress", "index": self.index, **state}
+            if is_disconnected is not None and loop.time() >= polled + DISCONNECT_POLL_S:
+                polled = loop.time()
+                if await client_gone(is_disconnected):
+                    self.client_gone = True
+                    return
+
+
+def _voice_model_loads(engine_id: str | None) -> bool:
+    """Whether a local render with ``engine_id`` loads its model before its
+    first take: the default engine whose model is not in memory. Other
+    engines load inside their first take, which their progress counts."""
+    from services.tts_backend import OmniVoiceBackend, get_backend_class
+
+    try:
+        if get_backend_class(engine_id) is not OmniVoiceBackend:
+            return False
+    except ValueError:
+        return False
+    from services import model_manager
+
+    return getattr(model_manager, "model", None) is None
+
+
+def _gpu_pool_busy() -> bool:
+    """Whether a job submitted to the GPU pool now waits for a worker."""
+    from services.model_manager import gpu_pool_stats
+
+    stats = gpu_pool_stats()
+    return int(stats.get("running") or 0) >= max(1, int(stats.get("workers") or 1))
+
+
 def _chapter_opts(opts: ExpressiveOptions, chapter, default_voice, voice_map) -> ExpressiveOptions:
     """``opts`` with the volumes of only the voices this chapter speaks: turning
     one voice up re-assembles the chapters it is in (and re-renders them on a
@@ -1754,7 +1927,8 @@ def _chapter_opts(opts: ExpressiveOptions, chapter, default_voice, voice_map) ->
 
 
 async def _run_chapter(chapter, *, operation="audiobook", decision, job, default_voice, language, opts,
-                       voice_map, lexicon, cache_dir, lease=None, read_in: _ReadIn | None = None):
+                       voice_map, lexicon, cache_dir, lease=None, read_in: _ReadIn | None = None,
+                       progress: _ChapterProgress | None = None):
     """Run one chapter through the gateway; local preparation stays lazy.
 
     The performance preset is read once here (:func:`_preset_opts`): the
@@ -1764,7 +1938,8 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
     to wait for a load it never used.
 
     ``lease`` holds the reference files the chapter resolves (#2535);
-    ``read_in`` places a passage preview in its chapter (:func:`_phrase_plan`)."""
+    ``read_in`` places a passage preview in its chapter (:func:`_phrase_plan`);
+    ``progress`` hears what the chapter waits for and how its takes go."""
     from services import gpu_gateway
     from services.tts_backend import active_backend_id, get_backend_class
 
@@ -1805,6 +1980,8 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
             hit = await asyncio.to_thread(cached_here)
             if hit is not None:
                 return gpu_gateway.LocalCall(fn=lambda: hit, what="Audiobook chapter")
+        if progress is not None and _voice_model_loads(engine_id):
+            progress.waiting("loading")
         synth, sr, resolve, local_engine = await _prepare_synth(
             default_voice, language=language, opts=opts, voice_map=voice_map,
             lease=lease,
@@ -1816,11 +1993,13 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
             # non-catalogue id. Keep the canonical host/text policy available;
             # registered production engines still add their routing metadata.
             timeout_engine = None
+        if progress is not None and _gpu_pool_busy():
+            progress.waiting("queued")
         return gpu_gateway.LocalCall(
             fn=lambda: _render_chapter_cached(
                 chapter, synth, sr, local_engine, resolve, cache_dir, lexicon,
                 language, opts, voice_map, default_voice=default_voice,
-                request_opts=request_opts, read_in=read_in,
+                request_opts=request_opts, read_in=read_in, progress=progress,
             ),
             what="Audiobook chapter",
             timeout=generate_timeout_s(
@@ -1831,6 +2010,7 @@ async def _run_chapter(chapter, *, operation="audiobook", decision, job, default
     return await gpu_gateway.run(
         operation, local=gpu_gateway.LocalCall(prepare=prepare_local),
         remote=remote, decision=decision, job=job,
+        **({"on_state": progress.remote_state} if progress is not None else {}),
     )
 
 
@@ -1889,6 +2069,10 @@ class AudiobookPreviewRequest(ExpressiveMixin):
     # A passage preview (``text`` is the passage as a one-chapter script):
     # where it is read in its book, so it reads the book's own takes.
     context: PassageContext | None = None
+    # ``/audiobook/preview`` only: answer as Server-Sent Events — ``progress``
+    # while the chapter renders, then ``done`` carrying the JSON answer, or
+    # ``error`` — instead of once at the end.
+    stream: bool = False
 
 
 def _passage_read_in(req: AudiobookPreviewRequest) -> _ReadIn | None:
@@ -1908,17 +2092,19 @@ def _passage_read_in(req: AudiobookPreviewRequest) -> _ReadIn | None:
 
 
 @router.post("/audiobook/preview")
-async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
+async def audiobook_preview(req: AudiobookPreviewRequest, request: Request = None):
     """Render a single chapter so the user can audition it before the full run.
 
     Reuses the same content-addressed cache as the job, so a preview warms the
     cache (the later full render reuses it) and a re-preview is instant. A
     passage preview sends where the passage is read (``context``), so its
     sentences are its chapter's takes — the ones the book reads there.
-    """
-    from core.config import OUTPUTS_DIR
-    from services import gpu_gateway
 
+    With ``stream`` the answer comes as Server-Sent Events with the chapter's
+    progress (:func:`_preview_stream`). Either way a client that goes away
+    stops the render before its next take: Stop frees the GPU. ``request`` is
+    injected by FastAPI (``None`` only for an in-process call, e.g. a test).
+    """
     plan = parse_audiobook_script(req.text, default_voice=req.default_voice)
     if not plan.chapters:
         raise HTTPException(status_code=400, detail="no chapters parsed from the script")
@@ -1927,6 +2113,51 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"chapter_index out of range (0..{n - 1})")
 
     chapter = plan.chapters[req.chapter_index]
+    if req.stream:
+        return StreamingResponse(
+            _preview_stream(req, chapter, is_disconnected=(
+                request.is_disconnected if request is not None else None)),
+            media_type="text/event-stream",
+        )
+    return await cancel_on_disconnect(request, _preview_chapter(req, chapter))
+
+
+async def _preview_stream(req: AudiobookPreviewRequest, chapter, *,
+                          is_disconnected: Callable[[], Awaitable[bool]] | None = None):
+    """``/audiobook/preview``'s answer as Server-Sent Events: ``progress``
+    while the chapter renders (:class:`_ChapterProgress`), then ``done``
+    carrying the JSON answer, or ``error``. The render runs as a task of its
+    own, cancelled when the client goes away — its GPU job then stops before
+    its next take — and the request's trace ends ``cancelled``."""
+    from core.failure import build_failure_event
+
+    progress = _ChapterProgress(req.chapter_index)
+    task = asyncio.ensure_future(_preview_chapter(req, chapter, progress=progress))
+    try:
+        async with contextlib.aclosing(
+                progress.events(task, is_disconnected=is_disconnected)) as updates:
+            async for event in updates:
+                yield _sse(event)
+        if progress.client_gone:
+            render_trace.cancel_current()
+            return
+        yield _sse({"type": "done", **task.result()})
+    except (asyncio.CancelledError, GeneratorExit):
+        render_trace.cancel_current()
+        raise
+    except Exception as exc:  # the stream has begun: the failure is an event
+        logger.warning("Chapter preview failed", exc_info=True)
+        yield _sse(build_failure_event(exc, stage="audiobook_preview"))
+    finally:
+        cancel_task(task)
+
+
+async def _preview_chapter(req: AudiobookPreviewRequest, chapter, *,
+                           progress: _ChapterProgress | None = None) -> dict:
+    """Render ``chapter`` of a preview request: ``/audiobook/preview``'s answer."""
+    from core.config import OUTPUTS_DIR
+    from services import gpu_gateway
+
     cache_dir = os.path.join(OUTPUTS_DIR, LONGFORM_CACHE_SUBDIR)  # shared with _render_longform_sse
     os.makedirs(cache_dir, exist_ok=True)
     resolved_lang = _resolve_default_language(req.language, req.default_voice)
@@ -1937,7 +2168,7 @@ async def audiobook_preview(req: AudiobookPreviewRequest) -> dict:
             chapter, decision=decision, job=None, default_voice=req.default_voice,
             language=resolved_lang, opts=opts, voice_map=req.voice_map,
             lexicon=req.lexicon, cache_dir=cache_dir, lease=lease,
-            read_in=_passage_read_in(req),
+            read_in=_passage_read_in(req), progress=progress,
         )
     check = (seg_stats or {}).get("speech_check")
     if check is None and opts.verify_speech:
@@ -2056,6 +2287,39 @@ def _reused_takes(keys: _ChapterKeys, plan: list, store, *, opts, cache_dir,
         out.append([whole or (k in cut and not ref.salt) or kept(ref)
                     for k, ref in enumerate(refs)])
     return out
+
+
+def _takes_to_render(keys: _ChapterKeys, takes: list | None, segments, store, *, opts,
+                     lexicon, cache_dir) -> int | None:
+    """How many takes a render of the chapter keyed ``keys`` synthesizes:
+    the phrase takes of ``takes`` it would not reuse (:func:`_reused_takes`),
+    or — read in parts of up to 800 characters — every part of each spoken
+    span the segment cache (``segments``) does not hold whole. The speech
+    check may render a cached take again, so the count can come out short;
+    the progress grows then. ``None`` when it cannot be told: a progress
+    estimate never fails a render."""
+    from services.audiobook import chapter_units
+
+    try:
+        if takes is not None:
+            reused = _reused_takes(keys, takes, store, opts=opts, cache_dir=cache_dir)
+            return sum(len(flags) - sum(flags) for flags in reused)
+        units = chapter_units(keys.spans, lexicon=lexicon, **_split_kwargs(opts))
+        seen: dict = {}
+        count = 0
+        for span, paragraphs in zip(keys.spans, units):
+            if not span.text:
+                continue
+            # The occurrence synthesis keys a repeated span's segment by.
+            repeat = (span.voice_id, span.text, getattr(span, "speed", None))
+            occurrence = seen.get(repeat, 0)
+            seen[repeat] = occurrence + 1
+            if not segments.holds(span, occurrence):
+                count += sum(len(chunks) for chunks, _gaps in paragraphs)
+        return count
+    except Exception:  # noqa: BLE001 — progress is best-effort
+        logger.debug("Could not count the takes a chapter renders", exc_info=True)
+        return None
 
 
 @dataclasses.dataclass
@@ -2455,7 +2719,7 @@ async def _render_longform_sse(
                 job_store.append_event(job_id, json.dumps(payload))
             except Exception:
                 pass  # best-effort job history; never block the stream
-        return f"data: {json.dumps(payload)}\n\n"
+        return _sse(payload)
 
     if not plan.chapters:
         _retire_failed(job_store, job_id, "nothing to render (no chapters)")
@@ -2524,21 +2788,31 @@ async def _render_longform_sse(
             # terminal `stopped` event. This render parks no model on CPU the way
             # the dub transcribe does — #1191 — so there is no restore debt to
             # pay on exit; stopping is simply "schedule no more chapters".)
-            if is_disconnected is not None:
-                try:
-                    gone = await is_disconnected()
-                except Exception:
-                    gone = False
-                if gone:
+            if is_disconnected is not None and await client_gone(is_disconnected):
+                interrupted = True
+                break
+            # The chapter renders as a task of its own, so its progress — what
+            # it waits for, then take by take — streams while it runs, and a
+            # client gone mid-chapter cancels it: its GPU job stops before the
+            # next take instead of rendering the chapter out.
+            progress = _ChapterProgress(i)
+            chapter_task = asyncio.ensure_future(_run_chapter(
+                chapter, operation=operation, decision=decision, job=chapter_run,
+                default_voice=default_voice, language=resolved_lang,
+                opts=opts, voice_map=voice_map, lexicon=lexicon,
+                cache_dir=cache_dir, lease=voice_lease, progress=progress,
+            ))
+            try:
+                async with contextlib.aclosing(progress.events(
+                        chapter_task, is_disconnected=is_disconnected)) as updates:
+                    async for update in updates:
+                        # Straight to the stream: job history keeps chapter events
+                        # only, and its cap must never push out what a resume reads.
+                        yield _sse(update)
+                if progress.client_gone:
                     interrupted = True
                     break
-            try:
-                wav_path, dur, was_cached, seg_stats = await _run_chapter(
-                    chapter, operation=operation, decision=decision, job=chapter_run,
-                    default_voice=default_voice, language=resolved_lang,
-                    opts=opts, voice_map=voice_map, lexicon=lexicon,
-                    cache_dir=cache_dir, lease=voice_lease,
-                )
+                wav_path, dur, was_cached, seg_stats = chapter_task.result()
             except Exception as e:  # isolate a bad chapter — keep going
                 logger.warning("[%s] chapter %d (%s) failed to render",
                                job_id, i, chapter.title, exc_info=True)
@@ -2562,6 +2836,10 @@ async def _render_longform_sse(
                              **build_failure(e, stage="audiobook_chapter",
                                              include_diagnostic=False)})
                 continue
+            finally:
+                # Stopped mid-chapter (the client left, the stream was closed
+                # or cancelled): the chapter must not render on unread.
+                cancel_task(chapter_task)
             chapter_hold.add(wav_path)
             chapter_files.append(wav_path)
             chapter_timing = load_chapter_timeline(wav_path)
@@ -2602,6 +2880,7 @@ async def _render_longform_sse(
         if interrupted:
             logger.info("[%s] client disconnected — stopped after %d/%d chapters",
                         job_id, len(chapter_files), total)
+            render_trace.cancel_current()
             if job_store is not None:
                 try:
                     # A client disconnect here is a user-initiated Stop, not a
@@ -2754,6 +3033,7 @@ async def _render_longform_sse(
         # never saw them and the job stayed `running` for history/job consumers
         # (#2536). Retire it as cancelled — a no-op once it is already
         # done/failed — keep the resume manifest, and let the cancel propagate.
+        render_trace.cancel_current()
         if job_store is not None:
             try:
                 job_store.retire_if_active(job_id, "cancelled")

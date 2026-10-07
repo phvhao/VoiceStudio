@@ -14,6 +14,7 @@ import { StatusBar } from './status-bar';
 import { SystemNotifications } from './system-notifications';
 import { useBackendStatus } from '@/hooks/use-backend-status';
 import { isBackendReachable } from '@shared/utils/backendStage';
+import { useEditorFocus } from '@/components/editor-frame/editor-focus';
 
 export function WorkspaceSidebar() {
   const backend = useBackendStatus();
@@ -33,8 +34,12 @@ export function WorkspaceSidebar() {
     reserve: compactViewport && secondaryWorkspace && forceExpanded ? 520 : 640,
     enabled: libraryOpen,
   });
+  // A script editor in focus mode has the window to itself until Esc. Hidden,
+  // not unmounted: a voice preview keeps playing, and the library's search,
+  // filters and scroll are as they were when it comes back.
+  const editorFocused = useEditorFocus();
   return (
-    <>
+    <div data-slot="workspace-sidebar" hidden={editorFocused} className="contents">
       {compact && (
         <aside
           aria-label={t('clone.saved_profiles')}
@@ -197,6 +202,6 @@ export function WorkspaceSidebar() {
           </div>
         </aside>
       )}
-    </>
+    </div>
   );
 }

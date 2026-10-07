@@ -4,9 +4,18 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import i18n from '@/i18n';
 
-const mock = vi.hoisted(() => ({ api: vi.fn() }));
+const mock = vi.hoisted(() => {
+  const api = vi.fn();
+  // A chapter preview fetches its stream; answered here as an older backend
+  // would, at once, with what `api` returns.
+  const fetch = vi.fn(
+    async (path: string, init?: unknown) => new Response(JSON.stringify(await api(path, init))),
+  );
+  return { api, fetch };
+});
 vi.mock('@/lib/api/client', () => ({
   apiJson: mock.api,
+  apiFetch: mock.fetch,
   apiPath: (path: string) => path,
   describeError: String,
 }));
@@ -17,6 +26,16 @@ import { usePerformanceProfile } from '@/hooks/use-performance-profile';
 import { BookOutline, takesLeft } from './book-outline';
 import type { RetakenChapter } from './chapter-previews';
 import { blankLongformDraft, outlineRequest, type Draft } from './longform-session';
+import { usePreviewLock, type PreviewLock } from './preview-run';
+
+/** No other preview renders. */
+const free: PreviewLock = {
+  holder: null,
+  chapter: null,
+  busy: false,
+  acquire: () => true,
+  release: () => {},
+};
 
 const SCRIPT = '# One\nFirst words.\n## Part two\nMore words.\n# Empty\n# Two\nLast.';
 const t = i18n.t.bind(i18n);
@@ -50,6 +69,7 @@ function Harness({
 }) {
   const [script, setScript] = useState(initial);
   const input = useRef<HTMLTextAreaElement>(null);
+  const previews = usePreviewLock();
   const draft: Draft = { ...blankLongformDraft(), script, voice: 'narrator', output };
   return (
     <QueryClientProvider client={new QueryClient()}>
@@ -63,7 +83,7 @@ function Harness({
         draft={draft}
         disabled={false}
         canPreview
-        onBusy={() => {}}
+        previews={previews}
         getTarget={() => input.current && { element: input.current, setText: setScript }}
         retaken={retaken}
       />
@@ -293,6 +313,44 @@ it('puts away the preview of a chapter a retake made out of date', async () => {
   expect(screen.queryByTestId('preview')).toBeNull();
 });
 
+it('keeps a chapter preview through edits elsewhere, and names it as it rendered once dated', async () => {
+  render(<Harness />);
+  fireEvent.click(
+    screen.getByRole('button', { name: t('audiobook.preview_chapter', { title: 'Two' }) }),
+  );
+  const preview = () =>
+    within(screen.getByTestId('preview').closest<HTMLElement>('[data-slot=chapter-preview]')!);
+  await screen.findByTestId('preview');
+  expect(preview().getByText('Two')).toBeVisible();
+  // Typing in chapter One leaves Two's preview current.
+  fireEvent.change(script(), { target: { value: SCRIPT.replace('First words.', 'First.') } });
+  expect(screen.queryByText(t('audiobook.preview_outdated'))).toBeNull();
+  // A chapter put before it: plan index 1 is One now, and the preview is Two's.
+  fireEvent.change(script(), { target: { value: `# New\nText.\n${SCRIPT}` } });
+  expect(preview().getByText(t('audiobook.preview_outdated'))).toBeVisible();
+  expect(preview().getByText('Two')).toBeVisible();
+  expect(preview().queryByText('One')).toBeNull();
+});
+
+it('offers no chapter preview while another preview renders', () => {
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <BookOutline
+        draft={{ ...blankLongformDraft(), script: SCRIPT, voice: 'narrator' }}
+        disabled={false}
+        canPreview
+        previews={{ ...free, holder: 'passage', busy: true }}
+        getTarget={() => null}
+      />
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getByRole('button', { name: t('audiobook.preview_chapter', { title: 'Two' }) }),
+  ).toBeDisabled();
+  // Headings stay editable meanwhile.
+  expect(screen.getByRole('button', { name: t('book.more', { title: 'Two' }) })).toBeEnabled();
+});
+
 it("labels the chapter preview with the outline's localized name", async () => {
   mock.api.mockImplementation(async (path: string) =>
     path === '/audiobook/outline'
@@ -326,7 +384,7 @@ it('folds away through its own button and reports a row that moved the caret', (
           draft={{ ...blankLongformDraft(), script, voice: 'narrator' }}
           disabled={false}
           canPreview
-          onBusy={() => {}}
+          previews={free}
           getTarget={() => input.current && { element: input.current, setText: setScript }}
           onCollapse={onCollapse}
           onReveal={onReveal}
@@ -385,7 +443,7 @@ it('keeps one status answer cached, however often the script settles', async () 
           draft={draft}
           disabled={false}
           canPreview
-          onBusy={() => {}}
+          previews={free}
           getTarget={() => null}
         />
       </QueryClientProvider>
@@ -415,7 +473,7 @@ it('asks the statuses again once the performance preset changes', async () => {
         draft={{ ...blankLongformDraft(), script: SCRIPT, voice: 'narrator', output: 'b1.m4b' }}
         disabled={false}
         canPreview
-        onBusy={() => {}}
+        previews={free}
         getTarget={() => null}
       />
     </QueryClientProvider>,

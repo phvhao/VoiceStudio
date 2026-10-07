@@ -1,7 +1,11 @@
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
+import { GatedAction } from '@/components/gated-action';
+import { runRendererTask } from '@/lib/global-error-recovery';
 import { GenerationProgress } from './generation-progress';
 import type { GenerateBlocker } from './generate-blocker';
+import { describeGenerateBlockers, generateSteps, type GenerateSetup } from './generate-gates';
 import type { AudiobookRenderChapter, RenderTiming } from './longform-session';
 
 /** The slice of the render session this panel reads. */
@@ -24,18 +28,36 @@ export interface GenerateSession {
 export function GeneratePanel({
   mode,
   session,
-  blocker,
+  blockers,
+  setup,
   onGenerate,
   onStop,
 }: {
   mode: 'stories' | 'audiobook';
   session: GenerateSession;
-  blocker: GenerateBlocker | null;
+  /** What Generate still needs (generateBlockers), most fundamental first. */
+  blockers: readonly GenerateBlocker[];
+  /** Where the book's setup stands: the checklist shown with what is missing. */
+  setup?: GenerateSetup;
   onGenerate: () => void;
   onStop: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const active = session.active === mode;
+  const openSettings = () =>
+    runRendererTask('Open model settings', () =>
+      navigate({ to: '/settings/models/$family', params: { family: 'tts' } }),
+    );
+  const missing = describeGenerateBlockers(blockers, {
+    t,
+    openSettings,
+    // The render holding the GPU belongs to the other mode; its page can stop it.
+    showRender: () =>
+      runRendererTask('Show the running render', () =>
+        navigate({ to: mode === 'stories' ? '/audiobook' : '/stories' }),
+      ),
+  });
   const status = active
     ? session.stage === 'assembling'
       ? t('audiobook.assembling')
@@ -45,9 +67,7 @@ export function GeneratePanel({
             current: Math.min(session.completed + 1, session.total),
             total: session.total,
           })
-    : blocker
-      ? t('audiobook.blocked.' + blocker)
-      : '';
+    : (missing[0]?.message ?? '');
   return (
     <div data-slot="generate-panel" className="flex min-h-0 flex-col gap-3">
       {session.failed > 0 && (
@@ -70,7 +90,7 @@ export function GeneratePanel({
         </div>
       )}
       {status && (
-        <p id="generate-status" role="status" className="shrink-0 text-xs text-muted-foreground">
+        <p role="status" className="shrink-0 text-xs text-muted-foreground">
           {status}
         </p>
       )}
@@ -79,14 +99,15 @@ export function GeneratePanel({
           {t('common.stop')}
         </Button>
       ) : (
-        <Button
+        // Pressable while blocked: it lists what is missing, with the way to each.
+        <GatedAction
           className="w-full shrink-0"
-          disabled={blocker !== null}
-          aria-describedby={status ? 'generate-status' : undefined}
+          blockers={missing}
+          steps={setup && generateSteps(t, mode, setup, { openSettings })}
           onClick={onGenerate}
         >
           {t(mode === 'stories' ? 'stories.generateAll' : 'audiobook.create')}
-        </Button>
+        </GatedAction>
       )}
     </div>
   );

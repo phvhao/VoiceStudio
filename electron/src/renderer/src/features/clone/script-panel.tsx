@@ -1,4 +1,5 @@
 import { importScript, SCRIPT_ACCEPT } from '@/lib/import-script';
+import { readClipboardText } from '@/lib/clipboard';
 import {
   AlignLeftIcon,
   ChevronDownIcon,
@@ -17,9 +18,12 @@ import {
   ScriptTagTools,
   useScriptInsertMenu,
 } from '@/components/script-insert-menu';
+import { FocusToggle } from '@/components/editor-frame/editor-frame';
+import { ScriptEditorFrame } from '@/components/editor-frame/script-editor-frame';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
 import { SectionLabel } from './section-label';
+import { SYNTHESIS_TARGET } from './synthesis-gates';
 
 export function ScriptPanel({
   voiceName,
@@ -28,6 +32,7 @@ export function ScriptPanel({
 }: { voiceName?: string; coachmark?: string; onUserEdit?: () => void } = {}) {
   const { t } = useTranslation();
   const text = useCloneSetting('text');
+  const speed = useCloneSetting('speed');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLDivElement>(null);
@@ -93,7 +98,8 @@ export function ScriptPanel({
     setPasting(true);
     setPasteOpen(false);
     try {
-      const value = await navigator.clipboard.readText();
+      // The desktop shell reads the clipboard when the page's Clipboard API is refused.
+      const value = await readClipboardText();
       // Do not overwrite edits made while a clipboard permission prompt was open.
       if (value && textareaRef.current?.value === before) edit(value, replace);
     } catch {
@@ -105,14 +111,14 @@ export function ScriptPanel({
   };
 
   return (
-    <section className="flex min-h-64 flex-1 flex-col">
+    <section className="flex min-h-40 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <SectionLabel>
             <AlignLeftIcon aria-hidden="true" />
             {t('clone.text_label')}
           </SectionLabel>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <input
               ref={importRef}
               type="file"
@@ -145,18 +151,19 @@ export function ScriptPanel({
               onClick={() => importRef.current?.click()}
             >
               <FileUpIcon />
-              {t('scriptEdit.import')}
+              <span className="@max-lg:sr-only">{t('scriptEdit.import')}</span>
             </Button>
             <Button
               variant="ghost"
               size="xs"
               className="font-normal text-muted-foreground hover:text-foreground"
+              title={t('clone.paste')}
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => void paste()}
               disabled={pasting}
             >
               <ClipboardPasteIcon data-icon="inline-start" />
-              {t('clone.paste')}
+              <span className="@max-lg:sr-only">{t('clone.paste')}</span>
             </Button>
             <div className="relative" ref={pasteRef}>
               <Button
@@ -196,6 +203,7 @@ export function ScriptPanel({
               <Button
                 variant="ghost"
                 size="xs"
+                title={t('scriptEdit.undo')}
                 onClick={() => {
                   const field = textareaRef.current;
                   field?.focus();
@@ -206,7 +214,7 @@ export function ScriptPanel({
                 }}
               >
                 <Undo2Icon />
-                {t('scriptEdit.undo')}
+                <span className="@max-lg:sr-only">{t('scriptEdit.undo')}</span>
               </Button>
             )}
             <ScriptInsertMenu
@@ -214,6 +222,7 @@ export function ScriptPanel({
               setText={(value) => setCloneSetting('text', value)}
               onInsert={onUserEdit}
             />
+            <FocusToggle />
           </div>
         </div>
         {coachmark ? (
@@ -225,40 +234,41 @@ export function ScriptPanel({
             <span>{coachmark}</span>
           </div>
         ) : null}
-        <ScriptTagTools
-          menu={insert}
-          setText={(value) => {
-            onUserEdit?.();
-            setCloneSetting('text', value);
-          }}
-          className="flex min-h-32 flex-1 flex-col"
-        >
-          <MarkupTextarea
-            data-clone-script
-            textareaRef={textareaRef}
-            value={text}
-            unsupported={SCRIPT_UNSUPPORTED_TAGS}
-            onValueChange={(value) => {
-              insert.close();
-              onUserEdit?.();
-              setCloneSetting('text', value);
-            }}
-            placeholder={
-              voiceName
-                ? t('cloneFlow.prompt_named', { name: voiceName })
-                : t('clone.prompt_placeholder')
-            }
-            aria-label={t('clone.text_label')}
-            className="min-h-32 flex-1"
-            textClassName="py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
-            onKeyDown={insert.onEditorKeyDown}
-          />
-        </ScriptTagTools>
-        <div className="flex justify-end">
-          <span className="text-[length:var(--text-label)] text-muted-foreground tabular-nums">
-            {t('clone.characters', { count: text.length })}
-          </span>
-        </div>
+        <ScriptEditorFrame text={text} speed={speed}>
+          {(textStyle) => (
+            <ScriptTagTools
+              menu={insert}
+              setText={(value) => {
+                onUserEdit?.();
+                setCloneSetting('text', value);
+              }}
+              className="flex min-h-24 flex-1 flex-col"
+            >
+              <MarkupTextarea
+                data-clone-script
+                data-gate-target={SYNTHESIS_TARGET.cloneScript}
+                textareaRef={textareaRef}
+                value={text}
+                unsupported={SCRIPT_UNSUPPORTED_TAGS}
+                onValueChange={(value) => {
+                  insert.close();
+                  onUserEdit?.();
+                  setCloneSetting('text', value);
+                }}
+                placeholder={
+                  voiceName
+                    ? t('cloneFlow.prompt_named', { name: voiceName })
+                    : t('clone.prompt_placeholder')
+                }
+                aria-label={t('clone.text_label')}
+                className="min-h-24 flex-1"
+                textClassName="px-4 py-3 text-[length:var(--text-editor)] leading-[var(--text-editor--line-height)] placeholder:text-muted-foreground"
+                textStyle={textStyle}
+                onKeyDown={insert.onEditorKeyDown}
+              />
+            </ScriptTagTools>
+          )}
+        </ScriptEditorFrame>
       </div>
     </section>
   );

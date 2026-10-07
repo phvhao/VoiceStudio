@@ -175,7 +175,13 @@ the ones installed in System Settings). On Linux the app only uses Hunspell
 dictionaries already in its profile's `Dictionaries` folder (for example
 `~/.config/VoiceStudio/Dictionaries/vi-VN-3-0.bdic`); with none there, the
 setting says that spellchecking is unavailable offline on this system and
-nothing is underlined. Right-click spelling suggestions are not offered.
+nothing is underlined.
+
+Right-clicking an underlined word lists the dictionary's suggestions and
+**Add to dictionary** above Undo, Redo, Cut, Copy, Paste and Select all, in the
+app's language, on every platform. That is the menu of every text field
+without one of its own; the script editors of Audiobook, Stories, Clone and
+Voice Design keep their markup menu, which has no spelling suggestions.
 
 `# Title` starts a chapter (a chapter of the finished file). `## Title` and
 `### Title` start a section inside it: the title is read aloud without the

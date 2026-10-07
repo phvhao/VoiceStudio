@@ -105,8 +105,13 @@ def test_m4b_two_chapters_muxes_and_emits_full_sequence(tmp_path, monkeypatch):
         _plan(("One", "Hello world."), ("Two", "Second chapter.")),
         monkeypatch, out, fmt="m4b",
     )
-    types = [e["type"] for e in events]
+    # `progress` events stream while a chapter renders; how many arrive
+    # depends on timing, and they always come before their chapter's event.
+    types = [e["type"] for e in events if e["type"] != "progress"]
     assert types == ["started", "chapter", "chapter", "assembling", "done"]
+    for at, event in enumerate(events):
+        if event["type"] == "progress":
+            assert events[at + 1]["type"] in ("progress", "chapter")
     done = events[-1]
     assert done["chapters"] == 2 and done["failed_chapters"] == []
 

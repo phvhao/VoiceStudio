@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import re
@@ -40,11 +41,35 @@ def _profile_record(row):
     # the previous take. None when no sample exists yet (pending design voice).
     audio_file = result.get("locked_audio_path") or result.get("ref_audio_path")
     audio_path = _voices_path(str(audio_file)) if audio_file else None
+    audio_stat = os.stat(audio_path) if audio_path and os.path.isfile(audio_path) else None
     result["audio_url"] = (
-        f"/profiles/{result['id']}/audio?v={os.stat(audio_path).st_mtime_ns}"
-        if audio_path and os.path.isfile(audio_path) else None
+        f"/profiles/{result['id']}/audio?v={audio_stat.st_mtime_ns}" if audio_stat else None
+    )
+    # That clip's length, for the voice chooser's cards. None when there is no
+    # clip yet or libsndfile cannot read its format (M4A, WebM).
+    result["audio_duration_seconds"] = (
+        _clip_seconds(audio_path, audio_stat.st_mtime_ns, audio_stat.st_size)
+        if audio_stat else None
     )
     return result
+
+
+@functools.lru_cache(maxsize=4096)
+def _clip_seconds(path: str, mtime_ns: int, size: int) -> Optional[float]:
+    """A stored clip's duration from its header, or None when unreadable.
+
+    GET /profiles lists every voice, so each clip version is read once:
+    ``mtime_ns`` and ``size`` are in the key, and a replaced clip reads anew.
+    """
+    try:
+        import soundfile as sf
+
+        info = sf.info(path)
+    except Exception:  # noqa: BLE001 — no readable header: the card shows no length
+        return None
+    if info.samplerate <= 0 or info.frames <= 0:
+        return None
+    return round(info.frames / info.samplerate, 2)
 
 
 # Wall-clock bound on the best-effort transcript taken while a reference is

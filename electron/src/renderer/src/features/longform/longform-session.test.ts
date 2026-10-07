@@ -8,6 +8,7 @@ import {
   renderLongform,
   renderBody,
   chapterPreviewBody,
+  outlineRequest,
   clearLongformDraftForReset,
   passageContext,
   stopLongform,
@@ -244,6 +245,23 @@ it('chapter preview uses the same synthesis inputs as the full book', () => {
     lexicon: { SQL: 'sequel' },
   });
   expect(preview).not.toHaveProperty('cover_path');
+});
+
+it('describes a book with a pronunciation word listed twice instead of failing on it', () => {
+  const draft = {
+    ...longformSession.state.drafts.audiobook,
+    script: 'SQL',
+    lexicon: [
+      { word: 'SQL', pronunciation: 'sequel' },
+      { word: 'sql', pronunciation: 'letters' },
+    ],
+  };
+  // The outline and an audition's freshness read these on every edit: a
+  // throw here took the whole Audiobook tab down, the saved draft with it.
+  expect(outlineRequest(draft)).toHaveProperty('lexicon', { SQL: 'sequel' });
+  expect(chapterPreviewBody(draft, 0)).toHaveProperty('lexicon', { SQL: 'sequel' });
+  // A render still refuses a word with two pronunciations.
+  expect(() => renderBody('audiobook', draft)).toThrow();
 });
 
 it('retakes an Audiobook sentence in the chapter around it, asked with its preview request', () => {

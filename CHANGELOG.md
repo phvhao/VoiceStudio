@@ -86,6 +86,44 @@ metadata and the backend fallback mirror it.
 - Audiobook and Stories keep each sentence's take on its own: an edited word renders only the sentence that says it and a new pronunciation only the sentences it respells, Stop or a crash loses at most the sentence in progress, and Listen plays the takes the book reads there; chapters cached by earlier versions keep playing and render once more on their first edit
 - Changing a punctuation pause, trimming, the gap between paragraphs, voice leveling or a volume joins the sentences already rendered without rendering any, turning the speech check on only listens to them, and turning it off again reads each as first rendered; Pause at every comma renders only the sentences it cuts differently
 - Right-click a sentence in Audiobook or Stories (or open the card of a reaction, delivery or respelling in it) to Retake this sentence: only that take renders again (a remote worker reads it anew too), and only there (the same line elsewhere keeps its take); Audiobook plays its paragraph at once, and the Contents rail says how many sentences a changed chapter has left to render
+- Back and Forward arrows before each screen's title return to the screens you visited, naming where they lead; Alt+← / Alt+→ (⌘[ / ⌘] on a Mac) and the mouse's side buttons do the same, outside text fields, and a screen you return to is scrolled where you left it
+- In a narrow window the title bar keeps each screen's title on one line and shortens the open book's name instead of covering the link beside it; Get Pro and Star show just their icons until the workspace is 1024 px wide
+- Text fields get a right-click menu in the app's language on Windows, macOS and Linux: Undo, Redo, Cut, Copy, Paste and Select all, with the dictionary's suggestions and Add to dictionary for an underlined word; selected text elsewhere offers Copy
+- Dubbing's link field has a Paste button: one click fills in a copied video link, and a clipboard without one leaves the field as it was and says so; a link being typed is still there when you come back to the page
+- Paste in the script editors' right-click menu and Clone's Paste button still work when the page may not read the clipboard, and the right-click menu says when it cannot paste instead of doing nothing
+- Settings → Models: a gated model's Hugging Face access panel stays inside its card and wraps its text and buttons at any window size, and a short card no longer stretches to match a taller neighbour
+- Why an engine, speaker-diarisation runtime or translation provider is unavailable, its CPU or GPU caveat, and why a model could not be unloaded now show in the app's language in Settings and the status bar; the API keeps its English sentence and adds a stable `reason_code` beside it
+- Status labels such as Unavailable, Installed, Downloading and Select start with a capital letter in every language, and Test engine, Installing and the Optional and Recommended chips are translated as what they do
+- Choosing an engine, or being refused one, no longer passes the engine probe's own text (which can hold local paths) back to the app
+- Choose a voice uses the whole window: cards in as many columns as fit, whole names on two lines, each clip's length and date, ▶ to audition on hover, chips for shared name prefixes (ktnb-, chanel-), arrow keys to move between voices and chips and / to search; Add a new voice stays one row until you upload, record or drag audio in
+- `GET /profiles` gives each voice's clip length as `audio_duration_seconds`
+- Clone and Voice Design scripts widen with the window and take its height, count characters, words, sentences and the time read aloud, zoom with Ctrl/⌘ + − 0, and Focus hides everything but the script until Esc, keeping a playing take and an unsaved profile edit as they were
+- Recent takes sit under the Clone and Voice Design composers, newest first, one row each with ▶; a draggable edge sizes them or folds them to one line, only the chosen take opens with its waveform, and the audio check stays folded
+- The folded Voice Design panel's expand button and an offline worker in the status bar show their labels instead of raw text
+- Vietnamese: takes are "bản thu", and Record, Reuse script, Preview voice, Star and a take's timing read naturally
+- Audiobook and Stories previews no longer lock the editor, cast or settings: one preview renders at a time, Generate waits for it, and a chapter preview has its own Stop
+- Stopping a preview frees the GPU after the sentence in progress instead of rendering on to the end, and the render log says "cancelled", not "complete"
+- Renders and chapter or passage previews show progress inside a chapter — loading the voice model, waiting for another job, sentences done — with a time left even for a one-chapter book
+- A chapter or Stories line preview whose text or settings changed stays, marked Outdated, and typing elsewhere no longer stops or clears it; changing the engine, the Performance preset or Settings → Reading marks it too
+- Retaking a sentence while a preview renders stops a passage preview or a preview of that chapter, which read the old take, and plays the retake once it has; deleting or clearing a Stories line while it is heard stops its audition
+- Stories line previews read at the steps the story renders at, the performance preset's, instead of a fixed 32
+- Dubbing with NLLB or Argos translates every sentence of a line: NLLB often returned only the last sentence of a two-sentence line; a sentence too short to stand alone (No., Oh., a list's 1.) goes with its neighbour instead of coming back as one NLLB made up, and a closing quote or bracket stays with its sentence
+- A translated dubbing line that is much shorter than the original, or has fewer sentences, shows May be missing content with Translate again, a more literal pass over that line, for every translator including Translate with Agent
+- Translate again keeps the whole line (no Cinematic rewrite or Autofit trim), is one Undo, and Retry after a failed one retries only that line; complete translations from Japanese are no longer flagged
+- Smart Fit fits short lines too: the audio slows to 0.9× at most and that part of the video speeds up to 1.25×, background included, instead of leaving a silent gap while the mouth still moves; a line that may be missing content is never sped up, and is slowed down like any line when its dub runs long
+- Changing a dubbing line's video timing, or the timing mode, after a render shows Timing changed with Apply timing, which places the speech already rendered anew without generating it again
+- A dubbed MP4's Original track and the stems ZIP's background follow a Smart Fit or Stretch Video timeline, and a dub shorter than the picture no longer cuts the exported video short
+- Smart Fit on an audio file fits each line by its audio alone, so the background music keeps its tempo, and its lines no longer offer a Video timing
+- Each dubbing line's options choose Auto, Keep, Allow shrink or Allow stretch for its video, saved with the project; retimed lines show a Video 0.85× badge, and Smart Fit and Stretch Video explain both directions
+- Smart Fit no longer slows a dubbed line that already covers the original speech into the pause after it
+- Dubbing's Verify listens for each line where Smart Fit or Stretch Video placed it, instead of flagging correct lines once an earlier line was retimed
+- Dubbing's Export, Translate and Generate, Batch's Add to Queue and a workflow's Run no longer grey out without a reason: they look unfinished, and pressing one lists what is missing (no generated dub yet, no target language, an engine still starting) with a button that goes to the fix
+- Clone and Voice Design's Synthesize audio and Audiobook and Stories' Generate explain themselves the same way: pressing one (or Ctrl+Enter in Clone) lists every missing piece — the script, a voice, the default or a cast voice, the voice engine — and goes to it
+- A pronunciation word typed twice no longer takes down the Audiobook tab; the copy is marked, and Create audiobook leads to it
+- Vietnamese: Dubbing's Export button reads "Xuất tệp" and its track list "Bản âm thanh", not trade exports and songs
+- Settings → Performance says why a model could not be unloaded (in use by dictation, busy) instead of reporting it unloaded
+- The notice after Synthesize that a take ran on the CPU, or on a GPU with a caveat, is in the app's language; `/generate` adds an `X-OmniVoice-Routing-Reason-Code` header
+- A voice's clip length reads in each language's own unit of seconds: Turkish showed "12'ler" ("the twelves") and Dutch "12's"
 
 ## [0.5.7] — 2026-10-05
 

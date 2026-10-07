@@ -15,13 +15,11 @@ import { SaveAudioButton } from '@/components/save-audio-button';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { audioUrl } from '@/lib/api/client';
 import type { HistoryItem } from '@/lib/api/types';
-import { reuseTake, takeSettings } from '@/lib/store/takes';
+import { takeSettings } from '@/lib/store/takes';
 import { useGenerateClone } from '@/hooks/use-generate';
 import { useNavigate } from '@tanstack/react-router';
-import { designDraftFromTake, writeDraft } from '@/features/design/design-draft';
-import { openTake } from '@/lib/store/takes';
-import { setCloneSetting } from '@/lib/store/clone-settings';
 import { formatRelative, formatSeconds } from './format';
+import { reuseHistoryTake } from './reuse-take';
 
 const NUMERIC_SETTINGS = [
   ['steps', 'clone.steps'],
@@ -49,15 +47,8 @@ export function TakeDetails({ item }: { item: HistoryItem }) {
     settings.denoise !== undefined ||
     settings.postprocess !== undefined;
   const reuse = async () => {
-    if (isDesign) {
-      writeDraft(designDraftFromTake(item));
-      setCloneSetting('language', item.language || 'Auto');
-      openTake(null);
-      await navigate({ to: '/design' });
-      return;
-    }
-    await reuseTake(item);
-    await navigate({ to: '/clone' });
+    await reuseHistoryTake(item);
+    await navigate({ to: isDesign ? '/design' : '/clone' });
   };
   return (
     <div className="flex flex-col gap-5">

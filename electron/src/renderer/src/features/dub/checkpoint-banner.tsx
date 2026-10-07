@@ -8,6 +8,7 @@ import {
   XIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { GatedAction, type ActionBlocker, type ActionStep } from '@/components/gated-action';
 import { Button } from '@/components/ui/button';
 
 export type CheckpointStage = 'asr' | 'translate' | 'done';
@@ -39,13 +40,16 @@ const stages = {
 export function CheckpointBanner({
   stage,
   timingWarnings,
-  disabled,
+  blockers,
+  steps,
   onContinue,
   onDismiss,
 }: {
   stage: CheckpointStage;
   timingWarnings: number;
-  disabled?: boolean;
+  /** What the next step still needs; Continue explains it instead of greying out. */
+  blockers?: readonly ActionBlocker[];
+  steps?: readonly ActionStep[];
   onContinue?: () => void;
   onDismiss: () => void;
 }) {
@@ -73,11 +77,19 @@ export function CheckpointBanner({
         )}
       </div>
       {config.cta && onContinue && (
-        <Button size="sm" variant="secondary" disabled={disabled} onClick={onContinue}>
+        <GatedAction
+          size="sm"
+          variant="secondary"
+          side="bottom"
+          align="end"
+          blockers={blockers}
+          steps={steps}
+          onClick={onContinue}
+        >
           {ActionIcon && <ActionIcon />}
           {t(config.cta)}
           <ArrowRightIcon />
-        </Button>
+        </GatedAction>
       )}
       <Button
         size="icon-sm"

@@ -13,6 +13,17 @@ import { segmentGenInputs } from '@shared/utils/segments';
 import { clampSegmentEdit } from '@shared/utils/timeline';
 import { dialectLabel, dialectMatchesLang, dialectOptionsFor } from '@shared/api/dialects';
 import { DubExportPanel } from './dub-export-panel';
+import { DubUrlField, useDubUrlDraft } from './dub-url-field';
+import {
+  DUB_TARGET,
+  describeDubBlockers,
+  dubGenerateBlockers,
+  dubSteps,
+  dubTranslateBlockers,
+  type DubBlocker,
+  type DubTranslator,
+} from './dub-gates';
+import { GatedAction } from '@/components/gated-action';
 import { DubTimeline } from './dub-timeline';
 import { PasteTranslation } from './paste-translation';
 import { GlossaryPanel } from './glossary-panel';
@@ -84,6 +95,7 @@ import {
 import { LanguagePicker, MultiLanguagePicker } from '@/features/clone/language-picker';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { useTranslationEngines } from '@/features/settings/translation-settings';
+import { providerUnavailableText } from '@/lib/engine-reasons';
 import { agentFitSkillsReady, useLlmSkills } from '@/features/settings/llm-skills';
 import { useModelCatalogue } from '@/features/settings/model-catalogue-query';
 import { useProfiles } from '@/hooks/use-profiles';
@@ -138,7 +150,10 @@ import {
   restoreDubSegments,
   skipFailedDubTranslations,
   planDubIncremental,
+  omissionFor,
+  dubTimingChanged,
 } from './dub-session';
+import { OmissionFlag, VideoFitBadge, VideoFitControl, segmentVideoRatio } from './segment-fit';
 import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 
 const DEFAULT_TRANSLATION_AGENT_KEY = 'voicestudio.defaultTranslationAgent';
@@ -225,7 +240,7 @@ export function DubPage() {
   const [segmentScrollMargin, setSegmentScrollMargin] = useState(0);
   const target = session.target;
   const setTarget = setDubTarget;
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useDubUrlDraft();
   const [dragging, setDragging] = useState(false);
   const [cookieFile, setCookieFile] = useState<File>();
   const [cookieError, setCookieError] = useState(false);
@@ -788,6 +803,16 @@ export function DubPage() {
     const skipped = await translateDubBatch(batchTargets, provider.id);
     if (skipped.length) toast.error(t('dub.multi_lang_skipped', { langs: skipped.join(', ') }));
   };
+  // "Translate again" on a row flagged as possibly missing content: the same
+  // translator, one more literal pass over that row alone.
+  const agentRetranslates = session.quality === 'agent' && Boolean(selectedTranslationAgent);
+  const translateSegmentAgain = async (id: string) => {
+    if (!code) return;
+    if (agentRetranslates && selectedTranslationAgent)
+      await translateDubWithAgent(code, selectedTranslationAgent.id, target, { segmentIds: [id] });
+    else if (provider && translationReady)
+      await translateDub(code, provider.id, { segmentIds: [id], retryIncomplete: true });
+  };
   const installArgosLanguagePacks = async () => {
     if (!missingArgosPacks.length || installingArgosPacks) return;
     setInstallingArgosPacks(true);
@@ -817,6 +842,84 @@ export function DubPage() {
     const skipped = await generateDubBatch(batchTargets, provider?.id);
     if (skipped.length) toast.error(t('dub.multi_lang_skipped', { langs: skipped.join(', ') }));
   };
+  // The timing mode, or a line's video timing, changed since this language's
+  // track rendered: its speech stays, placed anew by a re-fit.
+  const timingChanged = Boolean(code) && dubTimingChanged(session, code!);
+  const applyTiming = async () => {
+    if (!code || ttsBlocker !== null) return;
+    await generateDub(target, code, { regenOnly: [] });
+  };
+  // What Translate and Generate still need, said as what to do: a greyed-out
+  // pipeline button with no reason reads as a broken app (see GatedAction).
+  const translator: DubTranslator = engines.isPending
+    ? 'loading'
+    : !(provider?.ready ?? provider?.installed)
+      ? 'unavailable'
+      : needsArgosPackCheck && argosPacks.isPending
+        ? 'loading'
+        : needsArgosPackCheck && argosPacks.isError
+          ? 'packs_failed'
+          : needsArgosPackCheck && missingArgosPacks.length
+            ? 'packs_missing'
+            : null;
+  const emptySegmentCount = session.segments.filter((segment) => !segment.text.trim()).length;
+  const showEmptySegment = () => {
+    const index = session.segments.findIndex((segment) => !segment.text.trim());
+    const segment = session.segments[index];
+    if (!segment) return;
+    segmentVirtualizer.scrollToIndex(index, { align: 'center' });
+    setSelectedSegmentId(segment.id);
+    setEditingSegmentId(segment.id);
+  };
+  const describeBlockers = (blockers: DubBlocker[]) =>
+    describeDubBlockers(blockers, {
+      t,
+      emptySegments: emptySegmentCount,
+      languagePacks: missingArgosPacks
+        .map((pair) => `${pair.source_lang} → ${pair.target_lang}`)
+        .join(', '),
+      showEmptySegment,
+      openSettings: (family) =>
+        runRendererTask('Open model settings', () =>
+          navigate({ to: '/settings/models/$family', params: { family } }),
+        ),
+    });
+  const gateState = {
+    busy,
+    recovery: Boolean(session.recovery),
+    hasSource: Boolean(session.jobId),
+    segments: session.segments.length,
+    hasTarget: Boolean(code),
+  };
+  const translateBlockers = describeBlockers(dubTranslateBlockers({ ...gateState, translator }));
+  // A local agent CLI translates on its own; the LLM route goes through the engine.
+  const agentTranslateBlockers = describeBlockers(
+    dubTranslateBlockers({ ...gateState, translator: selectedTranslationAgent ? null : translator }),
+  );
+  const generateBlockers = describeBlockers(
+    dubGenerateBlockers({
+      ...gateState,
+      tts: ttsBlocker,
+      needsTranslator: batchTargets.length > 1 && !agentBatchReady,
+      translator,
+      emptySegments: emptySegmentCount,
+    }),
+  );
+  // Regenerating changed lines skips empty ones and translates nothing.
+  const regenBlockers = describeBlockers(
+    dubGenerateBlockers({
+      ...gateState,
+      tts: ttsBlocker,
+      needsTranslator: false,
+      translator: null,
+      emptySegments: 0,
+    }),
+  );
+  const steps = dubSteps(t, {
+    transcribed: session.segments.length > 0,
+    translated: hasCompleteTranslation(session.segments, code || ''),
+    generated: session.tracks.length > 0,
+  });
 
   const splitAtCursor = (id: string, text: string) => {
     const remembered = cursors.current.get(id);
@@ -903,6 +1006,7 @@ export function DubPage() {
           className="flex flex-col gap-2"
         >
           <section
+            data-gate-target={DUB_TARGET.upload}
             className={cn(
               'space-y-3 rounded-xl border border-border/60 bg-muted/15 p-3 transition-colors',
               session.jobId && !['idle', 'preparing'].includes(session.phase) && 'rounded-b-md',
@@ -969,34 +1073,16 @@ export function DubPage() {
                     }
                   }}
                 >
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <Input
-                        type="url"
-                        value={url}
-                        onChange={(event) => setUrl(event.target.value)}
-                        aria-label={t('dub.paste_url')}
-                        placeholder={t('dub.paste_url')}
-                        disabled={busy || Boolean(session.recovery)}
-                      />
-                    </div>
-                    {url && (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        aria-label={t('common.clear')}
-                        disabled={busy || Boolean(session.recovery)}
-                        onClick={() => {
-                          setUrl('');
-                          setCookieFile(undefined);
-                          setCookieError(false);
-                        }}
-                      >
-                        {t('common.clear')}
-                      </Button>
-                    )}
-                  </div>
+                  <DubUrlField
+                    value={url}
+                    onChange={setUrl}
+                    onClear={() => {
+                      setUrl('');
+                      setCookieFile(undefined);
+                      setCookieError(false);
+                    }}
+                    disabled={busy || Boolean(session.recovery)}
+                  />
                   {url && (
                     <details className="space-y-2">
                       <summary className="cursor-pointer text-xs text-muted-foreground">
@@ -1297,7 +1383,10 @@ export function DubPage() {
               )}
             </section>
           )}
-          <section className="space-y-3 rounded-xl border border-border/60 bg-muted/15 p-3">
+          <section
+            data-gate-target={DUB_TARGET.language}
+            className="space-y-3 rounded-xl border border-border/60 bg-muted/15 p-3"
+          >
             <h2 className="flex items-center gap-2 text-sm font-medium">
               <span className="grid size-5 place-items-center rounded-full bg-primary/12 text-[11px] font-semibold text-primary">
                 2
@@ -1528,7 +1617,8 @@ export function DubPage() {
             <Link
               to="/settings/models/$family"
               params={{ family: 'translation' }}
-              className="flex items-center gap-2 text-sm text-muted-foreground"
+              data-gate-target={DUB_TARGET.translator}
+              className="flex items-center gap-2 rounded-md text-sm text-muted-foreground"
             >
               <Settings2Icon className="size-4" />
               <span>{provider?.display_name || t('engineSidebar.translation')}</span>
@@ -1543,7 +1633,12 @@ export function DubPage() {
                 className="text-xs"
                 fallback={describeError(argosPacks.error)}
                 action={
-                  <Button size="xs" variant="ghost" onClick={() => void argosPacks.refetch()}>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    data-gate-target={DUB_TARGET.languagePacks}
+                    onClick={() => void argosPacks.refetch()}
+                  >
                     <RotateCcwIcon />
                     {t('backend.retry')}
                   </Button>
@@ -1560,6 +1655,7 @@ export function DubPage() {
                   <Button
                     size="xs"
                     variant="outline"
+                    data-gate-target={DUB_TARGET.languagePacks}
                     disabled={installingArgosPacks}
                     onClick={() => void installArgosLanguagePacks()}
                   >
@@ -1576,7 +1672,7 @@ export function DubPage() {
             {provider && !(provider.ready ?? provider.installed) && (
               <PipelineFailure
                 className="text-xs"
-                fallback={provider.availability_reason || t('modelSettings.unavailable')}
+                fallback={providerUnavailableText(t, provider) || t('modelSettings.unavailable')}
               />
             )}
           </section>
@@ -1604,6 +1700,13 @@ export function DubPage() {
                       variant={
                         (session.timingStrategy || 'strict_slot') === value ? 'secondary' : 'ghost'
                       }
+                      title={
+                        value === 'smart_fit' && isAudioSource
+                          ? t('dub.timing_smart_fit_audio_title')
+                          : value === 'smart_fit' || value === 'stretch_video'
+                            ? t('dub.timing_' + value + '_title')
+                            : undefined
+                      }
                       onClick={() => setDubProduction({ timingStrategy: value })}
                     >
                       {t('dub.timing_' + (value === 'strict_slot' ? 'lip_sync' : value))}
@@ -1611,8 +1714,21 @@ export function DubPage() {
                   ),
                 )}
               </div>
-              {['smart_fit', 'stretch_video'].includes(session.timingStrategy || '') && (
-                <p className="text-xs text-muted-foreground">{t('exportModal.retime_note')}</p>
+              {session.timingStrategy === 'smart_fit' && isAudioSource ? (
+                // No picture: Smart Fit fits each line by its audio alone.
+                <p className="text-xs text-muted-foreground">
+                  {t('dub.timing_smart_fit_audio_title')}
+                </p>
+              ) : (
+                (session.timingStrategy === 'smart_fit' ||
+                  session.timingStrategy === 'stretch_video') && (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      {t('dub.timing_' + session.timingStrategy + '_title')}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{t('exportModal.retime_note')}</p>
+                  </>
+                )
               )}
               <p className="text-xs font-medium text-muted-foreground">{t('dub.voice_match')}</p>
               <p className="text-xs text-muted-foreground">{t('dub.voice_match_title')}</p>
@@ -1719,6 +1835,7 @@ export function DubPage() {
             key={session.jobId || session.inputType}
             session={session}
             disabled={busy || Boolean(session.recovery)}
+            steps={steps}
           />
         </SecondarySidebar>
         <section data-slot="dub-transcript" className="flex min-w-0 flex-1 flex-col">
@@ -1730,7 +1847,10 @@ export function DubPage() {
             )}
           >
             {session.recovery && !busy && (
-              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-warning/20 bg-warning/5 p-3">
+              <div
+                data-gate-target={DUB_TARGET.recovery}
+                className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-warning/20 bg-warning/5 p-3"
+              >
                 <div className="mr-auto min-w-48">
                   <p className="text-sm font-medium">
                     {session.asrModelMissing ? t('asr_missing.message') : t('dub.pipeline')}
@@ -2163,12 +2283,15 @@ export function DubPage() {
                     session.segments.filter((segment) => segment.fit_status?.status === 'overflows')
                       .length
                   }
-                  disabled={
+                  steps={steps}
+                  blockers={
                     checkpointStage === 'asr'
-                      ? !code || !translationReady
+                      ? session.quality === 'agent'
+                        ? agentTranslateBlockers
+                        : translateBlockers
                       : checkpointStage === 'translate'
-                        ? !code || ttsBlocker !== null
-                        : false
+                        ? generateBlockers
+                        : undefined
                   }
                   onContinue={
                     checkpointStage === 'asr'
@@ -2428,8 +2551,10 @@ export function DubPage() {
                                 segment.translate_degraded ||
                                 segment.plan?.status === 'tight' ||
                                 segment.plan?.status === 'impossible' ||
-                                segment.fit_status?.status === 'overflows') && (
+                                segment.fit_status?.status === 'overflows' ||
+                                segmentVideoRatio(segment.fit_status) !== undefined) && (
                                 <div className="ml-auto flex shrink-0 flex-wrap justify-end gap-1">
+                                  <VideoFitBadge fit={segment.fit_status} />
                                   {segment.translate_error && (
                                     <span
                                       className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive"
@@ -2660,6 +2785,17 @@ export function DubPage() {
                                 <span className="line-clamp-2">{segment.text}</span>
                               </button>
                             )}
+                            {omissionFor(segment, code) && (
+                              <OmissionFlag
+                                omission={omissionFor(segment, code)!}
+                                disabled={
+                                  busy ||
+                                  Boolean(session.recovery) ||
+                                  !(agentRetranslates || (provider && translationReady))
+                                }
+                                onTranslateAgain={() => void translateSegmentAgain(segment.id)}
+                              />
+                            )}
                             {segment.plan?.suggested_text && (
                               <div className="flex items-center gap-2 rounded-md border border-warning/20 bg-warning/5 p-1.5 text-xs">
                                 <span className="min-w-0 flex-1 truncate text-muted-foreground">
@@ -2769,6 +2905,17 @@ export function DubPage() {
                                         }
                                       />
                                     </label>
+                                    {/* An audio file has no picture to retime. */}
+                                    {session.timingStrategy === 'smart_fit' && !isAudioSource && (
+                                      <VideoFitControl
+                                        value={segment.video_fit}
+                                        mayBeIncomplete={Boolean(omissionFor(segment, code))}
+                                        disabled={busy || Boolean(session.recovery)}
+                                        onChange={(video_fit) =>
+                                          editDubSegment(segment.id, { video_fit })
+                                        }
+                                      />
+                                    )}
                                   </div>
                                   <div className="mt-3 flex gap-2">
                                     <Input
@@ -2857,7 +3004,11 @@ export function DubPage() {
             <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border/50 px-6 py-4">
               {busy ? (
                 <>
-                  <span role="status" className="mr-auto text-sm text-muted-foreground">
+                  <span
+                    role="status"
+                    data-gate-target={DUB_TARGET.progress}
+                    className="mr-auto rounded-md text-sm text-muted-foreground"
+                  >
                     {session.batchProgress
                       ? `${session.batchProgress.current}/${session.batchProgress.total} · ${session.batchProgress.language} · `
                       : ''}
@@ -2882,37 +3033,36 @@ export function DubPage() {
                         ? t('dub.segments_changed', {
                             count: incrementalPlan.stale.length,
                           })
-                        : t('dub.all_up_to_date', {
-                            count: incrementalPlan.fresh.length,
-                          })}
+                        : timingChanged
+                          ? t('dub.timing_changed')
+                          : t('dub.all_up_to_date', {
+                              count: incrementalPlan.fresh.length,
+                            })}
                     </span>
                   )}
                   {session.quality !== 'agent' && (
-                    <Button
+                    <GatedAction
                       variant="outline"
-                      disabled={
-                        Boolean(session.recovery) ||
-                        !session.segments.length ||
-                        !code ||
-                        !translationReady
-                      }
+                      data-gate-target={DUB_TARGET.translate}
+                      blockers={translateBlockers}
+                      steps={steps}
                       onClick={() => void translateTargets()}
                     >
                       <LanguagesIcon />
                       {t('dub.translate_all')}
-                    </Button>
+                    </GatedAction>
                   )}
                   {selectedTranslationAgent ? (
                     <div className="flex items-center">
-                      <Button
+                      <GatedAction
                         data-slot="translate-with-agent"
+                        data-gate-target={DUB_TARGET.translate}
                         variant={
                           session.agentCli === selectedTranslationAgent.id ? 'default' : 'outline'
                         }
                         className="rounded-r-none border-primary/25 bg-primary/[0.06] text-foreground hover:bg-primary/10"
-                        disabled={
-                          Boolean(session.recovery) || !session.segments.length || !code || busy
-                        }
+                        blockers={agentTranslateBlockers}
+                        steps={steps}
                         title={t('dub.agent_cli_desc', {
                           agent: selectedTranslationAgent.label,
                         })}
@@ -2920,7 +3070,7 @@ export function DubPage() {
                       >
                         <WandSparklesIcon />
                         {t('dub.translate_with_agent')}
-                      </Button>
+                      </GatedAction>
                       <Menu.Root>
                         <Menu.Trigger
                           aria-label={t('dub.choose_translation_agent')}
@@ -2979,39 +3129,49 @@ export function DubPage() {
                       {t('dub.translate_with_agent')}
                     </Button>
                   ) : llmAgentReady ? (
-                    <Button
+                    <GatedAction
                       data-slot="translate-with-agent"
+                      data-gate-target={DUB_TARGET.translate}
                       variant={session.quality === 'agent' ? 'default' : 'outline'}
                       className="border-primary/25 bg-primary/[0.06] text-foreground hover:bg-primary/10"
-                      disabled={
-                        Boolean(session.recovery) || !session.segments.length || !code || busy
-                      }
+                      blockers={agentTranslateBlockers}
+                      steps={steps}
                       title={t('dub.agent_quality_desc')}
                       onClick={() => void translateTargets(true)}
                     >
                       <WandSparklesIcon />
                       {t('dub.translate_with_agent')}
-                    </Button>
+                    </GatedAction>
                   ) : (
-                    <Button
+                    <GatedAction
                       data-slot="translate-with-agent"
                       variant="outline"
-                      disabled
-                      title={t('dub.no_local_agents')}
+                      blockers={[
+                        {
+                          id: 'no_agent',
+                          message: t('gatedAction.dub_no_agent'),
+                          fix: {
+                            label: t('gatedAction.open_settings'),
+                            onSelect: () =>
+                              runRendererTask('Open LLM settings', () =>
+                                navigate({
+                                  to: '/settings/models/$family',
+                                  params: { family: 'llm' },
+                                }),
+                              ),
+                          },
+                        },
+                      ]}
                     >
                       <WandSparklesIcon />
                       {t('dub.translate_with_agent')}
-                    </Button>
+                    </GatedAction>
                   )}
-                  <Button
-                    disabled={
-                      Boolean(session.recovery) ||
-                      ttsBlocker !== null ||
-                      !session.segments.length ||
-                      !code ||
-                      (batchTargets.length > 1 && !translationReady && !agentBatchReady) ||
-                      session.segments.some((segment) => !segment.text.trim())
-                    }
+                  <GatedAction
+                    data-gate-target={DUB_TARGET.generate}
+                    blockers={generateBlockers}
+                    steps={steps}
+                    align="end"
                     onClick={() => void generateTargets()}
                   >
                     <PlayIcon />
@@ -3020,19 +3180,35 @@ export function DubPage() {
                           count: batchTargets.length,
                         })
                       : t('dub.generate_dub')}
-                  </Button>
+                  </GatedAction>
                   {session.phase === 'done' && Boolean(incrementalPlan?.stale.length) && (
-                    <Button
+                    <GatedAction
                       variant="secondary"
-                      disabled={Boolean(session.recovery) || ttsBlocker !== null || !code}
+                      blockers={regenBlockers}
+                      align="end"
                       onClick={() => void generateTargets(incrementalPlan?.stale)}
                     >
                       <PlayIcon />
                       {t('dub.regen_changed', {
                         count: incrementalPlan?.stale.length || 0,
                       })}
-                    </Button>
+                    </GatedAction>
                   )}
+                  {/* Regenerating changed lines re-fits the track too. */}
+                  {session.phase === 'done' &&
+                    timingChanged &&
+                    !incrementalPlan?.stale.length && (
+                      <GatedAction
+                        variant="secondary"
+                        blockers={regenBlockers}
+                        align="end"
+                        title={t('dub.apply_timing_title')}
+                        onClick={() => void applyTiming()}
+                      >
+                        <Clock3Icon />
+                        {t('dub.apply_timing')}
+                      </GatedAction>
+                    )}
                 </>
               )}
             </footer>

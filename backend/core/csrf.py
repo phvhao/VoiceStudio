@@ -151,6 +151,7 @@ CORS_EXPOSED_HEADERS = (
     "X-Seed",
     "X-OmniVoice-Routing",
     "X-OmniVoice-Routing-Reason",
+    "X-OmniVoice-Routing-Reason-Code",
     "X-OmniVoice-Dropped-Chunks",
     "X-OmniVoice-Dropped-Text",
     "X-Clean-Filename",

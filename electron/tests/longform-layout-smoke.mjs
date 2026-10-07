@@ -86,8 +86,40 @@ try {
     }
     await page.locator('[data-slot=secondary-sidebar-header] button').click();
   }
+  // The title bar — Back/Forward, the title, the book's name and the link to
+  // the other mode — keeps its controls apart and the title on one line.
+  for (const screen of ['stories', 'audiobook']) {
+    await page.goto((process.env.VOICESTUDIO_UI_URL || 'http://localhost:3912') + '/#/' + screen);
+    await page.locator('header.workspace-titlebar h1').waitFor();
+    for (const width of [900, 1280]) {
+      await page.setViewportSize({ width, height: 720 });
+      await page.waitForTimeout(200);
+      const crowding = await page.evaluate(() => {
+        const header = document.querySelector('header.workspace-titlebar');
+        const items = [...header.querySelectorAll('h1, a, button')]
+          .map((element) => ({ element, box: element.getBoundingClientRect() }))
+          .filter(({ box }) => box.width > 0 && box.height > 0);
+        const problems = [];
+        for (const [index, a] of items.entries())
+          for (const b of items.slice(index + 1)) {
+            if (a.element.contains(b.element) || b.element.contains(a.element)) continue;
+            const x = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left);
+            const y = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
+            if (x > 1 && y > 1)
+              problems.push(`${a.element.textContent} overlaps ${b.element.textContent}`);
+          }
+        const title = document.createRange();
+        title.selectNodeContents(header.querySelector('h1'));
+        if (title.getClientRects().length > 1) problems.push('the title wraps');
+        return problems;
+      });
+      assert.deepEqual(crowding, [], `the ${screen} title bar is crowded at ${width}px`);
+    }
+  }
   assert.deepEqual(errors, []);
-  console.log('Longform Stop stays inside the setup pane at desktop and compact widths.');
+  console.log(
+    'Longform Stop stays inside the setup pane, and the title bar keeps its controls apart, at desktop and compact widths.',
+  );
 } finally {
   await browser.close();
 }

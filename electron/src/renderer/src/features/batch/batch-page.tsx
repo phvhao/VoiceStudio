@@ -22,9 +22,12 @@ import { EngineNotice } from '@/components/engine-notice';
 import { WatchFolder } from './watch-folder';
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UploadIcon, XIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { GatedAction, revealGateTarget, type ActionBlocker } from '@/components/gated-action';
+import { runRendererTask } from '@/lib/global-error-recovery';
 import { EngineLanguagePicker } from '@/features/clone/engine-language-picker';
 import { Switch } from '@/components/ui/switch';
 import { useProfiles } from '@/hooks/use-profiles';
@@ -40,6 +43,7 @@ import { generationFailureMessage } from '@shared/utils/generationFailureMessage
 import { enqueueVideos } from './enqueue';
 import { cachedTtsLanguagesSupported } from '@/lib/language-options';
 import { useTranslationEngines } from '@/features/settings/translation-settings';
+import { providerUnavailableText } from '@/lib/engine-reasons';
 const languageOptions = LANG_CODES.map((item) => item.label);
 export function BatchPage() {
   const { t } = useTranslation();
@@ -84,6 +88,44 @@ export function BatchPage() {
     refetchInterval: tab === 'done' ? false : 3000,
   });
   const jobs = tab === 'active' ? activeJobs : finishedJobs;
+  const navigate = useNavigate();
+  const openSettings = (family: 'tts' | 'translation') =>
+    runRendererTask('Open model settings', () =>
+      navigate({ to: '/settings/models/$family', params: { family } }),
+    );
+  const show = (target: string, fallback?: () => void) => ({
+    label: t('gatedAction.show'),
+    onSelect: () => {
+      if (!revealGateTarget(target)) fallback?.();
+    },
+  });
+  // What Add to Queue still needs, said as what to do (see GatedAction).
+  const blockers: ActionBlocker[] = [];
+  if (!files.length)
+    blockers.push({
+      id: 'files',
+      message: t('gatedAction.batch_no_files'),
+      fix: show('batch-files'),
+    });
+  if (!langs.length)
+    blockers.push({
+      id: 'languages',
+      message: t('gatedAction.batch_no_languages'),
+      fix: show('batch-languages'),
+    });
+  if (ttsBlocker === 'loading') blockers.push({ id: 'tts', message: t('gatedAction.tts_loading') });
+  if (ttsBlocker === 'engine')
+    blockers.push({
+      id: 'tts',
+      message: t('gatedAction.tts_engine'),
+      fix: show('engine-notice', () => openSettings('tts')),
+    });
+  if (translationEngines.data && !(translationEngine?.ready ?? translationEngine?.installed))
+    blockers.push({
+      id: 'translator',
+      message: t('gatedAction.translator'),
+      fix: { label: t('gatedAction.open_settings'), onSelect: () => openSettings('translation') },
+    });
   const submit = async () => {
     if (uploading.current || ttsBlocker !== null || !files.length || !langs.length) return;
     if (!cachedTtsLanguagesSupported(client, 'batch', langs)) {
@@ -212,7 +254,12 @@ export function BatchPage() {
               if (!busy) addFiles(Array.from(event.dataTransfer.files));
             }}
           >
-            <Button className="w-full" disabled={busy} onClick={() => input.current?.click()}>
+            <Button
+              className="w-full"
+              data-gate-target="batch-files"
+              disabled={busy}
+              onClick={() => input.current?.click()}
+            >
               <UploadIcon />
               {t('batch.add_videos')}
             </Button>
@@ -250,7 +297,10 @@ export function BatchPage() {
               </p>
             )}
           </section>
-          <section className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+          <section
+            data-gate-target="batch-languages"
+            className="space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3"
+          >
             <h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
               <LanguagesIcon className="size-4" />
               {t('batch.target_languages')}
@@ -289,7 +339,7 @@ export function BatchPage() {
               !(translationEngine?.ready ?? translationEngine?.installed) && (
                 <PipelineFailure
                   fallback={
-                    translationEngine?.availability_reason || t('modelSettings.unavailable')
+                    providerUnavailableText(t, translationEngine) || t('modelSettings.unavailable')
                   }
                 />
               )}
@@ -351,22 +401,14 @@ export function BatchPage() {
               />
             </div>
           </section>
-          <Button
+          <GatedAction
             className="w-full"
-            disabled={
-              busy ||
-              ttsBlocker !== null ||
-              !files.length ||
-              !langs.length ||
-              Boolean(
-                translationEngines.data &&
-                !(translationEngine?.ready ?? translationEngine?.installed),
-              )
-            }
+            disabled={busy}
+            blockers={blockers}
             onClick={() => void submit()}
           >
             {t(busy ? 'common.loading' : 'batch.add_to_queue')}
-          </Button>
+          </GatedAction>
           <EngineNotice operation="batch" />
           <WatchFolder
             langs={langs.map((label) => LANG_CODES.find((item) => item.label === label)!.code)}

@@ -7,6 +7,12 @@ import { presetEngineFeedback } from './preset-engine-feedback';
 import { engineDetailLevels, useEngineDetailLevel } from './use-engine-detail-level';
 import { EngineRow } from './engine-row';
 import { useTranslationEngines } from '@/features/settings/translation-settings';
+import {
+  engineRoutingText,
+  engineUnavailableText,
+  providerUnavailableText,
+  reasonText,
+} from '@/lib/engine-reasons';
 import { Link } from '@tanstack/react-router';
 import {
   LanguagesIcon,
@@ -269,6 +275,7 @@ export function StatusBar({
         loaded: boolean;
         busy?: boolean;
         reason: string | null;
+        reason_code?: string | null;
       }>('/engines/diarisation'),
   });
   const rows = (['tts', 'asr', 'llm'] as const).map((family) => {
@@ -310,8 +317,11 @@ export function StatusBar({
       problem: remoteProblem
         ? remoteProblem
         : family === 'tts' && selected?.id === 'omnivoice'
-          ? model.data?.error || selected?.routing_reason || selected?.reason || selected?.hint
-          : selected?.routing_reason || selected?.reason || selected?.hint,
+          ? model.data?.error ||
+            engineRoutingText(t, selected) ||
+            engineUnavailableText(t, selected) ||
+            selected?.hint
+          : engineRoutingText(t, selected) || engineUnavailableText(t, selected) || selected?.hint,
       state: remoteRuntime
         ? remoteRuntime.state === 'checking'
           ? 'engineRuntime.loading'
@@ -582,7 +592,7 @@ export function StatusBar({
       problem:
         (selectedTranslation?.ready ?? selectedTranslation?.installed)
           ? undefined
-          : selectedTranslation?.availability_reason,
+          : providerUnavailableText(t, selectedTranslation),
       runtime: loadedTranslation?.device,
       state: translation.isPending
         ? 'engineRuntime.loading'
@@ -628,7 +638,12 @@ export function StatusBar({
         diarisationModel?.label ||
         t(modelCatalogue.isLoading ? 'preferences.loading' : 'engineSidebar.inactive'),
       title: diarisation.data?.label || diarisationModel?.label,
-      problem: diarisation.data?.reason || undefined,
+      problem: reasonText(
+        t,
+        'diarisation',
+        diarisation.data?.reason_code,
+        diarisation.data?.reason,
+      ),
       runtime:
         diarisation.data?.active === 'audiocpp-sortformer' ? undefined : loadedDiarisation?.device,
       state: diarisation.isPending

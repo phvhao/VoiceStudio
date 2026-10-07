@@ -118,6 +118,43 @@ translation is produced:
 Cinematic and Autofit **require an LLM** (below). If none is configured, they
 fall back to Fast with a notice.
 
+## Sentence by sentence, and lines that may be missing content
+
+**Argos** and **NLLB-200** learned from single sentences. Handed a line that
+holds several, they often translate one and drop the rest. VoiceStudio splits
+every line into sentences, translates them together in one batch (a repeated
+sentence only once) and joins them back: with a space, keeping a caption's
+line break, or directly in Chinese and Japanese, where a sentence the engine
+left unterminated gets its full stop back. A sentence too short to stand alone
+— "No.", "Oh.", "Yes, sir." or a list's bare "1." — goes with the sentence
+next to it on its line: alone, NLLB answered it with a sentence of its own
+("- Nein, ich weiß nicht."). A numbered item ("3. Read it.") stays an item.
+A quotation's closing mark stays with the sentence it closes (Japanese corner
+brackets, (…), ‘…’, «…», „…“), and the words that go on after it ("'Stop!' he
+said", a Japanese quotation followed by "he said") stay with it too.
+
+Every engine's output is then checked. A line whose translation is much
+shorter than its source, or has fewer sentences (an "Oh." or "No." a
+translation folds into the next sentence does not count as one), gets a **May
+be missing content** notice with **Translate again**. The check compares how long each
+text takes to say in its own language, so a compact Chinese or Japanese
+translation is not mistaken for a short one, and spoken Japanese — polite forms
+above all — is measured as about as long as its English, so a natural English
+or Spanish line from Japanese is not taken for half a line; lines under about
+two seconds are not judged, and Thai and Lao, which separate sentences with
+spaces, are judged by length alone. **Translate again** works on that line
+only: Argos, NLLB and the online engines translate it clause by clause, the LLM
+engine is told to keep every part and skips its polish pass, and an agent
+translates the line again. Under Cinematic, Autofit and Agent it also skips the
+rewrite and the fit-to-time trim, which shorten a line on purpose. It is one
+edit: Undo brings the previous wording back, and every earlier edit keeps its
+Undo; if the request fails, Retry in the translation dock retries that line
+the same way, never the whole transcript.
+The notice clears when the new translation is complete or you edit the line.
+Translate with Agent rows are checked the same way through
+`POST /dub/translation-check`. Smart Fit never speeds up the video of a line
+with this notice; a dub of it that runs long is slowed down like any line's.
+
 ## Two-stage quality on the LLM engine (auto-glossary + reflect pass)
 
 When the **LLM (OpenAI-compatible)** engine is the active translator, two extra

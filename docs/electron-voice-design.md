@@ -11,6 +11,13 @@ voice traits, write a script, and synthesize. The existing Tauri category, confl
 resolution and seed helpers build the request; clone references are never forwarded.
 A seed stays fixed while adjusting traits, and New seed creates another identity.
 
+Until it can run, Synthesize audio looks unfinished (dashed) rather than greyed out,
+and the first reason shows above the composer. Pressing it lists what is missing —
+the script, an engine that is still starting or not set up, or one that cannot
+design voices (or reuse a saved voice's sample) — each with a button that goes to
+the script, the engine notice or the engine settings. While a description is being
+read into details, the button waits for a moment instead.
+
 Save as voice profile stores the seed and validated attribute state using the existing
 backend profile endpoint. Saved design profiles can be restored from the Design sidebar.
 Generation uses the shared lifecycle, cancellation, progress and Vidstack output player.

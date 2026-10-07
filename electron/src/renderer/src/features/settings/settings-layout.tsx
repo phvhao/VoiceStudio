@@ -30,16 +30,27 @@ export function SettingsContent({
   );
 }
 
+/**
+ * Card grid for `SettingsRow variant="card"`. Rows align to the start, so a
+ * card that grows (an access panel, a failed download) does not stretch its
+ * neighbours into mostly empty boxes.
+ */
+export const settingsCardGrid =
+  'grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] items-start gap-3';
+
 export function SettingsSection({
   title,
   children,
   icon: Icon,
   contentVariant = 'rows',
+  cardAlign = 'start',
 }: {
   title: string;
   children: ReactNode;
   icon?: LucideIcon;
   contentVariant?: 'rows' | 'cards';
+  /** `stretch` keeps side-by-side meters (CPU, GPU, RAM) one height. */
+  cardAlign?: 'start' | 'stretch';
 }) {
   return (
     <section className="min-w-0 space-y-2.5">
@@ -51,7 +62,7 @@ export function SettingsSection({
         className={cn(
           contentVariant === 'rows'
             ? 'glass-panel rounded-xl border border-border/60 bg-card/40 shadow-xs/5 [&>*+*]:border-t [&>*+*]:border-border/50'
-            : 'grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-3',
+            : [settingsCardGrid, cardAlign === 'stretch' && 'items-stretch'],
         )}
       >
         {children}
@@ -86,7 +97,7 @@ export function SettingsRow({
       className={cn(
         'px-4 py-3',
         variant === 'card' &&
-          'glass-panel min-h-40 rounded-xl border border-border/60 bg-card/40 shadow-xs/5 transition-[border-color,background-color,box-shadow] duration-200 hover:border-border data-[active]:border-primary/35 data-[active]:bg-primary/[0.055] data-[active]:shadow-[0_0_0_1px_color-mix(in_oklab,var(--primary)_12%,transparent),0_12px_30px_-24px_var(--primary)] motion-reduce:transition-none',
+          'glass-panel flex min-h-40 min-w-0 flex-col rounded-xl border border-border/60 bg-card/40 shadow-xs/5 transition-[border-color,background-color,box-shadow] duration-200 hover:border-border data-[active]:border-primary/35 data-[active]:bg-primary/[0.055] data-[active]:shadow-[0_0_0_1px_color-mix(in_oklab,var(--primary)_12%,transparent),0_12px_30px_-24px_var(--primary)] motion-reduce:transition-none',
         className,
       )}
     >
@@ -95,7 +106,8 @@ export function SettingsRow({
           'flex min-w-0 flex-col items-stretch gap-3',
           variant === 'row'
             ? '@2xl:flex-row @2xl:items-center @2xl:justify-between @2xl:gap-x-8'
-            : 'h-full',
+            : // Fills the card's minimum height, so the actions keep to its foot.
+              'flex-1',
         )}
       >
         <div className="min-w-0 flex-1 space-y-1">
@@ -122,7 +134,11 @@ export function SettingsRow({
           aria-labelledby={id}
           className={cn(
             'flex min-w-0 max-w-full flex-wrap items-center gap-2 [&_input]:max-w-full [&_button]:max-w-full',
-            variant === 'row' ? '@2xl:justify-end' : 'mt-auto justify-start',
+            variant === 'row'
+              ? '@2xl:justify-end'
+              : // No child may be wider than the card. :where() keeps a
+                // child's own min-w-*/max-w-* in charge.
+                'mt-auto justify-start [:where(&>*)]:min-w-0 [:where(&>*)]:max-w-full',
           )}
         >
           {children}

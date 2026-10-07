@@ -20,6 +20,8 @@ import { DesktopUpdater, registerUpdateIpc } from './updater';
 import { registerRepairAgents } from './repair-agents';
 import { installRendererPermissions } from './media-permissions';
 import { preventDictionaryDownloads, registerSpellcheck } from './spellcheck';
+import { attachEditContextMenu, registerEditing } from './editing';
+import { wireHistoryCommands } from './history-commands';
 import { clearRendererCaches, installBlankWindowGuard } from './blank-window-guard';
 import { shouldOpenDevTools } from './devtools-policy';
 import {
@@ -187,6 +189,7 @@ function createWindow(): BrowserWindow {
     if (process.platform !== 'darwin' && !quitting) app.quit();
   });
   wireWindowMaximizeEvents(win);
+  wireHistoryCommands(win);
   installBlankWindowGuard(
     win,
     appUrl,
@@ -257,6 +260,14 @@ if (process.env.VOICESTUDIO_ALLOW_MULTIPLE_INSTANCES !== '1' && !app.requestSing
       preventDictionaryDownloads(session.defaultSession, app.getPath('userData'));
       registerSpellcheck(session.defaultSession, () => mainWindow, {
         userData: app.getPath('userData'),
+      });
+      const editMenuLabels = registerEditing(() => mainWindow);
+      // Every window and embedded view, on every platform: a text field with no
+      // menu of its own gets the native edit menu.
+      app.on('web-contents-created', (_event, contents) => {
+        const type = contents.getType();
+        if (type === 'window' || type === 'browserView')
+          attachEditContextMenu(contents, editMenuLabels);
       });
       app.on('browser-window-created', (_event, window) => optimizer.watchWindowShortcuts(window));
 

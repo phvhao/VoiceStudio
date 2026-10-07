@@ -5,7 +5,10 @@ const mock = vi.hoisted(() => ({
   api: vi.fn(),
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
-vi.mock('@/lib/api/client', () => ({ apiJson: mock.api }));
+vi.mock('@/lib/api/client', () => ({
+  apiJson: mock.api,
+  describeError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+}));
 vi.mock('sonner', () => ({ toast: mock.toast }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -255,6 +258,59 @@ it('unloads a resident model before deleting its slash-separated repository', as
   );
   expect(unloadCall).toBeGreaterThan(-1);
   expect(deleteCall).toBeGreaterThan(unloadCall);
+});
+
+it('keeps a model whose unload was declined and says why in the app language', async () => {
+  mock.api.mockImplementation((path: string) => {
+    if (path === '/models') {
+      return Promise.resolve({
+        models: [
+          {
+            repo_id: 'owner/model',
+            label: 'Installed model',
+            role: 'TTS',
+            size_gb: 2,
+            installed: true,
+            supported: true,
+          },
+        ],
+      });
+    }
+    if (path === '/models/install/status') return Promise.resolve({ jobs: [] });
+    if (path === '/model/loaded') {
+      return Promise.resolve({
+        models: [{ id: 'capture-asr', checkpoint: 'owner/model', unloadable: true }],
+        count: 1,
+      });
+    }
+    if (path === '/model/unload/capture-asr') {
+      return Promise.resolve({
+        success: false,
+        reason: 'in use by dictation',
+        reason_code: 'in_use_dictation',
+      });
+    }
+    return Promise.resolve({});
+  });
+
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ModelLibrary family="tts" />
+    </QueryClientProvider>,
+  );
+
+  await screen.findByText('modelMaintenance.inMemory');
+  fireEvent.click(screen.getByRole('button', { name: 'modelMaintenance.delete' }));
+  fireEvent.click(
+    within(screen.getByRole('dialog')).getByRole('button', {
+      name: 'modelMaintenance.delete',
+    }),
+  );
+
+  await waitFor(() =>
+    expect(mock.toast.error).toHaveBeenCalledWith('engineReason.unload.in_use_dictation'),
+  );
+  expect(mock.api).not.toHaveBeenCalledWith('/models/owner/model', { method: 'DELETE' });
 });
 
 it('confirms reinstall, removes the old copy, then starts a fresh install', async () => {

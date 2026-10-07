@@ -323,9 +323,11 @@ but with **operation-count budgets** in
 - **Dubbing synthesis (native batches)**: N renderable segments at batch width W
   cost exactly ⌈N/W⌉ `generate_batch` calls and zero per-segment `generate`
   calls when native batching is enabled, in both interactive and queued jobs.
-- **NLLB dubbing translation**: rows sharing a target language render in
-  bounded batches instead of one model forward per subtitle. Mixed targets
-  retain their request order, and a failed batch retries per row.
+- **NLLB dubbing translation**: each row is one sentence (NLLB drops all but
+  one sentence of a multi-sentence subtitle). Rows sharing a target language
+  render in bounded batches, shortest first so a batch pads little, and a
+  repeated sentence translates once. Mixed targets retain their request order,
+  and a failed batch retries per row.
 - **Long-form edits** (a 12-paragraph chapter read sentence by sentence): a
   one-word edit synthesizes exactly one take; changing a pause, trimming,
   either gap, leveling or a voice's volume, or adding a `[volume]` passage,
@@ -361,9 +363,10 @@ and 8 as headroom allows. `OMNIVOICE_DUB_BATCH_WIDTH` overrides it (1 disables
 batching, 16 is the ceiling). Engines without native batching inherit a
 compatibility fallback that preserves the one-segment behavior.
 
-NLLB similarly groups subtitles by target language and translates four rows
-per forward pass on CPU/MPS or eight on CUDA by default. Set
-`OMNIVOICE_NLLB_BATCH_SIZE=1` to disable it or choose up to 32 explicitly.
+NLLB similarly groups the sentences of all subtitles by target language and
+translates four per forward pass on CPU/MPS, or 8–24 on CUDA depending on free
+memory, by default. Set `OMNIVOICE_NLLB_BATCH_SIZE=1` to disable it or choose
+up to 32 explicitly.
 
 Streaming clients also receive measured latency in the `/ws/tts` terminal
  `done` frame: `ttfa_ms` is request-to-first-audio, `gen_time_s` is the
@@ -406,9 +409,14 @@ added together. Model loading, queueing, network waits and other uninstrumented
 work remain in the total. Remote workers' internal synthesis is not measured by
 the requesting backend. `complete` means the HTTP stream completed; a stream can
 still contain a handled generation error, so check stage failures and the error
-log too. Disconnects preserve partial timings; abandoned worker completions
-cannot rewrite a finished trace. A backend crash loses unfinished in-memory
-traces, so attach the crash log as well.
+log too. A request whose client went away — a preview or render the user
+stopped — ends `cancelled`: the backend looks at the connection while it
+renders, also behind a plain response such as `/generate` or
+`/audiobook/preview`, and stops the render before its next take, and the log
+line "… ended N s after its caller stopped waiting" says how long the GPU
+worker kept the device. Disconnects preserve partial timings; abandoned worker
+completions cannot rewrite a finished trace. A backend crash loses unfinished
+in-memory traces, so attach the crash log as well.
 
 `tests/test_render_trace.py` protects 100- and 400-chunk Studio/long-form renders
 with hardware-independent budgets: one synthesis per chunk, one assembly,

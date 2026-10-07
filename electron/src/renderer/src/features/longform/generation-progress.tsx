@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { formatClock } from '@/lib/format-clock';
 import type { AudiobookRenderChapter, RenderTiming } from './longform-session';
 import { chapterName } from './chapter-name';
+import { takeTimeLeft, type TakeProgress } from './take-progress';
 
 /**
  * Seconds a render has left, or `null` while nothing tells it yet: the time
@@ -14,6 +15,11 @@ import { chapterName } from './chapter-name';
  * chapter of average length. Chapters the cache holds take no time: those
  * that finished as cached, and those the outline found cached before the
  * render started.
+ *
+ * Inside the chapter rendering now, its own takes tell more (`progress`):
+ * the takes it has left at the pace they go, and the chapters after it at
+ * the pace finished chapters went — before any has, at this one's, scaled
+ * by their weights. A one-chapter book is timed from its takes alone.
  */
 export function renderTimeLeft(
   chapters: readonly AudiobookRenderChapter[],
@@ -40,9 +46,72 @@ export function renderTimeLeft(
     }
     last = finishedAt;
   });
+  const current = timing.progress;
+  const inChapter =
+    current &&
+    current.index < chapters.length &&
+    timing.finishedAt[current.index] == null &&
+    timing.cached?.[current.index] !== true
+      ? takeTimeLeft(current, now)
+      : null;
+  if (current && inChapter !== null) {
+    const after = left - weight(current.index);
+    if (after <= 0) return inChapter;
+    const perWeight = rendered
+      ? spent / rendered / 1000
+      : ((now - last) / 1000 + inChapter) / weight(current.index);
+    return inChapter + perWeight * after;
+  }
   if (!rendered || !left) return null;
   return Math.max(0, (spent / rendered) * left - (now - last)) / 1000;
 }
+
+/** The clock, read again every second while `ticking`. */
+function useNow(ticking: boolean): number {
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (!ticking) return;
+    setNow(performance.now());
+    const timer = window.setInterval(() => setNow(performance.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
+  return now;
+}
+
+/**
+ * A chapter render's progress inside its chapter, in words: what it waits
+ * for, or how many of its takes are done of those it renders — and with
+ * `timeLeft`, the time its takes have left at their pace, counted down.
+ */
+export function TakeProgressText({
+  progress,
+  timeLeft = false,
+}: {
+  progress: TakeProgress;
+  timeLeft?: boolean;
+}) {
+  const { t, i18n } = useTranslation();
+  const now = useNow(timeLeft && progress.rate !== null);
+  if (progress.phase === 'loading') return <>{t('audiobook.progress_loading')}</>;
+  if (progress.phase === 'queued') return <>{t('audiobook.progress_queued')}</>;
+  if (!progress.total) return <>{t('common.loading')}</>;
+  const format = (value: number) => value.toLocaleString(i18n.resolvedLanguage || i18n.language);
+  const left = timeLeft ? takeTimeLeft(progress, now) : null;
+  return (
+    <>
+      {t(progress.phrases ? 'audiobook.progress_sentences' : 'audiobook.progress_parts', {
+        count: progress.total,
+        done: format(progress.done),
+        total: format(progress.total),
+      })}
+      {left === null ? '' : ` · ${t('audiobook.eta', { time: formatClock(left) })}`}
+    </>
+  );
+}
+
+/** Whether `progress` has anything to say beside its chapter's name. */
+const tellsProgress = (progress: TakeProgress) =>
+  progress.phase !== 'rendering' || progress.total > 0;
 
 function ChapterStatusIcon({ status }: { status: string }) {
   if (status === 'rendering')
@@ -71,7 +140,11 @@ export function GenerationProgress({
     [chapters],
   );
   const total = chapters.length;
-  const percent = total ? Math.round((completed / total) * 100) : 0;
+  // The chapter rendering now, as far as its takes go.
+  const progress = timing?.progress;
+  const inChapter = progress && chapters[progress.index]?.status === 'rendering' ? progress : null;
+  const share = inChapter?.total ? inChapter.done / inChapter.total : 0;
+  const percent = total ? Math.round(((completed + share) / total) * 100) : 0;
   // From the render's own start, so leaving the page and coming back keeps the count.
   const elapsed = (now - (timing?.startedAt ?? mounted.current)) / 1000;
   const eta = timing && !assembling ? renderTimeLeft(chapters, timing, now) : null;
@@ -134,6 +207,14 @@ export function GenerationProgress({
               >
                 {chapterName(t, chapters, index)}
               </span>
+              {inChapter?.index === index && tellsProgress(inChapter) && (
+                <span
+                  data-slot="chapter-takes"
+                  className="shrink-0 text-muted-foreground tabular-nums"
+                >
+                  · <TakeProgressText progress={inChapter} />
+                </span>
+              )}
               {chapter.status === 'cached' && (
                 <span className="shrink-0 text-muted-foreground">
                   · {t('audiobook.cached_tag')}

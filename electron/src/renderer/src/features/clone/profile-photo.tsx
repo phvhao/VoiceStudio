@@ -53,6 +53,7 @@ export function ProfilePhoto({
   busy = false,
   className,
   label,
+  tabIndex,
 }: {
   name: string;
   imageUrl?: string | null;
@@ -60,6 +61,8 @@ export function ProfilePhoto({
   busy?: boolean;
   className?: string;
   label?: string;
+  /** -1 inside a list that moves focus with the arrow keys. */
+  tabIndex?: number;
 }) {
   const { t } = useTranslation();
   const [dragging, setDragging] = useState(false);
@@ -111,6 +114,7 @@ export function ProfilePhoto({
         aria-label={accessibleLabel}
         accept={PROFILE_IMAGE_TYPES.join(',')}
         disabled={busy}
+        tabIndex={tabIndex}
         onChange={(event) => {
           take(event.target.files?.[0]);
           event.target.value = '';

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { makeSpeechWorkflow, makeProcessingWorkflow, makeCallWorkflow, parseWorkflowLibrary } from './workflow-model';
-import { compileWorkflow, executeWorkflow, prepareRun, outputName } from './workflow-runtime';
+import { compileWorkflow, executeWorkflow, prepareRun, outputName, WorkflowValidationError } from './workflow-runtime';
 
 function recipe(cleanup = false) {
   const document = makeSpeechWorkflow('Lessons', 'First lesson\n---\nSecond lesson', cleanup);
@@ -21,6 +21,19 @@ describe('workflow execution', () => {
     expect(() => compileWorkflow(noVoice)).toThrow('voice');
     const empty = recipe(); empty.steps[0].text = '';
     expect(() => compileWorkflow(empty)).toThrow('scripts');
+  });
+  it('names the step to fix, so Run can take the user to it', () => {
+    const stepOf = (document: ReturnType<typeof recipe>) => {
+      try { compileWorkflow(document); } catch (error) { return error instanceof WorkflowValidationError ? error.stepId : 'not a validation error'; }
+      return 'compiled';
+    };
+    const noVoice = recipe(); noVoice.steps[1].voiceId = '';
+    expect(stepOf(noVoice)).toBe(noVoice.steps[1].id);
+    const empty = recipe(); empty.steps[0].text = '';
+    expect(stepOf(empty)).toBe(empty.steps[0].id);
+    // A step nothing connects to is the one to wire up.
+    const stranded = recipe(); stranded.connections = stranded.connections.filter((edge) => edge.target !== stranded.steps[1].id);
+    expect(stepOf(stranded)).toBe(stranded.steps[1].id);
   });
   it('executes scripts in graph order and checkpoints each audio output', async () => {
     const plan = compileWorkflow(recipe(true));

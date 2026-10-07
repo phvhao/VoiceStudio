@@ -59,8 +59,10 @@ _ALLOWED_FILES = {
     "backend/services/segmentation.py",
     "backend/services/sentence_chunker.py",       # streaming-TTS terminator tables (Patter port, Wave 1.4)
     "backend/services/subtitle_segmenter.py",
+    "backend/services/translation_sentences.py",  # translation rows: CJK sentence marks, quotes and brackets
     "backend/services/text_normalization.py",  # spoken range word per language ("20~30" must not read as one number)
     "backend/core/http_headers.py",               # docstring quotes the CJK filename that 500'd the header (#1262)
+    "electron/src/renderer/src/components/editor-frame/script-counts.ts",  # sentence ends incl. full-width 。！？
     "electron/src/shared/components/DubSegmentRow.jsx",
     "electron/src/shared/components/StoriesEditor.jsx",
     "electron/src/shared/utils/voiceInstruct.js",

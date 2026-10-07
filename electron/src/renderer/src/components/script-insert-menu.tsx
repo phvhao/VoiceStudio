@@ -212,7 +212,8 @@ export function ScriptInsertMenu({
         aria-label={t('clone.insert_token')}
       >
         <PlusIcon data-icon="inline-start" />
-        {t('clone.insert')}
+        {/* A narrow editor column (a container) keeps the icon. */}
+        <span className="@max-lg:sr-only">{t('clone.insert')}</span>
         <ChevronDownIcon className={cn('transition-transform', open && 'rotate-180')} />
       </Button>
       {open

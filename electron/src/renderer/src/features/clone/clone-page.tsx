@@ -1,5 +1,6 @@
 import { SupportShortcut } from '@/components/app-shell/support-shortcut';
 import { SidebarToggle } from '@/components/app-shell/sidebar-toggle';
+import { HistoryNav } from '@/components/app-shell/history-nav';
 import { EditProfile } from './edit-profile';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { VoiceSetup } from './voice-setup';
@@ -28,10 +29,17 @@ import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
 import { useReference } from '@/lib/store/reference';
 import { EngineNotice } from '@/components/engine-notice';
 import { useGenerateClone } from '@/hooks/use-generate';
-import { ActionBar } from './action-bar';
-import { OutputPanel } from './output-panel';
+import { EditorFrame } from '@/components/editor-frame/editor-frame';
+import {
+  isEditorFocused,
+  setEditorFocus,
+  useEditorFocus,
+} from '@/components/editor-frame/editor-focus';
+import { ActionBar, explainBlockedSynthesis } from './action-bar';
+import { SYNTHESIS_TARGET } from './synthesis-gates';
 import { ReferencePanel, SaveProfileForm } from './reference-panel';
 import { ScriptPanel } from './script-panel';
+import { TakesPanel } from './takes-panel';
 import { useCloneDemo } from '@/hooks/use-clone-demo';
 import { runRendererTask } from '@/lib/global-error-recovery';
 
@@ -117,12 +125,25 @@ export function ClonePage() {
   }, [hasVoice, selectedId, reference.file]);
   const wasGenerating = useRef(false);
   if (isGenerating) wasGenerating.current = true;
+  const focused = useEditorFocus();
+  // Asking for a pane (voice sample, take details, profile editor) leaves focus mode.
+  useEffect(() => {
+    if (panel || editingProfileId || selectedTake) setEditorFocus(false);
+  }, [panel, editingProfileId, selectedTake]);
+  const chooserScroll = useRef<HTMLDivElement>(null);
+  const composer = (
+    <div className="glass-panel composer-surface rounded-xl border border-border/60 bg-muted/30 p-2.5 shadow-[0_2px_12px_rgb(0_0_0/4%)]">
+      <ActionBar />
+    </div>
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === 'Escape' &&
         !event.defaultPrevented &&
+        // Esc leaves focus mode first; the panes close on the next press.
+        !isEditorFocused() &&
         !(event.target instanceof HTMLElement && event.target.closest('[role=dialog], [role=menu]'))
       ) {
         openTake(null);
@@ -134,7 +155,8 @@ export function ClonePage() {
       if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"], aside'))
         return;
       event.preventDefault();
-      void generate();
+      // While Synthesize is blocked, the shortcut explains why, as pressing it does.
+      if (!explainBlockedSynthesis()) void generate();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -147,15 +169,14 @@ export function ClonePage() {
           <header
             className={cn(
               'workspace-titlebar flex shrink-0 items-center justify-between gap-3 px-5',
-              !editingProfile &&
-                !selectedTake &&
-                (!panel || choosingVoice) &&
+              (focused || (!editingProfile && !selectedTake && (!panel || choosingVoice))) &&
                 !isMac() &&
                 'native-controls-right',
             )}
           >
             <div className="flex min-w-0 items-center gap-2">
               <SidebarToggle />
+              <HistoryNav />
               <h1 className="truncate text-sm font-medium">{t('clone.title')}</h1>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -172,28 +193,41 @@ export function ClonePage() {
               <Button
                 variant="ghost"
                 size="sm"
+                title={t('clone.history_title')}
                 onClick={() => {
+                  setEditorFocus(false);
                   setLibraryTab('takes');
                   setWorkspace({ libraryOpen: true });
                 }}
               >
                 <HistoryIcon data-icon="inline-start" />
-                {t('clone.history_title')}
+                {/* A narrow window keeps the page title in view instead. */}
+                <span className="@max-3xl:sr-only">{t('clone.history_title')}</span>
               </Button>
             </div>
           </header>
-          <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-5 overflow-y-auto px-6 pt-6 pb-4">
-            <EngineNotice operation="clone" />
-            {choosingVoice ? (
-              <VoiceSetup
-                onChosen={finishChoice}
-                onBack={
-                  hasVoice
-                    ? finishChoice
-                    : () => runRendererTask('Leave voice selection', () => navigate({ to: '/' }))
-                }
-              />
-            ) : savingUpload && reference.file ? (
+          {choosingVoice ? (
+            // The chooser takes the window's width; the page scrolls, not the list.
+            <div
+              ref={chooserScroll}
+              className="studio-scrollbar min-h-0 flex-1 overflow-y-auto px-6 pt-6 pb-8"
+            >
+              <div className="flex flex-col gap-5">
+                <EngineNotice operation="clone" />
+                <VoiceSetup
+                  scrollRef={chooserScroll}
+                  onChosen={finishChoice}
+                  onBack={
+                    hasVoice
+                      ? finishChoice
+                      : () => runRendererTask('Leave voice selection', () => navigate({ to: '/' }))
+                  }
+                />
+              </div>
+            </div>
+          ) : savingUpload && reference.file ? (
+            <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-5 overflow-y-auto px-6 pt-6 pb-4">
+              <EngineNotice operation="clone" />
               <div className="w-full space-y-5">
                 <SaveProfileForm
                   key={reference.file.name + reference.file.lastModified}
@@ -206,99 +240,103 @@ export function ClonePage() {
                 />
                 <ReferencePanel hideSave transcription={transcription} />
               </div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between gap-3">
-                  <Button
-                    variant="ghost"
-                    disabled={isGenerating}
-                    aria-label={t('cloneFlow.change_voice')}
-                    className="h-12 min-w-0 justify-start gap-2.5 px-0 hover:bg-transparent"
-                    onClick={() => {
-                      openTake(null);
-                      setChangingVoice(true);
-                      setPanel(null);
-                    }}
-                  >
-                    <ProfileAvatar
-                      name={selectedVoice?.name ?? ''}
-                      imageUrl={selectedVoice?.image_url}
-                    />
-                    <span className="shrink-0 font-normal text-muted-foreground">
-                      {t('clone.voice_kicker')} <span aria-hidden="true">·</span>
-                    </span>
-                    <span className="max-w-60 truncate font-semibold">
-                      {selectedVoice?.name ?? t('cloneFlow.voice_sample')}
-                    </span>
-                    <ChevronDownIcon className="text-muted-foreground" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="font-normal text-muted-foreground hover:text-foreground"
-                    aria-expanded={panel === 'voice'}
-                    onClick={() => {
-                      openTake(null);
-                      setWorkspace({ editingProfileId: null });
-                      setPanel(panel === 'voice' ? null : 'voice');
-                    }}
-                  >
-                    <AudioLinesIcon />
-                    {t('cloneFlow.voice_sample')}
-                  </Button>
-                </div>
-                <ScriptPanel
-                  voiceName={selectedVoice?.name}
-                  coachmark={showDemoCoachmark ? t('demo.clone_coachmark') : undefined}
-                  onUserEdit={() => setShowDemoCoachmark(false)}
-                />
-              </>
-            )}
-          </div>
-          {((!choosingVoice && !savingUpload) || isGenerating) && (
-            <div className="z-10 mt-auto shrink-0 bg-background">
-              <div className="mx-auto w-full max-w-4xl px-6 pb-4">
-                <div className="glass-panel composer-surface rounded-xl border border-border/60 bg-muted/30 p-2.5 shadow-[0_2px_12px_rgb(0_0_0/4%)]">
-                  <ActionBar />
-                </div>
+            </div>
+          ) : (
+            <EditorFrame composer={composer} results={<TakesPanel mode="clone" />}>
+              <EngineNotice operation="clone" />
+              <div className="flex shrink-0 items-center justify-between gap-3">
+                <Button
+                  variant="ghost"
+                  disabled={isGenerating}
+                  aria-label={t('cloneFlow.change_voice')}
+                  data-gate-target={SYNTHESIS_TARGET.cloneVoice}
+                  className="h-12 min-w-0 justify-start gap-2.5 px-0 hover:bg-transparent"
+                  onClick={() => {
+                    openTake(null);
+                    setChangingVoice(true);
+                    setPanel(null);
+                  }}
+                >
+                  <ProfileAvatar
+                    name={selectedVoice?.name ?? ''}
+                    imageUrl={selectedVoice?.image_url}
+                  />
+                  <span className="shrink-0 font-normal text-muted-foreground">
+                    {t('clone.voice_kicker')} <span aria-hidden="true">·</span>
+                  </span>
+                  <span className="min-w-0 max-w-60 truncate font-semibold">
+                    {selectedVoice?.name ?? t('cloneFlow.voice_sample')}
+                  </span>
+                  <ChevronDownIcon className="text-muted-foreground" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="shrink-0 font-normal text-muted-foreground hover:text-foreground"
+                  title={t('cloneFlow.voice_sample')}
+                  aria-expanded={panel === 'voice'}
+                  onClick={() => {
+                    openTake(null);
+                    setWorkspace({ editingProfileId: null });
+                    setPanel(panel === 'voice' ? null : 'voice');
+                  }}
+                >
+                  <AudioLinesIcon />
+                  {/* A narrow editor column (a container) keeps the icon. */}
+                  <span className="@max-lg:sr-only">{t('cloneFlow.voice_sample')}</span>
+                </Button>
               </div>
-              <OutputPanel />
+              <ScriptPanel
+                voiceName={selectedVoice?.name}
+                coachmark={showDemoCoachmark ? t('demo.clone_coachmark') : undefined}
+                onUserEdit={() => setShowDemoCoachmark(false)}
+              />
+            </EditorFrame>
+          )}
+          {/* A voice deleted mid-render leaves the chooser up: Cancel stays in reach. */}
+          {(choosingVoice || savingUpload) && isGenerating && (
+            <div className="z-10 mt-auto shrink-0 bg-background">
+              <div className="mx-auto w-full max-w-4xl px-6 pb-4">{composer}</div>
             </div>
           )}
         </section>
-        {editingProfile && (
-          <WorkspacePane
-            layout="editor"
-            title={t('paneActions.edit')}
-            icon={PencilIcon}
-            onClose={() => setWorkspace({ editingProfileId: null })}
-          >
-            <EditProfile
-              key={editingProfile.id}
-              profile={editingProfile}
-              onDone={() => setWorkspace({ editingProfileId: null })}
-            />
-          </WorkspacePane>
-        )}
-        {!editingProfile && selectedTake && (
-          <WorkspacePane
-            title={t('clone.history_title')}
-            icon={HistoryIcon}
-            onClose={() => openTake(null)}
-          >
-            <TakeDetails item={selectedTake} />
-          </WorkspacePane>
-        )}
-        {!editingProfile && panel && !choosingVoice && !savingUpload && (
-          <WorkspacePane
-            collapsible
-            title={t('cloneFlow.voice_sample')}
-            icon={AudioLinesIcon}
-            onClose={() => setPanel(null)}
-          >
-            <ReferencePanel transcription={transcription} />
-          </WorkspacePane>
-        )}
+        {/* Hidden, not unmounted, in focus mode: a profile edit keeps its
+            unsaved name and clip, a pane its state, until Esc. */}
+        <div hidden={focused} className="contents">
+          {editingProfile && (
+            <WorkspacePane
+              layout="editor"
+              title={t('paneActions.edit')}
+              icon={PencilIcon}
+              onClose={() => setWorkspace({ editingProfileId: null })}
+            >
+              <EditProfile
+                key={editingProfile.id}
+                profile={editingProfile}
+                onDone={() => setWorkspace({ editingProfileId: null })}
+              />
+            </WorkspacePane>
+          )}
+          {!editingProfile && selectedTake && (
+            <WorkspacePane
+              title={t('clone.history_title')}
+              icon={HistoryIcon}
+              onClose={() => openTake(null)}
+            >
+              <TakeDetails item={selectedTake} />
+            </WorkspacePane>
+          )}
+          {!editingProfile && panel && !choosingVoice && !savingUpload && (
+            <WorkspacePane
+              collapsible
+              title={t('cloneFlow.voice_sample')}
+              icon={AudioLinesIcon}
+              onClose={() => setPanel(null)}
+            >
+              <ReferencePanel transcription={transcription} />
+            </WorkspacePane>
+          )}
+        </div>
       </div>
       <div className="sr-only" role="status" aria-live="polite">
         {isGenerating

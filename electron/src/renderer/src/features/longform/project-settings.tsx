@@ -67,7 +67,8 @@ export function ProjectSwitcher({ mode }: { mode: Mode }) {
       <Button
         variant="ghost"
         size="sm"
-        className="min-w-0 gap-1.5 px-2"
+        // A crowded title bar shortens the book's name, not the links beside it.
+        className="min-w-0 shrink gap-1.5 px-2"
         aria-haspopup="dialog"
         aria-label={name + ' — ' + t('library.open_library')}
         title={t('library.open_library')}

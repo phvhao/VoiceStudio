@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 // The main navigation sits directly under the sidebar header, above the voice
@@ -43,6 +43,7 @@ vi.mock('./use-workspace-sidebar', () => ({
   }),
 }));
 import { WorkspaceSidebar } from './workspace-sidebar';
+import { setEditorFocus } from '@/components/editor-frame/editor-focus';
 
 beforeEach(() => {
   sidebar.compact = false;
@@ -73,4 +74,30 @@ it('places the navigation above the voice library in the expanded sidebar', () =
     navigation.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
   expect(library.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('steps aside, rail and all, while a script editor is in focus mode', () => {
+  for (const compact of [false, true]) {
+    sidebar.compact = compact;
+    setEditorFocus(true);
+    const view = render(<WorkspaceSidebar />);
+    expect(screen.queryByRole('complementary', { name: 'clone.saved_profiles' })).toBeNull();
+    act(() => setEditorFocus(false));
+    expect(screen.getByRole('complementary', { name: 'clone.saved_profiles' })).toBeVisible();
+    view.unmount();
+  }
+});
+
+it('hides the library in focus mode without unmounting it: its search, filters and playback stay', () => {
+  setEditorFocus(false);
+  const view = render(<WorkspaceSidebar />);
+  const library = screen.getByTestId('library');
+  act(() => setEditorFocus(true));
+  // The same element, still in the document, only out of view.
+  expect(screen.getByTestId('library')).toBe(library);
+  expect(library).not.toBeVisible();
+  act(() => setEditorFocus(false));
+  expect(screen.getByTestId('library')).toBe(library);
+  expect(library).toBeVisible();
+  view.unmount();
 });

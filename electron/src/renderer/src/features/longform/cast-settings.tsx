@@ -13,6 +13,7 @@ import {
 import { formatSignedDb } from './script-markup';
 import { DEFAULT_VOICE_ACCENT, voiceAccent } from './voice-palette';
 import { VoicePicker, type VoiceProfile } from './voice-picker';
+import { LONGFORM_TARGET } from './generate-gates';
 
 /** A voice's color, as its tags and lane show it in the editor. */
 function Swatch({ className }: { className: string }) {
@@ -167,7 +168,7 @@ export function CastSettings({
       </>
     );
   return (
-    <details className="space-y-3" open={names.length > 0}>
+    <details className="space-y-3" open={names.length > 0} data-gate-target={LONGFORM_TARGET.cast}>
       <summary className="cursor-pointer text-sm font-medium">
         {title ?? t('audiobook.cast')}
       </summary>
@@ -192,8 +193,17 @@ export function CastSettings({
       {names.map((name) => {
         // `[voice:default]` reads in, and shares the volume of, the default voice.
         const gainKey = voiceGainKey(name);
+        const voice = castVoice(cast, name);
+        // Cast to a deleted voice: where Generate's "pick another one" leads.
+        const missing = Boolean(voice) && !loading && !profiles.some((p) => p.id === voice);
         return (
-          <div key={name} role="group" aria-label={name} className="space-y-1.5">
+          <div
+            key={name}
+            role="group"
+            aria-label={name}
+            data-gate-target={missing ? LONGFORM_TARGET.castMissing : undefined}
+            className="space-y-1.5"
+          >
             <p className="flex items-center text-sm">
               {/* `[voice:default]` reads in the default voice, as the editor shows it. */}
               <Swatch
@@ -202,7 +212,7 @@ export function CastSettings({
               <span className="truncate font-medium">{name}</span>
             </p>
             <VoicePicker
-              value={castVoice(cast, name) || null}
+              value={voice || null}
               onChange={(id) => {
                 const next = { ...cast };
                 if (id) next[name] = id;

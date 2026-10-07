@@ -6,10 +6,18 @@ import { expect, it, vi } from 'vitest';
 // opening Settings never swaps it for a different panel.
 
 const route = vi.hoisted(() => ({ pathname: '/clone' }));
+const shell = vi.hoisted(() => ({
+  history: { id: 'router-history' },
+  installHistory: vi.fn(),
+  editMenuLabels: vi.fn(),
+}));
 vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => ({ history: shell.history }),
   useRouterState: ({ select }: any) => select({ location: route }),
   Outlet: () => <div data-testid="outlet" />,
 }));
+vi.mock('./history-navigation', () => ({ useInstallHistoryNavigation: shell.installHistory }));
+vi.mock('./native-edit-menu', () => ({ useNativeEditMenuLabels: shell.editMenuLabels }));
 vi.mock('./workspace-sidebar', () => ({
   WorkspaceSidebar: () => <aside data-testid="main-sidebar" />,
 }));
@@ -33,4 +41,10 @@ it('renders the main sidebar on workspace routes as before', () => {
   route.pathname = '/clone';
   render(<AppShell />);
   expect(screen.getByTestId('main-sidebar')).toBeInTheDocument();
+});
+
+it("follows the router's history for Back/Forward and labels the native edit menu", () => {
+  render(<AppShell />);
+  expect(shell.installHistory).toHaveBeenCalledWith(shell.history);
+  expect(shell.editMenuLabels).toHaveBeenCalled();
 });

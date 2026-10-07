@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiJson, describeError } from '@/lib/api/client';
-import { metadataFields, duplicateWords } from './book-options';
+import { metadataFields, repeatedWords } from './book-options';
+import { LONGFORM_TARGET } from './generate-gates';
 import type { Draft } from './longform-session';
 export function BookSettings({
   draft,
@@ -23,6 +24,7 @@ export function BookSettings({
   const { t } = useTranslation();
   const input = useRef<HTMLInputElement>(null);
   const controller = useRef<AbortController | null>(null);
+  const repeated = repeatedWords(draft.lexicon);
   const [preview, setPreview] = useState('');
   const [error, setError] = useState<string | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
@@ -148,6 +150,9 @@ export function BookSettings({
                 aria-label={t('audiobook.lex_word')}
                 placeholder={t('audiobook.lex_word')}
                 value={row.word}
+                // The repeat is what to remove, and where Generate's fix leads.
+                aria-invalid={repeated[index] || undefined}
+                data-gate-target={repeated[index] ? LONGFORM_TARGET.lexicon : undefined}
                 disabled={disabled}
                 onChange={(e) =>
                   onChange({
@@ -200,7 +205,7 @@ export function BookSettings({
             <PlusIcon />
             {t('audiobook.lex_add')}
           </Button>
-          {duplicateWords(draft.lexicon) && (
+          {repeated.includes(true) && (
             <p role="alert" className="text-xs text-destructive">
               {t('audiobook.lex_duplicate')}
             </p>

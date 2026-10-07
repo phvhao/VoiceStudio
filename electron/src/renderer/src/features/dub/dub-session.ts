@@ -95,17 +95,42 @@ export interface DubSegment {
   };
   sync_ratio?: number;
   fit_status?: {
-    status: 'fits' | 'overflows' | 'video_stretched' | 'audio_slowed';
+    status:
+      | 'fits'
+      | 'overflows'
+      | 'video_stretched'
+      | 'audio_slowed'
+      | 'audio_stretched'
+      | 'hybrid'
+      | 'overflow_trimmed'
+      | 'video_shrunk';
     overflow_s?: number;
+    /** Stretch Video: the segment's video length factor (below 1 = sped up). */
     stretch_ratio?: number;
     audio_rate?: number;
+    /** Smart Fit: setpts factor of the segment's video (below 1 = sped up). */
+    video_ratio?: number;
   };
+  /** Smart Fit override for this line's video; unset follows the job. */
+  video_fit?: DubVideoFit;
+  /** Translations, by language, that may be missing part of the source. */
+  omissions?: Record<string, DubOmission>;
   /** Set only on untouched Agent translations; direct edits clear it. */
   agent_generated_lang?: string;
   /** Every stored translation that still contains untouched Agent output. */
   agent_generated_langs?: string[];
 }
 export type DubTiming = 'concise' | 'smart_fit' | 'stretch_video' | 'strict_slot';
+/** Keep: never retime the video; shrink / stretch: only speed it up / slow it down. */
+export const DUB_VIDEO_FITS = ['keep', 'shrink', 'stretch'] as const;
+export type DubVideoFit = (typeof DUB_VIDEO_FITS)[number];
+/** Why a translation may have left part of its source out (backend omission check). */
+export interface DubOmission {
+  reason: 'short' | 'sentences';
+  ratio: number;
+  source_sentences: number;
+  target_sentences: number;
+}
 export interface AsrModelMissing {
   error: 'asr_model_missing';
   detail?: string;
@@ -131,6 +156,10 @@ export interface DubSession {
   voiceMatch?: 'per_line' | 'consistent';
   generatedTiming?: DubTiming;
   pendingTiming?: DubTiming;
+  /** The timing (`dubTimingKey`) each language's track was last rendered with. */
+  timingByLang?: Record<string, string>;
+  /** The timing of the render in progress, recorded for its language once it is done. */
+  pendingTimingKey?: string;
   fingerprintsByLang?: Record<string, Record<string, string>>;
   project?: DubProject;
   translationFallback?: boolean;
@@ -432,6 +461,18 @@ export function clearDubEditHistory() {
   resetHistoryGroup();
   publishEditHistory();
 }
+/**
+ * A pass a run makes over some rows ("Translate again", retrying the failed
+ * ones) is one edit: Undo brings their wording back, and every edit before it
+ * keeps its own Undo. A run over every row clears the history instead.
+ */
+const recordRunEdit = (before: DubSegment[]) => {
+  undoStack.push(cloneSegments(before));
+  if (undoStack.length > MAX_EDIT_HISTORY) undoStack.shift();
+  redoStack.length = 0;
+  resetHistoryGroup();
+  publishEditHistory();
+};
 export function undoDubEdit() {
   if (!editingAllowed()) return;
   resetHistoryGroup();
@@ -509,11 +550,67 @@ const patchSegment = (segment: DubSegment, value: Partial<DubSegment>) => {
     }
     delete next.agent_generated_lang;
   }
+  if (next.omissions && ('text_original' in value || 'translations' in value)) {
+    // A flag describes one translation; it goes when that text changes.
+    const kept = Object.entries(next.omissions).filter(
+      ([language]) =>
+        next.text_original === segment.text_original &&
+        next.translations?.[language] === segment.translations?.[language],
+    );
+    next.omissions = kept.length ? Object.fromEntries(kept) : undefined;
+  }
   if (fields.some((field) => QC_INVALIDATING_FIELDS.has(field))) {
     delete next.sync_ratio;
     delete next.fit_status;
   }
   return next;
+};
+
+/** The omission flag of the `language` translation while the row shows it. */
+export const omissionFor = (segment: DubSegment, language: string | undefined) =>
+  language && segment.text === segment.translations?.[language]
+    ? segment.omissions?.[language]
+    : undefined;
+
+/**
+ * What a render's timing follows, as one comparable key: the timing mode and,
+ * under Smart Fit, its options and — a video has them — each line's video
+ * choice and missing-content flag in `languageCode`. None of these is speech:
+ * a track rendered under another key is placed differently, and a re-fit
+ * (`generateDub` with `regenOnly: []`) places it anew without speaking again.
+ */
+export function dubTimingKey(
+  state: Pick<DubSession, 'timingStrategy' | 'fitOptions' | 'segments' | 'inputType'>,
+  languageCode: string,
+): string {
+  const strategy = state.timingStrategy || 'strict_slot';
+  if (strategy !== 'smart_fit') return strategy;
+  const lines =
+    state.inputType === 'audio'
+      ? []
+      : state.segments.flatMap((segment) => {
+          const fit = DUB_VIDEO_FITS.includes(segment.video_fit!) ? segment.video_fit : '';
+          const flagged = omissionFor(segment, languageCode) ? '!' : '';
+          return fit || flagged ? [`${segment.id}:${fit}${flagged}`] : [];
+        });
+  return JSON.stringify([strategy, state.fitOptions ?? {}, lines]);
+}
+
+/** Whether `languageCode`'s track was rendered under other timing than the editor now asks for. */
+export function dubTimingChanged(session: DubSession, languageCode: string): boolean {
+  const rendered = session.timingByLang?.[languageCode];
+  return rendered !== undefined && rendered !== dubTimingKey(session, languageCode);
+}
+
+const withOmission = (
+  omissions: DubSegment['omissions'],
+  language: string,
+  omission: DubOmission | undefined,
+) => {
+  const next = { ...omissions };
+  if (omission) next[language] = omission;
+  else delete next[language];
+  return Object.keys(next).length ? next : undefined;
 };
 
 export const editDubSegment = (
@@ -698,6 +795,7 @@ export function splitDubSegment(id: string, cursorPosition: number) {
         text_original: leftRange.text,
         end: midpoint,
         translations: undefined,
+        omissions: undefined,
         agent_generated_lang: undefined,
         agent_generated_langs: undefined,
         merge_parts: keepParts(clipParts(parts, leftRange.from, leftRange.to)),
@@ -715,6 +813,7 @@ export function splitDubSegment(id: string, cursorPosition: number) {
         text_original: rightRange.text,
         start: midpoint,
         translations: undefined,
+        omissions: undefined,
         agent_generated_lang: undefined,
         agent_generated_langs: undefined,
         merge_parts: keepParts(clipParts(parts, rightRange.from, rightRange.to)),
@@ -746,6 +845,7 @@ export function mergeDubSegment(id: string, direction: 'prev' | 'next' = 'next')
       `${first.text_original || first.text || ''} ${second.text_original || second.text || ''}`.trim(),
     end: second.end,
     translations: Object.keys(translations).length ? translations : undefined,
+    omissions: undefined,
     agent_generated_lang: undefined,
     agent_generated_langs: undefined,
     merge_parts: mergedParts(first, second),
@@ -1137,13 +1237,49 @@ async function runLocalTranslationAgent(
   }
 }
 
+/** Omission flags for translations made outside `/dub/translate`, by row id.
+ *  A failed check leaves rows unflagged; it never fails the translation. */
+async function translationOmissions(
+  snapshot: DubSession,
+  target: string,
+  rows: Array<{ id: string; source: string; text: string }>,
+  signal: AbortSignal,
+): Promise<Record<string, DubOmission>> {
+  try {
+    const result = await apiJson<{ omissions?: Record<string, DubOmission> }>(
+      '/dub/translation-check',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          job_id: snapshot.jobId,
+          source_lang: snapshot.sourceLang || undefined,
+          target_lang: target,
+          rows,
+        }),
+      },
+    );
+    return result.omissions && typeof result.omissions === 'object' ? result.omissions : {};
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return {};
+  }
+}
+
 export async function translateDubWithAgent(
   target: string,
   agent: RepairAgentId,
   targetLabel = target,
+  options: { segmentIds?: string[] } = {},
 ): Promise<boolean> {
   const snapshot = dubSession.state;
   if (!snapshot.jobId || !snapshot.segments.length || snapshot.recovery) return false;
+  const only = options.segmentIds?.length ? new Set(options.segmentIds) : null;
+  const requestedSegments = only
+    ? snapshot.segments.filter((segment) => only.has(segment.id))
+    : snapshot.segments;
+  if (!requestedSegments.length) return false;
   const finishActivity = beginAppActivity('translation');
   try {
     return await run('translating', async (signal) => {
@@ -1160,7 +1296,7 @@ export async function translateDubWithAgent(
           dialect: snapshot.dialect,
           translationInstructions: snapshot.translationInstructions,
           glossary,
-          segments: snapshot.segments.map((segment) => ({
+          segments: requestedSegments.map((segment) => ({
             id: segment.id,
             sourceText: segment.text_original || segment.text,
             start: segment.start,
@@ -1168,10 +1304,24 @@ export async function translateDubWithAgent(
           })),
         },
         signal,
-        () => translateDubWithAgent(target, agent, targetLabel),
+        () => translateDubWithAgent(target, agent, targetLabel, options),
       );
       const rows = new Map(translated.translations.map((row) => [row.id, row.text]));
-      clearDubEditHistory();
+      // The agent runs outside the backend translators; its rows get the same
+      // "may be missing content" check.
+      const omissions = await translationOmissions(
+        snapshot,
+        target,
+        requestedSegments.flatMap((segment) => {
+          const text = rows.get(segment.id);
+          return text
+            ? [{ id: segment.id, source: segment.text_original || segment.text, text }]
+            : [];
+        }),
+        signal,
+      );
+      if (only) recordRunEdit(dubSession.state.segments);
+      else clearDubEditHistory();
       patch({
         quality: 'agent',
         agentCli: agent,
@@ -1195,6 +1345,7 @@ export async function translateDubWithAgent(
             translate_critique: undefined,
             rate_error: undefined,
             plan: undefined,
+            omissions: withOmission(segment.omissions, target, omissions[segment.id]),
             agent_generated_lang: target,
             agent_generated_langs: [...agentLanguages],
           };
@@ -1210,17 +1361,26 @@ export async function translateDubWithAgent(
 export async function translateDub(
   target: string,
   provider: string,
-  options: { retryFailed?: boolean } = {},
+  options: {
+    retryFailed?: boolean;
+    /** Translate only these rows. */
+    segmentIds?: string[];
+    /** "Translate again" on a row flagged as missing content: a more literal pass. */
+    retryIncomplete?: boolean;
+  } = {},
 ): Promise<boolean> {
   const snapshot = dubSession.state;
   if (!snapshot.jobId || !snapshot.segments.length || snapshot.recovery) return false;
+  const only = options.segmentIds?.length ? new Set(options.segmentIds) : null;
   const requestedSegments = options.retryFailed
     ? snapshot.segments.filter(
         (segment) =>
           segment.translate_errors?.[target] ||
           (!segment.translate_errors && segment.translate_error),
       )
-    : snapshot.segments;
+    : only
+      ? snapshot.segments.filter((segment) => only.has(segment.id))
+      : snapshot.segments;
   if (!requestedSegments.length) return false;
   const finishActivity = beginAppActivity('translation');
   let agentFallback = false;
@@ -1237,12 +1397,20 @@ export async function translateDub(
           id: segment.id,
           source: segment.text_original || segment.text,
         })),
+        // Retry runs the same rows the same way: a one-line Translate again
+        // retries that line, literally, never the whole transcript.
         retry: () =>
-          translateDub(target, provider, {
-            retryFailed: Boolean(
-              dubSession.state.segments.some((s) => s.translate_errors?.[target]),
-            ),
-          }),
+          translateDub(
+            target,
+            provider,
+            only
+              ? options
+              : {
+                  retryFailed: Boolean(
+                    dubSession.state.segments.some((s) => s.translate_errors?.[target]),
+                  ),
+                },
+          ),
       });
       signal.addEventListener(
         'abort',
@@ -1270,6 +1438,7 @@ export async function translateDub(
           rate_ratio?: number;
           rate_error?: string;
           plan?: DubSegment['plan'];
+          omission?: DubOmission;
         }>;
       }>('/dub/translate', {
         method: 'POST',
@@ -1280,6 +1449,7 @@ export async function translateDub(
           source_lang: snapshot.sourceLang || undefined,
           target_lang: target,
           provider,
+          retry_incomplete: options.retryIncomplete || undefined,
           quality: snapshot.quality,
           translation_instructions: snapshot.translationInstructions,
           auto_glossary: snapshot.autoGlossary ?? true,
@@ -1322,7 +1492,8 @@ export async function translateDub(
       const fallback = translated.cinematic_skipped === 'no-llm-configured';
       agentFallback = fallback && snapshot.quality === 'agent';
       const rows = new Map(translated.translated.map((row) => [String(row.id), row]));
-      clearDubEditHistory();
+      if (only || options.retryFailed) recordRunEdit(dubSession.state.segments);
+      else clearDubEditHistory();
       patch({
         quality: fallback && !agentFallback ? 'fast' : snapshot.quality,
         translationFallback: fallback,
@@ -1353,6 +1524,10 @@ export async function translateDub(
             rate_ratio: row?.rate_ratio,
             rate_error: row?.rate_error,
             plan: row?.plan,
+            // A failed row keeps its previous text, and that text's flag.
+            omissions: row?.error
+              ? segment.omissions
+              : withOmission(segment.omissions, target, row?.omission),
             agent_generated_lang: agentGenerated ? target : undefined,
             agent_generated_langs: agentLanguages.size ? [...agentLanguages] : undefined,
           };
@@ -1420,6 +1595,14 @@ async function watchGeneration(taskId: string, signal: AbortSignal) {
                 },
               }
             : {}),
+          ...(languageCode && dubSession.state.pendingTimingKey !== undefined
+            ? {
+                timingByLang: {
+                  ...dubSession.state.timingByLang,
+                  [languageCode]: dubSession.state.pendingTimingKey,
+                },
+              }
+            : {}),
         });
       }
       return taskEvent(event, 'done');
@@ -1483,9 +1666,17 @@ export async function generateDub(
                 ...segmentGenInputs(segment),
                 // Keeps the imported caption markup for unchanged exports (#2295).
                 cue_source_id: cueSourceId(segment),
+                // Smart Fit: the line's video override (one a draft or project
+                // restored from elsewhere may hold is checked), and never
+                // speeding up the video of a line that may be missing content.
+                video_fit: DUB_VIDEO_FITS.includes(segment.video_fit!)
+                  ? segment.video_fit
+                  : undefined,
+                may_be_incomplete: omissionFor(segment, languageCode) ? true : undefined,
               })),
               segment_ids: current.segments.map((segment) => segment.id),
-              regen_only: regenOnly?.length ? regenOnly : null,
+              // `[]` re-fits: every line's speech is reused, placed anew.
+              regen_only: regenOnly ?? null,
               language,
               language_code: languageCode,
               num_step: current.steps,
@@ -1505,6 +1696,7 @@ export async function generateDub(
         patch({
           taskId: job.task_id,
           pendingTiming: current.timingStrategy || 'strict_slot',
+          pendingTimingKey: dubTimingKey(current, languageCode),
         });
         const measured = await watchGeneration(job.task_id, signal);
         if (!agentEnabled || agentPass >= maxAgentPasses) break;
@@ -1596,6 +1788,8 @@ export async function generateDub(
                   ...withoutCueSource(segment),
                   text,
                   translations: { ...segment.translations, [languageCode]: text },
+                  // The flag described the replaced text.
+                  omissions: withOmission(segment.omissions, languageCode, undefined),
                   sync_ratio: undefined,
                   fit_status: undefined,
                 }

@@ -32,6 +32,7 @@ import {
   engineSelectionFeedback,
   type EngineSelectionResult,
 } from '@/lib/engine-selection-feedback';
+import { engineRoutingText, engineUnavailableText, reasonText } from '@/lib/engine-reasons';
 
 interface DiarisationStatus {
   active: string;
@@ -43,6 +44,7 @@ interface DiarisationStatus {
     runtime_installed?: boolean;
     installed: boolean;
     reason?: string | null;
+    reason_code?: string | null;
   }[];
 }
 
@@ -134,7 +136,9 @@ export function DiarisationSettings() {
               option.model || option.reason ? (
                 <div className="space-y-1">
                   {option.model && <p>{option.model}</p>}
-                  {option.reason && <p>{option.reason}</p>}
+                  {option.reason && (
+                    <p>{reasonText(t, 'diarisation', option.reason_code, option.reason)}</p>
+                  )}
                 </div>
               ) : undefined
             }
@@ -298,6 +302,7 @@ export function ModelSettings({
       const feedback = engineSelectionFeedback(
         family === 'dictation' ? { active: id } : result,
         family ?? 'tts',
+        t,
       );
       if (feedback.tone === 'warning') toast.warning(t(feedback.key, feedback.values));
       else toast.success(t(feedback.key, feedback.values));
@@ -404,7 +409,10 @@ export function ModelSettings({
             engine.local_install_required && !engine.available
               ? t('engines.localInstallRequired')
               : !engine.available
-                ? engine.reason || engine.install_hint || engine.hint || undefined
+                ? engineUnavailableText(t, engine) ||
+                  engine.install_hint ||
+                  engine.hint ||
+                  undefined
                 : engine.id === selected
                   ? engineState.active_model || engine.hint || undefined
                   : engine.hint || undefined,
@@ -417,7 +425,7 @@ export function ModelSettings({
               ? undefined
               : engine.effective_device || undefined,
           routingStatus: engine.routing_status || undefined,
-          routingReason: engine.routing_reason || undefined,
+          routingReason: engineRoutingText(t, engine),
           isolationMode: engine.isolation_mode,
           licenseRequired: engine.license_required,
           licenseAccepted: engine.license_accepted,

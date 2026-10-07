@@ -3,7 +3,9 @@
 Open Batch dubbing from the cloning sidebar or command search. Add video files,
 choose one or more target languages, optionally select a saved voice, and choose
 whether to preserve background audio. Add to Queue submits through the existing
-backend. Successfully submitted files leave the upload list; failed files remain.
+backend. Until it can, pressing it says what is missing (a video, a target
+language, an engine not ready) and leads to the fix instead of greying out.
+Successfully submitted files leave the upload list; failed files remain.
 The backend enforces ASR readiness and owns translation, generation and mixing.
 The Electron setup sidebar accepts file picking or drag-and-drop, groups media,
 languages and voice/audio choices into stable cards, and exposes the same Add Videos

@@ -1,8 +1,51 @@
 import { afterEach, expect, it, vi } from 'vitest';
+const api = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/api/client', () => ({ apiJson: api, apiFetch: vi.fn() }));
 import { exportStoryAudio } from '@shared/utils/storyExport';
-import { storyChunkBody } from './story-preview';
+import { queryClient } from '@/lib/query';
+import { linePreviewKey, storyChunkBody, storySteps } from './story-preview';
 import { blankLongformDraft } from './longform-session';
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  api.mockReset();
+  queryClient.clear();
+});
+
+it('reads a line at the steps the story renders at, not at a fixed 32', async () => {
+  const draft = blankLongformDraft();
+  // The performance preset's steps, as the steps slider shows them.
+  api.mockResolvedValue({ num_step: 16 });
+  expect(await storySteps(draft)).toBe(16);
+  expect(api).toHaveBeenCalledWith('/audiobook/sampling', expect.anything());
+  expect(storyChunkBody(draft, 'Hello', null, null, [], 16).get('num_step')).toBe('16');
+  // An engine that keeps its own steps is sent none.
+  queryClient.clear();
+  api.mockResolvedValue({ num_step: null });
+  expect(await storySteps(draft)).toBeNull();
+  expect(storyChunkBody(draft, 'Hello', null, null, [], null).has('num_step')).toBe(false);
+  // The draft's own steps win, without asking.
+  api.mockClear();
+  const own = { ...draft, overrides: { ...draft.overrides, numStep: 48 } };
+  expect(await storySteps(own)).toBe(48);
+  expect(api).not.toHaveBeenCalled();
+  // Unreadable: a book's steps without a preset.
+  queryClient.clear();
+  api.mockRejectedValue(new Error('offline'));
+  expect(await storySteps(draft)).toBe(32);
+});
+
+it('dates a line audition by its own line and the settings, not by another line', () => {
+  const lines = [
+    { id: 'a', text: 'Hello.', profileId: null },
+    { id: 'b', text: 'Again.', profileId: null },
+  ];
+  const draft = { ...blankLongformDraft(), voice: 'narrator', lines };
+  const key = linePreviewKey(draft, lines[0]);
+  const typed = { ...draft, lines: [lines[0], { ...lines[1], text: 'Again and again.' }] };
+  expect(linePreviewKey(typed, typed.lines[0])).toBe(key);
+  expect(linePreviewKey(draft, { ...lines[0], text: 'Hello there.' })).not.toBe(key);
+  expect(linePreviewKey({ ...draft, voice: 'other' }, lines[0])).not.toBe(key);
+});
 it('assembles canonical voice, pause and speed spans for auditions', async () => {
   const close = vi.fn();
   vi.stubGlobal(

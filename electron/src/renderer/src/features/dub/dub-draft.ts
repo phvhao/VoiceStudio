@@ -12,6 +12,15 @@ function isProviderErrorText(value: unknown): value is string {
   );
 }
 
+/** `value`'s string entries, by key; undefined when it holds none. */
+export function stringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 /** A saved phase describes interrupted work, never proof that a job is still running. */
 export function restoreDubDraft(raw: string | null, defaults: DubSession): DubSession {
   try {
@@ -121,6 +130,9 @@ export function restoreDubDraft(raw: string | null, defaults: DubSession): DubSe
       )
         ? value.pendingTiming
         : undefined,
+      timingByLang: stringRecord(value.timingByLang),
+      pendingTimingKey:
+        typeof value.pendingTimingKey === 'string' ? value.pendingTimingKey : undefined,
       fingerprintsByLang:
         value.fingerprintsByLang &&
         typeof value.fingerprintsByLang === 'object' &&

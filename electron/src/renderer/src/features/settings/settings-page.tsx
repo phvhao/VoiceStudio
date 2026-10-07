@@ -18,6 +18,7 @@ import { OpenApiSettings } from './openapi-settings';
 import { DiagnosticsSettings } from './diagnostics-settings';
 import { ModelSettings } from './model-settings';
 import { familyIcons, modelFamilies } from './model-family';
+import { HistoryNav } from '@/components/app-shell/history-nav';
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
 import { runRendererTask } from '@/lib/global-error-recovery';
 import {
@@ -538,6 +539,7 @@ export function SettingsPage() {
             !isMac() && 'native-controls-right',
           )}
         >
+          <HistoryNav />
           <span className="text-muted-foreground">{t('nav.settings')}</span>
           <ChevronRightIcon aria-hidden="true" className="size-3.5 text-muted-foreground/60" />
           <h1 className="font-medium">

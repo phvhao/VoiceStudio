@@ -121,6 +121,11 @@ karaoke (disabled with dual layout). Audio supports WAV or MP3 with bitrate choi
 SRT/VTT/ASS sidecars and per-language stem/segment ZIPs use the existing backend.
 Each download is explicit and targets the selected language. Export errors retain
 all choices for retry. Native save filters match the encoded file format.
+Export, Translate and Generate never grey out without a reason. While something is
+missing they look unfinished (dashed); pressing one lists what it needs (no
+generated dub yet, no target language, an engine still starting) under the
+Upload & Transcribe → Translate → Generate Dub checklist, and each item's button
+scrolls to, focuses and highlights the control that fixes it.
 Browser fixtures verify MP3/SRT downloads, query options and failed-export retry;
 unit tests cover video/package parameters. Real rendered exports, batch presets
 and native save dialogs remain unverified or incomplete.
@@ -246,6 +251,31 @@ retrying. Camera-cut segmentation uses nearby timed word boundaries when availab
 and skips cuts inside speech that cannot be assigned safely. This improves phrase
 timing; it does not promise phoneme-level lip sync or correct inaccurate source
 transcripts automatically.
+
+Smart Fit fits lines in both directions. A line longer than its slot speeds its
+audio up (to 1.2× alone, 1.5× with the video) and slows that part of the video
+(up to 2×). A line shorter than the original speech slows its audio to 0.9× at
+most and speeds the speech's part of the video up to 1.25×, so the dub ends with
+the mouth instead of leaving a silent gap; the pause before the next line keeps
+its length, and the export, preview, subtitles, preserved background and
+**Verify** follow the shorter timeline. So does the MP4's **Original** audio
+track (the source's sound, retimed with the picture) and the background stem of
+the stems ZIP; a dub track on a shorter timeline beside the unretimed picture
+(Original as the default track) runs on in silence instead of cutting the file
+short. A dub that already covers the original speech is no longer
+slowed into the pause after it. Each line's options hold **Video timing**: Auto,
+Keep (never retime its video), Allow shrink or Allow stretch (that direction
+only); the choice is saved with the project and the job. A change of a line's
+video timing, or of the timing mode, after a render shows **Timing changed since
+the last render** with **Apply timing**, which places the speech already
+rendered anew without generating it again (`regen_only: []`). A line flagged
+**May be missing content** is never sped up, so the gap stays visible; a dub of
+it that runs long is slowed down like any line's. Retimed lines show a **Video 0.85×** badge (the factor of the
+segment's original length; below 1 is faster). Stretch Video also works both
+ways: every line's video takes the natural length of its dub, slower or faster.
+An audio file has no picture to retime: Smart Fit fits its lines by their audio
+alone (up to 1.8× faster, down to 0.85×), the background keeps its tempo, and
+the lines offer no Video timing.
 
 ### Mirror source delivery
 

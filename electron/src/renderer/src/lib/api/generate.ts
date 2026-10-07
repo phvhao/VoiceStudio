@@ -197,7 +197,11 @@ export function parseGenerateHeaders(headers: Headers): Omit<GenerateResult, 'bl
     genTimeSeconds: headerFloat(headers, 'X-Gen-Time'),
     seed: headerInt(headers, 'X-Seed'),
     routing: routingStatus
-      ? { status: routingStatus, reason: headers.get('X-OmniVoice-Routing-Reason') ?? '' }
+      ? {
+          status: routingStatus,
+          reason: headers.get('X-OmniVoice-Routing-Reason') ?? '',
+          code: headers.get('X-OmniVoice-Routing-Reason-Code') ?? undefined,
+        }
       : null,
     dropped:
       droppedCount !== null && droppedCount > 0

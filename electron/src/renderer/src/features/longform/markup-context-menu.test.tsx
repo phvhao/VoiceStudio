@@ -298,3 +298,26 @@ it('offers no retake on a page that keeps no takes', async () => {
   await screen.findByRole('menuitem', { name: 'Listen' });
   expect(screen.queryByRole('menuitem', { name: /Retake/ })).toBeNull();
 });
+
+it('pastes through the desktop shell when the page may not read the clipboard', async () => {
+  const refused = async () => {
+    throw new DOMException('Read permission denied.', 'NotAllowedError');
+  };
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { readText: refused, writeText: async () => {} },
+  });
+  Object.defineProperty(window, 'voicestudio', {
+    configurable: true,
+    value: { clipboard: { readText: async () => 'pasted ' } },
+  });
+  try {
+    render(<Editor initial="Say it." />);
+    rightClickAt(4);
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Paste/ }));
+    await waitFor(() => expect(script().value).toBe('Say pasted it.'));
+  } finally {
+    Reflect.deleteProperty(window, 'voicestudio');
+    Reflect.deleteProperty(navigator, 'clipboard');
+  }
+});

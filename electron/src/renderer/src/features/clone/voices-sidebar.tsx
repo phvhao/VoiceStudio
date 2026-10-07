@@ -2,7 +2,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { AudioPreviewButton } from '@/components/audio-preview-button';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { setWorkspace } from '@/lib/store/workspace';
-import { openTake, reuseTake, useSelectedTake } from '@/lib/store/takes';
+import { openTake, useSelectedTake } from '@/lib/store/takes';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -41,13 +41,13 @@ import { ConfirmDialog } from './confirm-dialog';
 import { displayTitle, formatRelative } from './format';
 import {
   DESIGN_DRAFT_EVENT,
-  designDraftFromTake,
   readDraft,
   replaceRecipe,
   restoreDesignProfile,
   writeDraft,
 } from '@/features/design/design-draft';
 import { useTtsReadiness, type TtsReadinessBlocker } from '@/hooks/use-tts-readiness';
+import { reuseHistoryTake } from './reuse-take';
 
 const VIRTUALIZE_ABOVE = 30;
 
@@ -547,15 +547,7 @@ function RecentTakes({ scrollRef }: RecentTakesProps) {
 
   const rowProps: Omit<TakeRowProps, 'item'> = {
     onStar: (item) => toggleStarred.mutate({ id: item.id, starred: !item.starred }),
-    onReuse: async (item) => {
-      if (item.mode === 'design') {
-        writeDraft(designDraftFromTake(item));
-        setCloneSetting('language', item.language || 'Auto');
-        openTake(null);
-        return;
-      }
-      await reuseTake(item);
-    },
+    onReuse: reuseHistoryTake,
     onDelete: (item) => deleteItem.mutate(item.id),
   };
 

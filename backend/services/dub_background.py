@@ -67,17 +67,62 @@ def splice_background(original: str, separated: str, output: str, intervals: lis
                 offset += len(wave)
 
 
-async def _checked(cmd: list[str]) -> None:
+async def _checked(cmd: list[str], what: str = 'preserve original background audio') -> None:
     rc, _, error = await run_ffmpeg(cmd, timeout=1800.0)
     if rc:
-        raise RuntimeError('Could not preserve original background audio: ' + str(error)[-500:])
+        raise RuntimeError(f'Could not {what}: ' + str(error)[-500:])
 
 
-async def surgical_background(source: str, separated: str, cache_dir: str, segments: list[dict], plan: list[dict], duration: float) -> str:
+def _check_plan(plan: list[dict]) -> None:
     for chunk in plan:
         ratio = float(chunk["stretch_ratio"])
         if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError("Invalid background retiming ratio")
+
+
+def _retimes(plan: list[dict]) -> bool:
+    return any(abs(float(chunk['stretch_ratio']) - 1) > 1e-6 for chunk in plan)
+
+
+async def _retime_wav(ffmpeg: str, tmp: str, wav: str, plan: list[dict], duration: float, what: str) -> str:
+    """``wav`` (in ``tmp``) on the plan's timeline: every chunk of it at the
+    pace its video takes there (pitch kept), the gaps between at 1.0×."""
+    chunks = expand_retime_chunks(plan, duration)
+    # Bound filter buffering for long projects; trim each batch's
+    # input before splitting it among the chunk filters.
+    batches = []
+    for batch_index in range(0, len(chunks), 16):
+        batch = chunks[batch_index:batch_index+16]
+        origin = batch[0][0]
+        filters = []
+        for i, (a, b, ratio) in enumerate(batch):
+            rate = 1 / ratio
+            tempos = []
+            while rate < .5:
+                tempos.append('atempo=0.5')
+                rate /= .5
+            while rate > 2:
+                tempos.append('atempo=2')
+                rate /= 2
+            tempos.append(f'atempo={rate:.9f}')
+            length = (b-a)*ratio
+            filters.append(f'[0:a]atrim=start={a-origin:.9f}:end={b-origin:.9f},asetpts=PTS-STARTPTS,' + ','.join(tempos) + f',apad,atrim=duration={length:.9f}[c{i}]')
+        filters.append(''.join(f'[c{i}]' for i in range(len(batch))) + f'concat=n={len(batch)}:v=0:a=1[out]')
+        script = Path(tmp)/'retime.txt'
+        script.write_text(';'.join(filters))
+        batch_name = f'batch{batch_index}.wav'
+        output = str(Path(tmp)/batch_name)
+        await _checked([ffmpeg, '-y', '-ss', str(origin), '-t', str(batch[-1][1]-origin), '-i', wav, '-filter_complex_script', str(script), '-map', '[out]', '-c:a', 'pcm_f32le', output], what)
+        batches.append(batch_name)
+    listing = Path(tmp)/'concat.txt'
+    listing.write_text(''.join(f"file '{name}'\n" for name in batches))
+    retimed = str(Path(tmp)/'retimed.wav')
+    await _checked([ffmpeg, '-y', '-f', 'concat', '-safe', '1', '-i', str(listing), '-c:a', 'copy', retimed], what)
+    return retimed
+
+
+async def surgical_background(source: str, separated: str, cache_dir: str, segments: list[dict], plan: list[dict], duration: float) -> str:
+    _check_plan(plan)
     intervals = dialogue_intervals(segments)
     if not intervals:
         raise ValueError('Dialogue timing is required to preserve original background audio')
@@ -93,38 +138,31 @@ async def surgical_background(source: str, separated: str, cache_dir: str, segme
             for inp, out in ((source, original), (separated, bed)):
                 await _checked([ffmpeg, '-y', '-i', inp, '-map', '0:a:0', '-vn', '-ar', str(RATE), '-ac', '2', '-c:a', 'pcm_f32le', out])
             await asyncio.to_thread(splice_background, original, bed, spliced, intervals)
-            if plan and any(abs(float(p['stretch_ratio'])-1) > 1e-6 for p in plan):
-                chunks = expand_retime_chunks(plan, duration)
-                # Bound filter buffering for long projects; trim each batch's
-                # input before splitting it among the chunk filters.
-                batches = []
-                for batch_index in range(0, len(chunks), 16):
-                    batch = chunks[batch_index:batch_index+16]
-                    origin = batch[0][0]
-                    filters = []
-                    for i, (a, b, ratio) in enumerate(batch):
-                        rate = 1 / ratio
-                        tempos = []
-                        while rate < .5:
-                            tempos.append('atempo=0.5')
-                            rate /= .5
-                        while rate > 2:
-                            tempos.append('atempo=2')
-                            rate /= 2
-                        tempos.append(f'atempo={rate:.9f}')
-                        length = (b-a)*ratio
-                        filters.append(f'[0:a]atrim=start={a-origin:.9f}:end={b-origin:.9f},asetpts=PTS-STARTPTS,' + ','.join(tempos) + f',apad,atrim=duration={length:.9f}[c{i}]')
-                    filters.append(''.join(f'[c{i}]' for i in range(len(batch))) + f'concat=n={len(batch)}:v=0:a=1[out]')
-                    script = Path(tmp)/'retime.txt'
-                    script.write_text(';'.join(filters))
-                    batch_name = f'batch{batch_index}.wav'
-                    output = str(Path(tmp)/batch_name)
-                    await _checked([ffmpeg, '-y', '-ss', str(origin), '-t', str(batch[-1][1]-origin), '-i', spliced, '-filter_complex_script', str(script), '-map', '[out]', '-c:a', 'pcm_f32le', output])
-                    batches.append(batch_name)
-                listing = Path(tmp)/'concat.txt'
-                listing.write_text(''.join(f"file '{name}'\n" for name in batches))
-                retimed = str(Path(tmp)/'retimed.wav')
-                await _checked([ffmpeg, '-y', '-f', 'concat', '-safe', '1', '-i', str(listing), '-c:a', 'copy', retimed])
-                spliced = retimed
+            if plan and _retimes(plan):
+                spliced = await _retime_wav(ffmpeg, tmp, spliced, plan, duration, 'preserve original background audio')
             os.replace(spliced, target)
+    return target
+
+
+async def retimed_audio(source: str, cache_dir: str, plan: list[dict], duration: float) -> str:
+    """The first audio stream of ``source`` on the timeline of a retimed dub —
+    the chunk plan (Smart Fit or Stretch Video) its picture and its dub
+    follow — so an export can put the original sound, or the separated
+    background, beside them in step. Cached in ``cache_dir`` by the source's
+    identity and the plan. A plan that retimes nothing returns ``source``."""
+    _check_plan(plan)
+    if not plan or not _retimes(plan):
+        return source
+    identity = [source, os.stat(source).st_size, os.stat(source).st_mtime_ns]
+    key = hashlib.sha256(json.dumps([1, identity, plan, duration], sort_keys=True).encode()).hexdigest()[:24]
+    target = str(Path(cache_dir) / f'fitted_audio_{key}.wav')
+    async with _locks.setdefault(target, asyncio.Lock()):
+        if os.path.isfile(target):
+            return target
+        ffmpeg = find_ffmpeg()
+        what = "put the original audio on the dub's timeline"
+        with tempfile.TemporaryDirectory(prefix='.fitted-audio-', dir=cache_dir) as tmp:
+            wav = str(Path(tmp)/'source.wav')
+            await _checked([ffmpeg, '-y', '-i', source, '-map', '0:a:0', '-vn', '-ar', str(RATE), '-ac', '2', '-c:a', 'pcm_f32le', wav], what)
+            os.replace(await _retime_wav(ffmpeg, tmp, wav, plan, duration, what), target)
     return target

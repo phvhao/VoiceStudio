@@ -1,7 +1,9 @@
 import { StoryStems } from './story-stems';
 import { WaveformPlayer } from '@/components/waveform-player';
-import { previewStoryLine } from './story-preview';
+import { linePreviewKey, previewStoryLine } from './story-preview';
 import { storyVoicesReady } from './story-inputs';
+import { PreviewOutdated } from './chapter-previews';
+import { settingsChanged, usePreviewLock, type PreviewLock } from './preview-run';
 import {
   DEFAULT_SPLIT_MODE,
   SPLIT_MODES,
@@ -46,6 +48,7 @@ import { MarkupEditorTools } from './markup-editor-tools';
 import type { RetakeTools } from './take-retake';
 import { VOICE_ACCENTS } from './voice-palette';
 import type { Draft } from './longform-session';
+import { LONGFORM_TARGET } from './generate-gates';
 import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 interface Props {
   draft: Draft;
@@ -57,7 +60,12 @@ interface Props {
   /** "Retake this sentence" in each line, by its id (the story reads sentence by sentence). */
   retakes?: { tools(lineId: string): RetakeTools };
   onChange: (patch: Partial<Draft>) => void;
+  /** Stem export renders the whole story: the page locks while it does. */
   onBusy?: (busy: boolean) => void;
+  /** The page's preview lock: a line's audition waits while another preview renders. */
+  previews?: PreviewLock;
+  /** The engine, preset and reading an audition renders under (`usePreviewSettings`). */
+  previewSettings?: string | null;
 }
 type Line = Draft['lines'][number];
 
@@ -241,6 +249,8 @@ export function StoryEditor({
   retakes,
   onChange,
   onBusy,
+  previews,
+  previewSettings = null,
 }: Props) {
   const { t } = useTranslation();
   const spellcheck = useScriptSpellcheck();
@@ -248,27 +258,42 @@ export function StoryEditor({
   const lineInputs = useRef(new Map<string, HTMLTextAreaElement>());
   const chapterInputs = useRef(new Map<string, HTMLInputElement>());
   const [activeLine, setActiveLine] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ id: string; url: string } | null>(null);
+  // An audition, what it rendered from (`linePreviewKey`), and under which
+  // engine, preset and reading.
+  const [preview, setPreview] = useState<{
+    id: string;
+    url: string;
+    key: string;
+    settings: string | null;
+  } | null>(null);
   const [previewing, setPreviewing] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const ownLock = usePreviewLock();
+  const lock = previews ?? ownLock;
+  // Another story opened (or the page left): its audition is not this story's.
+  useEffect(() => {
+    setPreview(null);
+    return () => controller.current?.abort();
+  }, [draft.projectId]);
   useEffect(
     () => () => {
       if (preview) URL.revokeObjectURL(preview.url);
     },
     [preview],
   );
+  // An audition goes with its line; one whose line or settings changed stays,
+  // marked outdated, and typing in another line leaves it as it is. A line
+  // deleted (or cleared, or turned into a chapter heading) while it is heard
+  // takes its Stop with it: its audition stops too, instead of rendering on
+  // and keeping every other preview, and Generate, waiting.
   useEffect(() => {
-    setPreview(null);
-  }, [
-    draft.lines,
-    draft.cast,
-    draft.voice,
-    draft.language,
-    draft.voiceCast,
-    draft.overrides,
-    draft.globalSpeed,
-  ]);
+    if (preview && !draft.lines.some((line) => line.id === preview.id)) setPreview(null);
+    if (
+      previewing &&
+      !draft.lines.some((line) => line.id === previewing && !CHAPTER_RE.test(line.text))
+    )
+      controller.current?.abort();
+  }, [draft.lines, preview, previewing]);
   const scriptNames = useMemo(
     () => parseCastNames(draft.lines.map((line) => line.text).join('\n'), draft.voiceCast),
     [draft.lines, draft.voiceCast],
@@ -276,21 +301,25 @@ export function StoryEditor({
   const defaultVoiceName = profiles.find((profile) => profile.id === draft.voice)?.name;
   const audition = async (line: Line) => {
     if (disabled || !canSynthesize || controller.current) return;
+    // One preview at a time; the editor stays open while it renders.
+    if (!lock.acquire('line')) return;
     const current = new AbortController();
     controller.current = current;
+    const key = linePreviewKey(draft, line);
+    const settings = previewSettings;
     setPreviewing(line.id);
     setPreviewError(null);
-    onBusy?.(true);
     try {
       const blob = await previewStoryLine(draft, line, current.signal, profiles);
-      if (!current.signal.aborted) setPreview({ id: line.id, url: URL.createObjectURL(blob) });
+      if (!current.signal.aborted)
+        setPreview({ id: line.id, url: URL.createObjectURL(blob), key, settings });
     } catch (cause) {
       if (!current.signal.aborted) setPreviewError(describeError(cause));
     } finally {
       if (controller.current === current) {
         controller.current = null;
         setPreviewing(null);
-        onBusy?.(false);
+        lock.release();
       }
     }
   };
@@ -549,7 +578,11 @@ export function StoryEditor({
       </details>
 
       {draft.lines.length === 0 && (
-        <div className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-border/60 px-6 text-center">
+        // Where Generate's "add a spoken line" leads while there are no lines.
+        <div
+          data-gate-target={LONGFORM_TARGET.script}
+          className="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-border/60 px-6 text-center"
+        >
           <div className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
             <BookOpenTextIcon className="size-5" />
           </div>
@@ -721,7 +754,7 @@ export function StoryEditor({
                   disabled={
                     disabled ||
                     !canSynthesize ||
-                    previewing !== null ||
+                    lock.busy ||
                     !storyVoicesReady({ ...draft, lines: [line] }, profiles)
                   }
                   onClick={() => void audition(line)}
@@ -761,6 +794,7 @@ export function StoryEditor({
                 autoGrow
                 rows={2}
                 voices={scriptNames}
+                data-gate-target={LONGFORM_TARGET.script}
                 aria-label={t('stories.linePlaceholder')}
                 placeholder={t('stories.linePlaceholder')}
                 textClassName="px-3 pt-1 pb-3 text-sm leading-6 placeholder:text-muted-foreground/50"
@@ -770,7 +804,13 @@ export function StoryEditor({
               />
             </MarkupEditorTools>
             {preview?.id === line.id && (
-              <div className="px-3 pb-3">
+              <div className="space-y-1 px-3 pb-3">
+                {(linePreviewKey(draft, line) !== preview.key ||
+                  settingsChanged(preview.settings, previewSettings)) && (
+                  <p className="flex">
+                    <PreviewOutdated />
+                  </p>
+                )}
                 <WaveformPlayer
                   showWaveform={false}
                   src={preview.url}
@@ -800,7 +840,7 @@ export function StoryEditor({
       <StoryStems
         draft={draft}
         profiles={profiles}
-        disabled={disabled || !canSynthesize}
+        disabled={disabled || !canSynthesize || lock.busy}
         onBusy={onBusy}
       />
     </div>

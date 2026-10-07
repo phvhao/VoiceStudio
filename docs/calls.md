@@ -13,7 +13,9 @@ voice-conversion APIs and saved voices.
 3. Select Speak. Choose a saved voice, language and speed. Install the selected
    engine explicitly in Settings if it is not ready.
 4. Choose **Run workflow**, then run from the output panel. Preview and export
-   the resulting WAV clips with numbered, filesystem-safe names.
+   the resulting WAV clips with numbered, filesystem-safe names. While the run
+   cannot start, Run looks unfinished; pressing it lists what is missing, and
+   **Show the step** selects and focuses the step to fix.
 
 Speech goes through the normal generation endpoint, including mastering,
 normalization and synthetic marking. The optional Normalize audio step applies

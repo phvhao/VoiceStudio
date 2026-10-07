@@ -25,15 +25,31 @@ export function restoreBookOptions(value: Partial<BookOptions> | null | undefine
       : [],
   };
 }
-export function duplicateWords(rows: BookOptions['lexicon']): boolean {
-  const keys = rows.map((row) => row.word.trim().toLowerCase()).filter(Boolean);
-  return new Set(keys).size !== keys.length;
+/** For each row, whether its word repeats one listed above it (case and spaces aside). */
+export function repeatedWords(rows: BookOptions['lexicon']): boolean[] {
+  const seen = new Set<string>();
+  return rows.map((row) => {
+    const key = row.word.trim().toLowerCase();
+    const repeated = Boolean(key) && seen.has(key);
+    seen.add(key);
+    return repeated;
+  });
 }
-export function lexiconMap(rows: BookOptions['lexicon']) {
-  if (duplicateWords(rows)) throw new Error('Duplicate pronunciation words');
+export function duplicateWords(rows: BookOptions['lexicon']): boolean {
+  return repeatedWords(rows).includes(true);
+}
+/**
+ * The word → pronunciation map a render sends. A word listed twice has no one
+ * pronunciation, so a render refuses it (`strict`, the default). What only
+ * describes the book — its outline, whether an audition is current — must
+ * not fail on a draft being edited: it reads the first row and skips the copy.
+ */
+export function lexiconMap(rows: BookOptions['lexicon'], { strict = true } = {}) {
+  const repeated = repeatedWords(rows);
+  if (strict && repeated.includes(true)) throw new Error('Duplicate pronunciation words');
   return Object.fromEntries(
     rows
-      .filter((row) => row.word.trim() && row.pronunciation.trim())
+      .filter((row, index) => !repeated[index] && row.word.trim() && row.pronunciation.trim())
       .map((row) => [row.word.trim(), row.pronunciation.trim()]),
   );
 }

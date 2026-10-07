@@ -7,9 +7,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 
-from schemas.requests import AgentFitRequest, TranslateRequest
+from schemas.requests import AgentFitRequest, TranslateRequest, TranslationCheckRequest
 from services.model_manager import _cpu_pool, _gpu_pool
 from services.hf_revisions import revision_for
+from services.translation_sentences import join_translations, omission_verdict, split_for_translation
 from services.translator import (
     SCRIPT_RANGES,
     _cinematic_budget,
@@ -466,7 +467,7 @@ async def dub_translate(req: TranslateRequest):
 
                     _nllb_tokenizer.src_lang = flores_src
                     inputs = _nllb_tokenizer(
-                        [seg.text for _, seg in rows],
+                        [text for _, text in rows],
                         return_tensors="pt",
                         padding=True,
                     )
@@ -497,21 +498,30 @@ async def dub_translate(req: TranslateRequest):
                     decoded = _nllb_tokenizer.batch_decode(tokens, skip_special_tokens=True)
                     if len(decoded) != len(rows):
                         raise RuntimeError(
-                            f"NLLB returned {len(decoded)} translations for {len(rows)} segments"
+                            f"NLLB returned {len(decoded)} translations for {len(rows)} sentences"
                         )
                     return decoded
 
-                # A target-language BOS token is shared by a forward pass, so
-                # group mixed-language rows first. Preserve request order in
-                # the final response even though groups render independently.
-                grouped: dict[str, list[tuple[int, object]]] = {}
+                # NLLB-200 learned from single sentences: given a segment that
+                # holds several it translates one and drops the rest. Every
+                # row is therefore one sentence (one clause on the second pass
+                # for a line flagged as missing content), joined back per
+                # segment afterwards. A target-language BOS token is shared by
+                # a forward pass, so rows are grouped by target; a repeated
+                # sentence translates once, and rows run shortest first so a
+                # batch pads to similar lengths. Request order is preserved.
+                retry = bool(getattr(req, "retry_incomplete", False))
+                grouped: dict[str, dict[str, list[tuple[int, int]]]] = {}
+                pieces_by_index: dict[int, list[tuple[str, str]]] = {}
                 results_by_index: dict[int, dict] = {}
                 for index, seg in enumerate(req.segments):
                     if not seg.text or not seg.text.strip():
                         results_by_index[index] = {"id": seg.id, "text": seg.text}
                         continue
                     target = resolved[seg.target_lang] if seg.target_lang else flores_tgt
-                    grouped.setdefault(target, []).append((index, seg))
+                    pieces_by_index[index] = split_for_translation(seg.text, clauses=retry)
+                    for k, (sentence, _separator) in enumerate(pieces_by_index[index]):
+                        grouped.setdefault(target, {}).setdefault(sentence, []).append((index, k))
 
                 # Beam search multiplies decoder memory per row. Keep the
                 # effective hypothesis count bounded while still widening the
@@ -521,19 +531,29 @@ async def dub_translate(req: TranslateRequest):
                     _nllb_batch_size(),
                     max(1, _nllb_hypothesis_budget() // beam_count),
                 )
-                for target, rows in grouped.items():
+                translated_rows: dict[tuple[int, int], str] = {}
+                failed: dict[int, str] = {}
+
+                def _keep(row, text):
+                    for key in row[0]:
+                        translated_rows[key] = text
+
+                def _fail(row, error):
+                    for index, _k in row[0]:
+                        failed.setdefault(index, str(error))
+
+                for target, sentences in grouped.items():
+                    rows = sorted(
+                        ((keys, sentence) for sentence, keys in sentences.items()),
+                        key=lambda row: len(row[1]),
+                    )
                     for start in range(0, len(rows), width):
                         batch = rows[start : start + width]
                         try:
                             translated_texts = _generate_rows(batch, target)
                         except Exception as batch_error:
                             if len(batch) == 1:
-                                index, seg = batch[0]
-                                results_by_index[index] = {
-                                    "id": seg.id,
-                                    "text": seg.text,
-                                    "error": str(batch_error),
-                                }
+                                _fail(batch[0], batch_error)
                                 continue
                             # A single unusually long row must not sink its
                             # neighbours. Clear a failed device allocation and
@@ -547,19 +567,30 @@ async def dub_translate(req: TranslateRequest):
                                 len(batch),
                                 batch_error,
                             )
-                            for index, seg in batch:
+                            for row in batch:
                                 try:
-                                    translated_text = _generate_rows([(index, seg)], target)[0]
-                                    results_by_index[index] = {"id": seg.id, "text": translated_text}
+                                    _keep(row, _generate_rows([row], target)[0])
                                 except Exception as row_error:
-                                    results_by_index[index] = {
-                                        "id": seg.id,
-                                        "text": seg.text,
-                                        "error": str(row_error),
-                                    }
+                                    _fail(row, row_error)
                             continue
-                        for (index, seg), translated_text in zip(batch, translated_texts):
-                            results_by_index[index] = {"id": seg.id, "text": translated_text}
+                        for row, translated_text in zip(batch, translated_texts):
+                            _keep(row, translated_text)
+
+                # A segment with any untranslated sentence keeps its source
+                # text and reports the error, as a failed segment always has.
+                for index, pieces in pieces_by_index.items():
+                    seg = req.segments[index]
+                    if index in failed:
+                        results_by_index[index] = {"id": seg.id, "text": seg.text, "error": failed[index]}
+                        continue
+                    results_by_index[index] = {
+                        "id": seg.id,
+                        "text": join_translations(
+                            pieces,
+                            [translated_rows[(index, k)] for k in range(len(pieces))],
+                            seg.target_lang or req.target_lang,
+                        ),
+                    }
 
                 return [results_by_index[index] for index in range(len(req.segments))]
 
@@ -633,9 +664,12 @@ async def dub_translate(req: TranslateRequest):
             from services import translation_quality as tq
 
             # Two-stage quality toggles. None (old clients) = ON — an LLM
-            # translator is active on this branch by definition.
+            # translator is active on this branch by definition. The second
+            # pass for a line flagged as missing content keeps the direct
+            # translation: the polish may shorten it again.
+            retry = bool(getattr(req, "retry_incomplete", False))
             auto_glossary_on = req.auto_glossary if req.auto_glossary is not None else True
-            reflect_on = req.reflect if req.reflect is not None else True
+            reflect_on = (req.reflect if req.reflect is not None else True) and not retry
 
             # Stage 1 — auto-glossary: ONE pass over the full transcript for a
             # theme summary + terminology map (cached per job/target/transcript),
@@ -681,10 +715,15 @@ async def dub_translate(req: TranslateRequest):
                 dia_clause = ""
                 if req.dialect and str(req.dialect).lower().startswith(str(tgt_code).lower()[:2]):
                     dia_clause = dialect_clause(req.dialect)
+                complete_clause = (
+                    " An earlier translation of this text left part of it out: "
+                    "translate all of it, every sentence and clause, without "
+                    "shortening or summarizing anything."
+                ) if retry else ""
                 base = (
                     f"You are a professional dubbing translator. "
                     f"Translate the user's text from {src_name} into "
-                    f"{tgt_name}.{script_clause}{dia_clause} "
+                    f"{tgt_name}.{script_clause}{dia_clause}{complete_clause} "
                     f"{translation_style_brief(req)} "
                     f"Reply ONLY with the translated {tgt_name} text, do not "
                     f"add quotes, notes, headers, explanations, or commentary."
@@ -861,6 +900,18 @@ async def dub_translate(req: TranslateRequest):
                 import argostranslate.translate
 
                 from_code = pack_status["source_lang"]
+                # Argos runs sentence-trained models like NLLB, and its own
+                # sentence splitter falls back to English rules for many
+                # languages: translate one sentence (one clause on the second
+                # pass for a line flagged as missing content) per call, and a
+                # repeated sentence once.
+                retry = bool(getattr(req, "retry_incomplete", False))
+                memo: dict[tuple[str, str], str] = {}
+
+                def _sentence(text, to_code):
+                    if (to_code, text) not in memo:
+                        memo[(to_code, text)] = argostranslate.translate.translate(text, from_code, to_code)
+                    return memo[(to_code, text)]
 
                 results = []
                 for seg in req.segments:
@@ -868,13 +919,15 @@ async def dub_translate(req: TranslateRequest):
                         if not seg.text or not seg.text.strip():
                             results.append({"id": seg.id, "text": seg.text})
                             continue
-                        to_code = seg.target_lang if seg.target_lang else req.target_lang
-                        to_code = translation_engines.argos_lang_code(to_code)
-                        translated_text = (
-                            seg.text
-                            if from_code == to_code
-                            else argostranslate.translate.translate(seg.text, from_code, to_code)
-                        )
+                        target = seg.target_lang if seg.target_lang else req.target_lang
+                        to_code = translation_engines.argos_lang_code(target)
+                        if from_code == to_code:
+                            translated_text = seg.text
+                        else:
+                            pieces = split_for_translation(seg.text, clauses=retry)
+                            translated_text = join_translations(
+                                pieces, [_sentence(piece, to_code) for piece, _ in pieces], target,
+                            )
                         results.append({"id": seg.id, "text": translated_text})
                     except Exception as e:
                         results.append({"id": seg.id, "text": seg.text, "error": str(e)})
@@ -933,21 +986,16 @@ async def dub_translate(req: TranslateRequest):
             from deep_translator import GoogleTranslator
             return GoogleTranslator(source=src, target=tgt, proxies=_proxies)
 
-        def _translate_single(seg):
-            seg_lc = (
-                TRANSLATE_CODES.get(seg.target_lang, seg.target_lang)
-                if seg.target_lang else lang_code
-            )
-            if not seg.text or not seg.text.strip():
-                return {"id": seg.id, "text": seg.text}
+        def _translate_text(text, seg_lc):
+            """``(translation, None)``, or ``(None, last error)`` once the
+            ladder (src_arg, tgt) → retry once → (auto, tgt) is spent."""
             last_err = None
-            # Try: (src_arg, tgt) → retry once → fall back to (auto, tgt).
             for attempt, src in enumerate([src_arg, src_arg, "auto"]):
                 try:
-                    out = _build_translator(src, seg_lc).translate(seg.text)
+                    out = _build_translator(src, seg_lc).translate(text)
                     output_error = _translation_output_error(out)
                     if output_error is None:
-                        return {"id": seg.id, "text": out}
+                        return out, None
                     last_err = output_error
                 except Exception as e:
                     last_err = f"{type(e).__name__}: {e}"
@@ -956,12 +1004,34 @@ async def dub_translate(req: TranslateRequest):
                         attempt + 1, src, seg_lc, provider, e,
                     )
                     time.sleep(0.25 * (attempt + 1))
-            logger.error("translate %s -> %s gave up (provider=%s): %s", src_arg, seg_lc, provider, last_err)
-            # Scrub before it reaches the UI — DeepL/Microsoft errors can echo
-            # the API key (same class as the OpenAI user_id leak).
-            from core.scrub import scrub_provider_error
-            return {"id": seg.id, "text": seg.text,
-                    "error": scrub_provider_error(last_err, _deepl_key or _msft_key or api_key) or "unknown"}
+            return None, last_err
+
+        # The second pass for a line flagged as missing content goes clause by
+        # clause, so the provider cannot leave part of it out again.
+        retry = bool(getattr(req, "retry_incomplete", False))
+
+        def _translate_single(seg):
+            seg_lc = (
+                TRANSLATE_CODES.get(seg.target_lang, seg.target_lang)
+                if seg.target_lang else lang_code
+            )
+            if not seg.text or not seg.text.strip():
+                return {"id": seg.id, "text": seg.text}
+            pieces = split_for_translation(seg.text, clauses=True) if retry else [(seg.text, "")]
+            outs = []
+            for piece, _separator in pieces:
+                out, last_err = _translate_text(piece, seg_lc)
+                if out is None:
+                    logger.error("translate %s -> %s gave up (provider=%s): %s", src_arg, seg_lc, provider, last_err)
+                    # Scrub before it reaches the UI — DeepL/Microsoft errors can
+                    # echo the API key (same class as the OpenAI user_id leak).
+                    from core.scrub import scrub_provider_error
+                    return {"id": seg.id, "text": seg.text,
+                            "error": scrub_provider_error(last_err, _deepl_key or _msft_key or api_key) or "unknown"}
+                outs.append(out)
+            if not retry:
+                return {"id": seg.id, "text": outs[0]}
+            return {"id": seg.id, "text": join_translations(pieces, outs, seg.target_lang or req.target_lang)}
 
         tasks = [loop.run_in_executor(_cpu_pool, _translate_single, seg) for seg in req.segments]
         translated = await asyncio.gather(*tasks)
@@ -1109,6 +1179,33 @@ async def _finalize_duration_plan(rows, req, loop) -> None:
         await _apply_condense_pass(rows, req, loop)
 
 
+def _stamp_omissions(rows, req, src_lang) -> None:
+    """Flag every row whose FINAL text may be missing part of its source.
+
+    Runs for every translator (services/translation_sentences.py): the row
+    gets ``omission`` = ``{reason, ratio, source_sentences,
+    target_sentences}`` so the segment row can show "May be missing content"
+    with a second pass. Failed and empty rows are skipped. Never raises.
+    """
+    try:
+        sources = {str(s.id): (s.text, s.target_lang or req.target_lang) for s in req.segments}
+        for row in rows:
+            source, target = sources.get(str(row["id"]), ("", req.target_lang))
+            if row.get("error") or not (row.get("text") or "").strip():
+                continue
+            verdict = omission_verdict(source, row["text"], src_lang, target)
+            if verdict:
+                row["omission"] = verdict
+    except Exception as e:  # noqa: BLE001 — a flag must never sink a translate
+        logger.debug("omission check skipped: %s", e)
+
+
+async def _finalize_rows(rows, req, src_lang, loop) -> None:
+    """Passes over the FINAL row texts: omission flags, then the duration plan."""
+    _stamp_omissions(rows, req, src_lang)
+    await _finalize_duration_plan(rows, req, loop)
+
+
 def _stamp_predicted_rate_ratio(translated, req) -> None:
     """Stamp a predicted ``rate_ratio`` on every row that has a known slot.
 
@@ -1204,8 +1301,12 @@ async def _maybe_cinematic(translated, req, src_lang, loop, *, already_llm=False
 
     # Fast (and anything unrecognised) returns the plain translation unchanged
     # (plus the pre-synthesis duration-plan badges — no LLM needed for those).
-    if quality not in ("cinematic", "autofit", "agent"):
-        await _finalize_duration_plan(translated, req, loop)
+    # So does "Translate again" on a line that may be missing content: it asks
+    # for all of the line, and the Cinematic rewrite ("fit the speaker's time
+    # slot") and the Autofit trim ("drop less essential clauses") shorten it
+    # on purpose — they would cut it again and bring its flag straight back.
+    if quality not in ("cinematic", "autofit", "agent") or getattr(req, "retry_incomplete", False):
+        await _finalize_rows(translated, req, src_lang, loop)
         return base
 
     source_by_id: dict[str, str] = {str(s.id): s.text for s in req.segments}
@@ -1237,7 +1338,7 @@ async def _maybe_cinematic(translated, req, src_lang, loop, *, already_llm=False
             merged.append(out)
         await _apply_fit_pass(merged, req, slots_by_id, source_by_id, quality, loop, deadline)
         # Plan AFTER the fit pass — verdicts must describe the final text.
-        await _finalize_duration_plan(merged, req, loop)
+        await _finalize_rows(merged, req, src_lang, loop)
         return {"translated": merged, "target_lang": req.target_lang,
                 "source_lang": src_lang, "quality_used": quality,
                 **_dialect_flags(req, applied=bool(dialect_hint))}
@@ -1247,7 +1348,7 @@ async def _maybe_cinematic(translated, req, src_lang, loop, *, already_llm=False
     if not cinematic_available():
         logger.warning("%s requested but no LLM configured — returning Fast result.", quality)
         base["cinematic_skipped"] = "no-llm-configured"
-        await _finalize_duration_plan(translated, req, loop)
+        await _finalize_rows(translated, req, src_lang, loop)
         return base
 
     directions: dict[str, str] = {
@@ -1266,7 +1367,7 @@ async def _maybe_cinematic(translated, req, src_lang, loop, *, already_llm=False
         pairs.append((seg_id, source_by_id.get(seg_id, ""), literal))
 
     if not pairs:
-        await _finalize_duration_plan(translated, req, loop)
+        await _finalize_rows(translated, req, src_lang, loop)
         return base
 
     refined = await cinematic_refine_many(
@@ -1313,7 +1414,7 @@ async def _maybe_cinematic(translated, req, src_lang, loop, *, already_llm=False
     await _apply_fit_pass(merged, req, slots_by_id, source_by_id, quality, loop, deadline)
 
     # Plan AFTER the fit pass — verdicts must describe the final text.
-    await _finalize_duration_plan(merged, req, loop)
+    await _finalize_rows(merged, req, src_lang, loop)
 
     return {
         "translated": merged,
@@ -1328,6 +1429,26 @@ def translation_style_brief(req) -> str:
     instructions = (getattr(req, "translation_instructions", None) or "").strip()
     return ("User translation style brief (tone and wording only; preserve meaning, timing and output format): "
             + json.dumps(instructions, ensure_ascii=False)) if instructions else ""
+
+
+@router.post("/dub/translation-check")
+async def dub_translation_check(req: TranslationCheckRequest):
+    """Omission flags for translations made outside ``/dub/translate``.
+
+    Translate with Agent runs a local CLI in the desktop app, so its rows never
+    pass the engines above; the editor sends them here for the same "May be
+    missing content" verdict (``_stamp_omissions``) every engine's rows carry.
+    Returns ``{"omissions": {id: verdict}}`` for the flagged rows only.
+    """
+    src_lang = req.source_lang
+    if not src_lang and req.job_id:
+        src_lang = (_get_job(req.job_id) or {}).get("source_lang")
+    omissions = {}
+    for row in req.rows:
+        verdict = omission_verdict(row.source, row.text, src_lang, row.target_lang or req.target_lang)
+        if verdict:
+            omissions[row.id] = verdict
+    return {"omissions": omissions}
 
 
 @router.post("/dub/agent-fit")

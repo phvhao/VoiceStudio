@@ -209,6 +209,12 @@ def _sync_job_segments(job: dict, req: DubRequest) -> None:
         row["start"] = seg.start
         row["end"] = seg.end
         row["text"] = seg.text
+        # The Smart Fit video override is the user's per-line choice: it
+        # stays with the job, and is dropped when set back to automatic.
+        if seg.video_fit:
+            row["video_fit"] = seg.video_fit
+        else:
+            row.pop("video_fit", None)
         # Imported cue markup is reused only when the client vouches this is
         # still that import's text, never because the text happens to match.
         vouched.append(vouch_cue_source(row, seg.text, seg.cue_source_id))
@@ -1697,12 +1703,21 @@ async def dub_generate(job_id: str, req: DubRequest):
             # fit_plans[lang] for the (Phase B) export pipeline.
             _fo = req.fit_options
             _fit_defaults = FitParams()
+            # An audio-only dub has no picture to retime: its lines fit by
+            # their audio alone. A "video" chunk would only retime the
+            # background bed (surgical_background follows the plan), changing
+            # the music's tempo line by line and shortening the program.
+            _audio_only = (job.get("input_type") or "video").lower() == "audio"
             fit_params = FitParams(
                 max_audio_only_rate=float(getattr(_fo, "max_audio_only_rate", None) or _fit_defaults.max_audio_only_rate),
                 audio_rate_cap=float(getattr(_fo, "audio_rate_cap", None) or _fit_defaults.audio_rate_cap),
                 video_slow_cap=float(getattr(_fo, "video_slow_cap", None) or _fit_defaults.video_slow_cap),
+                video_speed_cap=float(getattr(_fo, "video_speed_cap", None) or _fit_defaults.video_speed_cap),
                 gap_guard_s=float(_fo.gap_guard_s) if _fo is not None and _fo.gap_guard_s is not None else _fit_defaults.gap_guard_s,
-                allow_video_retime=bool(_fo.allow_video_retime) if _fo is not None and _fo.allow_video_retime is not None else _fit_defaults.allow_video_retime,
+                allow_video_retime=False if _audio_only else (
+                    bool(_fo.allow_video_retime) if _fo is not None and _fo.allow_video_retime is not None
+                    else _fit_defaults.allow_video_retime
+                ),
                 min_audio_rate=_underrun_min_rate(),
             )
             _seg_order = job.get("seg_order") or []
@@ -1712,6 +1727,14 @@ async def dub_generate(job_id: str, req: DubRequest):
                         "id": _seg_order[i] if i < len(_seg_order) else f"seg_{i}",
                         "start": s,
                         "end": e,
+                        # Per-segment Keep / Allow shrink / Allow stretch, and
+                        # the editor's "may be missing content" flag, which
+                        # forbids speeding the video up. A dub with no video
+                        # has neither to follow.
+                        **({
+                            "video_fit": req.segments[i].video_fit,
+                            "may_be_incomplete": bool(req.segments[i].may_be_incomplete),
+                        } if i < len(req.segments) and not _audio_only else {}),
                     }
                     for i, (s, e, _path, _) in enumerate(all_segment_wavs)
                 ],
@@ -1817,11 +1840,12 @@ async def dub_generate(job_id: str, req: DubRequest):
                     if new_slot_samples > 0 and wl > new_slot_samples + int(sr * 0.02):
                         yield f"data: {json.dumps({'type': 'error', 'segment': i, 'error_code': 'dub_timing_overflow', 'error': 'Speech exceeds the fitting limits. Shorten the translation or choose Strict Slot or Stretch Video before exporting.'})}\n\n"
                         return
-                    # Truthful per-segment verdict for the UI badge.
+                    # Truthful per-segment verdict for the UI badge: a video
+                    # ratio above 1 slowed the segment down, below 1 sped it up.
                     entry = {"status": sf.status}
                     if abs(sf.audio_rate - 1.0) > 1e-6:
                         entry["audio_rate"] = round(sf.audio_rate, 3)
-                    if sf.video_ratio > 1.0 + 1e-6:
+                    if abs(sf.video_ratio - 1.0) > 1e-6:
                         entry["video_ratio"] = round(sf.video_ratio, 3)
                     if sf.overflow_s > 0:
                         entry["overflow_s"] = round(sf.overflow_s, 3)
@@ -2025,8 +2049,18 @@ async def dub_generate(job_id: str, req: DubRequest):
                 "max_audio_only_rate": fit_params.max_audio_only_rate,
                 "audio_rate_cap": fit_params.audio_rate_cap,
                 "video_slow_cap": fit_params.video_slow_cap,
+                "video_speed_cap": fit_params.video_speed_cap,
                 "gap_guard_s": fit_params.gap_guard_s,
                 "allow_video_retime": fit_params.allow_video_retime,
+                # Per-segment overrides change the plan too: "id:mode", with
+                # "!" when the line may be missing content (never sped up).
+                # An audio-only dub plans without them.
+                "video_fit": "" if _audio_only else ",".join(sorted(
+                    f"{_seg_order[i] if i < len(_seg_order) else f'seg_{i}'}:"
+                    f"{seg.video_fit or 'auto'}{'!' if seg.may_be_incomplete else ''}"
+                    for i, seg in enumerate(req.segments)
+                    if seg.video_fit or seg.may_be_incomplete
+                )),
             }
             fit_fp = fit_fingerprint(_fit_params_payload)
             job.setdefault("fit_plans", {})[lang_code] = {

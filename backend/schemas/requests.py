@@ -35,6 +35,14 @@ class DubSegment(BaseModel):
     # `srt_source.id`) while its text is still that import's text. Without
     # it the job forgets the imported cue markup (#2295).
     cue_source_id: Optional[str] = None
+    # Smart Fit per-segment video override (services/fit_planner.py): "keep"
+    # never retimes this segment's video, "shrink" / "stretch" allow only
+    # speeding it up / slowing it down. None follows the job (both ways).
+    # Fit-only: never part of the TTS fingerprint.
+    video_fit: Optional[Literal["keep", "shrink", "stretch"]] = None
+    # The editor flagged this line's translation as possibly missing content;
+    # Smart Fit never speeds its video up to hide the gap.
+    may_be_incomplete: Optional[bool] = None
 
     @field_validator("effect_preset")
     @classmethod
@@ -56,6 +64,7 @@ class FitOptions(BaseModel):
     max_audio_only_rate: Optional[float] = None  # default 1.2
     audio_rate_cap: Optional[float] = None       # default 1.5
     video_slow_cap: Optional[float] = None       # default 2.0
+    video_speed_cap: Optional[float] = None      # default 1.25 (1.0 = never speed video up)
     gap_guard_s: Optional[float] = None          # default 0.05
     allow_video_retime: Optional[bool] = None    # default True
 
@@ -182,6 +191,28 @@ class TranslateRequest(BaseModel):
     # per-segment suggestion the user applies manually, never auto-applied.
     # No LLM configured / LLM failure → silently no suggestion.
     condense: Optional[bool] = False
+    # "Translate again" on a row flagged "May be missing content": machine
+    # translators go clause by clause, the LLM engine is told to keep every
+    # part and skips the polish pass (services/translation_sentences.py).
+    retry_incomplete: Optional[bool] = False
+
+
+class TranslationCheckRow(BaseModel):
+    """A translation made outside /dub/translate (Translate with Agent)."""
+
+    id: str = Field(max_length=128)
+    source: str = Field(max_length=10_000)
+    text: str = Field(max_length=10_000)
+    target_lang: Optional[str] = None
+
+
+class TranslationCheckRequest(BaseModel):
+    """Rows to check for omitted content, as /dub/translate checks its own."""
+
+    rows: List[TranslationCheckRow] = Field(max_length=10_000)
+    target_lang: str
+    source_lang: Optional[str] = None
+    job_id: Optional[str] = None
 
 
 class AgentFitSegment(BaseModel):

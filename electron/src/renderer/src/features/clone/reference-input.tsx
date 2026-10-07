@@ -1,5 +1,5 @@
 import { LoaderCircleIcon, MicIcon, SparklesIcon, SquareIcon, UploadCloudIcon } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { RecordingInputs } from '@/components/recording-inputs';
@@ -88,12 +88,25 @@ export function ReferenceUsageNote({ durationSeconds }: { durationSeconds: numbe
 export function UploadZone({
   onAccept,
   pickToken,
-}: { onAccept?: AcceptReference; pickToken?: PickToken } = {}) {
+  autoOpen = false,
+}: {
+  onAccept?: AcceptReference;
+  pickToken?: PickToken;
+  /** Open the file picker as the zone appears (its "Upload audio" was pressed). */
+  autoOpen?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const ingestFile = useIngest(onAccept, pickToken);
   const inputRef = useRef<HTMLInputElement>(null);
+  const opened = useRef(false);
   const [dragging, setDragging] = useState(false);
   const id = useId();
+  // Within the click that showed the zone, so the browser allows the picker.
+  useLayoutEffect(() => {
+    if (!autoOpen || opened.current) return;
+    opened.current = true;
+    inputRef.current?.click();
+  }, [autoOpen]);
 
   const onDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault();
@@ -139,7 +152,13 @@ export function UploadZone({
 export function RecordZone({
   onAccept,
   pickToken,
-}: { onAccept?: AcceptReference; pickToken?: PickToken } = {}) {
+  autoFocus = false,
+}: {
+  onAccept?: AcceptReference;
+  pickToken?: PickToken;
+  /** Focus the record button as the zone appears (its "Record" was pressed). */
+  autoFocus?: boolean;
+} = {}) {
   const { t } = useTranslation();
   const ingestFile = useIngest(onAccept, pickToken);
   const rec = useRecording((file) => void ingestFile(file));
@@ -182,6 +201,7 @@ export function RecordZone({
     micButton = (
       <button
         type="button"
+        autoFocus={autoFocus}
         onClick={() => void rec.start()}
         className="flex size-24 flex-col items-center justify-center gap-1.5 rounded-full bg-muted text-[length:var(--text-label)] font-medium text-muted-foreground transition-colors outline-none hover:bg-destructive/10 hover:text-destructive focus-visible:ring-3 focus-visible:ring-ring/50"
       >
@@ -232,9 +252,14 @@ export function RecordZone({
 
 /**
  * Upload and record side by side: both ways in are visible at once instead of
- * hidden behind a toggle. Stacks on narrow containers.
+ * hidden behind a toggle. Stacks on narrow containers. `start` continues the
+ * press that opened it: the file picker for upload, the record button's focus
+ * for record.
  */
-export function ReferenceSourcePicker({ onAccept }: { onAccept?: AcceptReference } = {}) {
+export function ReferenceSourcePicker({
+  onAccept,
+  start,
+}: { onAccept?: AcceptReference; start?: 'upload' | 'record' } = {}) {
   const pickToken = useRef(0);
   // Leaving the picker (a clip was accepted, or the user cancelled) retires
   // every probe still running, so none can replace the choice afterwards.
@@ -247,8 +272,8 @@ export function ReferenceSourcePicker({ onAccept }: { onAccept?: AcceptReference
   return (
     <div className="@container">
       <div className="grid gap-3 @md:grid-cols-2 [&>*]:min-w-0">
-        <UploadZone onAccept={onAccept} pickToken={pickToken} />
-        <RecordZone onAccept={onAccept} pickToken={pickToken} />
+        <UploadZone onAccept={onAccept} pickToken={pickToken} autoOpen={start === 'upload'} />
+        <RecordZone onAccept={onAccept} pickToken={pickToken} autoFocus={start === 'record'} />
       </div>
     </div>
   );

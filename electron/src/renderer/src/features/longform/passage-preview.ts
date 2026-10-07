@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { apiJson, describeError } from '@/lib/api/client';
+import { describeError } from '@/lib/api/client';
+import type { PublicFailure } from '@/lib/api/failure';
 import { beginAppActivity } from '@/lib/app-activity';
 import { queryClient } from '@/lib/query';
 import {
@@ -10,6 +11,8 @@ import {
   type Draft,
   type PassageContext,
 } from './longform-session';
+import { PreviewFailure, requestPreview, type PreviewLock } from './preview-run';
+import type { TakeProgress } from './take-progress';
 
 /** No phrase the speech check could not listen to. */
 const ALL_HEARD = { unchecked: 0, noRecognizer: false };
@@ -22,8 +25,12 @@ const ALL_HEARD = { unchecked: 0, noRecognizer: false };
  * its takes are the book's own there — a repeated sentence the repeat it
  * is, a retake the one asked for. Once it renders, the Contents rail counts
  * again what its chapters have left to render.
+ *
+ * It renders under the page's preview lock (`previews`): one preview at a
+ * time, the editor open meanwhile. Its progress is heard as it renders, and
+ * Stop ends the render on the backend after the take in progress.
  */
-export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void) {
+export function usePassagePreview(draft: Draft, previews: PreviewLock) {
   const [output, setOutput] = useState<string | null>(null);
   // What the speech check (when on) still heard differently in this passage,
   // and how many of its phrases it could not listen to (and whether that was
@@ -31,38 +38,52 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
   const [suspects, setSuspects] = useState<string[]>([]);
   const [unheard, setUnheard] = useState(ALL_HEARD);
   const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<PublicFailure | null>(null);
   const [pending, setPending] = useState(false);
+  const [progress, setProgress] = useState<TakeProgress | null>(null);
   // The caret sat somewhere with nothing to speak (a heading, a lone tag).
   const [empty, setEmpty] = useState(false);
   const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  // Another book opened (or the page left): its passage is not this book's.
+  useEffect(() => {
+    setOutput(null);
+    setError(null);
+    setFailure(null);
+    setSuspects([]);
+    setUnheard(ALL_HEARD);
+    return () => controller.current?.abort();
+  }, [draft.projectId]);
   const preview = async (passage: string | null, context: PassageContext | null = null) => {
     if (controller.current) return;
     setEmpty(!passage);
     if (!passage) {
       setOutput(null);
       setError(null);
+      setFailure(null);
       return;
     }
+    if (!previews.acquire('passage')) return;
     const current = new AbortController();
     controller.current = current;
     const finishActivity = beginAppActivity('synthesis');
-    onBusy(true);
     setPending(true);
+    setProgress(null);
     setError(null);
+    setFailure(null);
     setOutput(null);
     setSuspects([]);
     setUnheard(ALL_HEARD);
     try {
-      const result = await apiJson<{ output: string; speech_check?: unknown }>(
-        '/audiobook/preview',
+      const result = await requestPreview(
         {
-          method: 'POST',
-          body: JSON.stringify({
-            ...chapterPreviewBody({ ...draft, script: passage }, 0),
-            ...(context ? { context } : {}),
-          }),
+          ...chapterPreviewBody({ ...draft, script: passage }, 0),
+          ...(context ? { context } : {}),
+        },
+        {
           signal: current.signal,
+          onProgress: (heard) => {
+            if (!current.signal.aborted) setProgress(heard);
+          },
         },
       );
       if (!current.signal.aborted) {
@@ -73,22 +94,29 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
           noRecognizer: recognizerMissing(result),
         });
       }
-      void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] });
     } catch (cause) {
-      if (!current.signal.aborted) setError(describeError(cause));
+      if (!current.signal.aborted) {
+        setError(describeError(cause));
+        setFailure(cause instanceof PreviewFailure ? cause.failure : null);
+      }
     } finally {
       finishActivity();
+      // Takes it rendered before a Stop are cached too.
+      void queryClient.invalidateQueries({ queryKey: ['audiobook-outline'] });
       if (controller.current === current) {
         controller.current = null;
         setPending(false);
-        onBusy(false);
+        setProgress(null);
+        previews.release();
       }
     }
   };
   return {
     output,
     error,
+    failure,
     pending,
+    progress,
     empty,
     suspects,
     unchecked: unheard.unchecked,
@@ -98,6 +126,7 @@ export function usePassagePreview(draft: Draft, onBusy: (busy: boolean) => void)
     dismiss: () => {
       setOutput(null);
       setError(null);
+      setFailure(null);
       setEmpty(false);
       setSuspects([]);
       setUnheard(ALL_HEARD);

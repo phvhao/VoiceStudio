@@ -1,5 +1,6 @@
 import { SupportShortcut } from './support-shortcut';
 import { SidebarToggle } from './sidebar-toggle';
+import { HistoryNav } from './history-nav';
 import type { ReactNode } from 'react';
 import { SearchIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -12,11 +13,14 @@ export function WorkspaceHeader({ children }: { children: ReactNode }) {
   return (
     <header
       className={cn(
-        'workspace-titlebar flex shrink-0 items-center gap-3 border-b border-border/50 px-5',
+        // A crowded bar keeps each screen's title on one line; what sits
+        // beside it (a book or file name) shortens instead.
+        'workspace-titlebar flex shrink-0 items-center gap-3 border-b border-border/50 px-5 [&>h1]:whitespace-nowrap',
         !isMac() && 'native-controls-right',
       )}
     >
       {!isMac() && <SidebarToggle />}
+      <HistoryNav />
       {children}
       <div className="ml-auto flex shrink-0 items-center gap-1">
         <SupportShortcut />

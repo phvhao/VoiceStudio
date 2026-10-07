@@ -190,9 +190,14 @@ export function EngineNotice({
         : t('repairAgent.fix')}
     </Button>
   );
+  // `engine-notice` is where a blocked action's "engine not ready" fix leads
+  // (see revealGateTarget).
   if (compact) {
     return (
-      <div className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/8 px-3 py-2 text-sm">
+      <div
+        data-gate-target="engine-notice"
+        className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning/8 px-3 py-2 text-sm"
+      >
         <TriangleAlertIcon className="size-4 shrink-0 text-warning" />
         <div className="min-w-48 flex-1">
           <p className="font-medium text-foreground">{t('engines.none_ready_title')}</p>
@@ -203,7 +208,10 @@ export function EngineNotice({
     );
   }
   return (
-    <Alert className="border-warning/40 bg-warning/10 text-foreground">
+    <Alert
+      data-gate-target="engine-notice"
+      className="border-warning/40 bg-warning/10 text-foreground"
+    >
       <TriangleAlertIcon className="text-warning" />
       <AlertTitle>{t('engines.none_ready_title')}</AlertTitle>
       <AlertDescription>

@@ -11,14 +11,26 @@ SORTFORMER = "audiocpp-sortformer"
 SORTFORMER_REPO = "audio-cpp/audio.cpp-gguf"
 SORTFORMER_FILE = "Sortformer-Diar-4spk-v1-GGUF/sortformer-diar-4spk-v1-q8_0.gguf"
 
-_SORTFORMER_MODEL_MISSING = "Install the Sortformer model bundle"
-_SORTFORMER_MODEL_BROKEN = "Repair the installed Sortformer model bundle"
-_SORTFORMER_RUNTIME_MISSING = (
-    "The Sortformer model is installed. Install the audio.cpp runtime to use it"
-)
-_SORTFORMER_CLI_MISSING = (
-    "The installed audio.cpp runtime does not include speaker diarisation"
-)
+# Why a runtime is not ready, as a stable code and its English sentence. The
+# sentence is the API's text; the desktop app shows its own translation of the
+# code (engineReason.diarisation.<code> in every locale), so a code never
+# changes meaning.
+REASONS = {
+    "pyannote_not_installed": "Install the pyannote model bundle",
+    "sortformer_model_missing": "Install the Sortformer model bundle",
+    "sortformer_model_broken": "Repair the installed Sortformer model bundle",
+    "sortformer_runtime_missing": (
+        "The Sortformer model is installed. Install the audio.cpp runtime to use it"
+    ),
+    "sortformer_cli_missing": (
+        "The installed audio.cpp runtime does not include speaker diarisation"
+    ),
+}
+
+
+def reason_fields(code: str | None) -> dict:
+    """The ``reason`` / ``reason_code`` pair for a status payload."""
+    return {"reason": REASONS[code] if code else None, "reason_code": code}
 
 
 def selected_backend() -> str:
@@ -65,7 +77,7 @@ def sortformer_status() -> dict:
         "model_installed": False,
         "runtime_installed": False,
         "installed": False,
-        "reason": _SORTFORMER_MODEL_MISSING,
+        **reason_fields("sortformer_model_missing"),
     }
     try:
         model = sortformer_model_path()
@@ -76,14 +88,14 @@ def sortformer_status() -> dict:
             return status
         with model.open("rb") as model_file:
             if model_file.read(4) != b"GGUF":
-                status["reason"] = _SORTFORMER_MODEL_BROKEN
+                status.update(reason_fields("sortformer_model_broken"))
                 return status
     except OSError:
-        status["reason"] = _SORTFORMER_MODEL_BROKEN
+        status.update(reason_fields("sortformer_model_broken"))
         return status
 
     status["model_installed"] = True
-    status["reason"] = _SORTFORMER_RUNTIME_MISSING
+    status.update(reason_fields("sortformer_runtime_missing"))
     try:
         from engines.audiocpp.bootstrap import resolve_server_binary
 
@@ -92,9 +104,9 @@ def sortformer_status() -> dict:
         return status
     cli = server.with_name("audiocpp_cli.exe" if os.name == "nt" else "audiocpp_cli")
     if not cli.is_file() or (os.name != "nt" and not os.access(cli, os.X_OK)):
-        status["reason"] = _SORTFORMER_CLI_MISSING
+        status.update(reason_fields("sortformer_cli_missing"))
         return status
-    status.update(runtime_installed=True, installed=True, reason=None)
+    status.update(runtime_installed=True, installed=True, **reason_fields(None))
     return status
 
 

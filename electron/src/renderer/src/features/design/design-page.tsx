@@ -3,7 +3,7 @@ import { SecondarySidebar } from '@/components/workspace-sidebar';
 import { WorkspaceHeader } from '@/components/app-shell/workspace-header';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { DemoPresets } from './demo-presets';
-import { setCloneSetting } from '@/lib/store/clone-settings';
+import { setCloneSetting, useCloneSetting } from '@/lib/store/clone-settings';
 import { PersonalityPresets } from './personality-presets';
 import { EditProfile } from '@/features/clone/edit-profile';
 import { WorkspacePane } from '@/components/workspace-pane';
@@ -48,8 +48,15 @@ import {
   XIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { GatedAction } from '@/components/gated-action';
+import { runRendererTask } from '@/lib/global-error-recovery';
+import {
+  SYNTHESIS_TARGET,
+  describeSynthesisBlockers,
+  designBlockers,
+} from '@/features/clone/synthesis-gates';
 import { Input } from '@/components/ui/input';
 import {
   SCRIPT_UNSUPPORTED_TAGS,
@@ -59,7 +66,10 @@ import {
 } from '@/components/script-insert-menu';
 import { MarkupTextarea } from '@/features/longform/markup-textarea';
 import { useGenerateClone } from '@/hooks/use-generate';
-import { OutputPanel } from '@/features/clone/output-panel';
+import { EditorFrame, FocusToggle } from '@/components/editor-frame/editor-frame';
+import { setEditorFocus, useEditorFocus } from '@/components/editor-frame/editor-focus';
+import { ScriptEditorFrame } from '@/components/editor-frame/script-editor-frame';
+import { TakesPanel } from '@/features/clone/takes-panel';
 import { QualityControls } from '@/features/clone/quality-controls';
 import { ReadingSettingsButton } from '@/components/reading-settings';
 import { VoiceControls } from '@/features/clone/action-bar';
@@ -104,7 +114,24 @@ export function DesignPage() {
   const activeProfile = linkedDesignProfile(draft, profiles.data);
   // Re-rendering a saved sample is cloning, which any ready engine can do.
   const designBlocker = generation.designBlockerFor(activeProfile);
+  const navigate = useNavigate();
+  // What Synthesize still needs, each with the way to its fix (see GatedAction).
+  const blockers = describeSynthesisBlockers(designBlockers(designBlocker, draft.text), {
+    t,
+    engine: activeEngine?.display_name ?? '',
+    script: SYNTHESIS_TARGET.designScript,
+    openSettings: () =>
+      runRendererTask('Open model settings', () =>
+        navigate({ to: '/settings/models/$family', params: { family: 'tts' } }),
+      ),
+  });
   const editingProfile = profiles.data?.find((profile) => profile.id === editingId);
+  const focused = useEditorFocus();
+  const speed = useCloneSetting('speed');
+  // Opening the profile editor or a take's details leaves focus mode.
+  useEffect(() => {
+    if (editingId || selectedTake?.mode === 'design') setEditorFocus(false);
+  }, [editingId, selectedTake]);
   useEffect(() => {
     const restore = (event: Event) => {
       setDraft((event as CustomEvent<DesignDraft>).detail ?? readDraft());
@@ -179,301 +206,416 @@ export function DesignPage() {
     Object.values(draft.attrs)
       .filter((value) => value && value !== 'Auto')
       .join(' · ') || t('clone.identity_auto');
+  const composer = (
+    <>
+      {designBlocker === 'engine' && !generation.isGenerating && (
+        <div className="mb-3">
+          <EngineNotice operation="design" compact />
+        </div>
+      )}
+      {/* The first thing Synthesize still needs; the engine notice says its own. */}
+      {blockers.length > 0 && designBlocker !== 'engine' && !generation.isGenerating && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
+          <p role="status">{blockers[0].message}</p>
+          {(designBlocker === 'design' || designBlocker === 'cloning') && (
+            <Link
+              to="/settings/models/$family"
+              params={{ family: 'tts' }}
+              className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+            >
+              {t('engineSidebar.tts')}
+            </Link>
+          )}
+        </div>
+      )}
+      {generation.error && (
+        <PipelineFailure
+          className="mb-3"
+          fallback={generation.error}
+          onDismiss={generation.clearError}
+        />
+      )}
+      {/* Wraps instead of overlapping: the controls stay whole beside or above the button. */}
+      <div className="glass-panel relative flex min-h-16 flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-border/60 bg-muted/30 p-3">
+        <div className="flex min-w-0 items-center gap-1">
+          <EngineLanguagePicker operation="tts" />
+          <QualityControls size="sm" disabled={generation.isGenerating} />
+          <ReadingSettingsButton
+            side="top"
+            disabled={generation.isGenerating}
+            className="font-normal text-muted-foreground hover:text-foreground"
+          />
+          <VoiceControls size="icon-sm" />
+        </div>
+        <div className="ms-auto flex shrink-0 items-center justify-end gap-2">
+          <span
+            role={generation.isGenerating ? 'status' : undefined}
+            className="text-xs tabular-nums text-muted-foreground"
+          >
+            {generation.isGenerating
+              ? `${generationProgress == null ? '' : `${Math.round(generationProgress)}% · `}${generation.elapsedSeconds.toFixed(1)}s`
+              : null}
+          </span>
+          {/* Pressable while blocked: it lists what is missing, with the way to each. */}
+          <GatedAction
+            align="end"
+            className="h-10 w-52 shrink-0 overflow-hidden rounded-lg px-4"
+            disabled={
+              generation.isGenerating ||
+              // Free-form engines take the description itself, not its mapping,
+              // and a mapping on its way lands in a moment.
+              (!freeform && mapper.pending)
+            }
+            blockers={blockers}
+            aria-busy={generation.isGenerating}
+            aria-label={generationLabel}
+            onClick={() =>
+              void generation.generateDesign({
+                text: draft.text,
+                instruct: designInstruct(draft, generation.instructVocabulary),
+                recipe: designRecipe(draft),
+                seed: designRequestSeed(draft, activeProfile),
+                profileId: activeProfile?.id ?? null,
+              })
+            }
+          >
+            {generation.isGenerating ? (
+              <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+            ) : (
+              <PlayIcon />
+            )}
+            <span className="truncate">{generationLabel}</span>
+          </GatedAction>
+          <Button
+            size="icon-lg"
+            className={cn('size-10 shrink-0', !generation.isGenerating && 'invisible')}
+            variant="outline"
+            disabled={!generation.isGenerating}
+            onClick={generation.cancel}
+            aria-label={t('clone.cancel_generation')}
+          >
+            <XIcon />
+          </Button>
+        </div>
+        {generation.isGenerating && (
+          <div className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-muted">
+            <div
+              className={
+                generationProgress == null
+                  ? 'h-full w-full animate-pulse bg-primary motion-reduce:animate-none'
+                  : 'h-full bg-primary transition-[width] duration-200'
+              }
+              style={
+                generationProgress == null ? undefined : { width: `${generationProgress}%` }
+              }
+            />
+          </div>
+        )}
+      </div>
+    </>
+  );
   return (
     <div className="flex h-full min-h-0 flex-col">
       <WorkspaceHeader>
         <h1 className="text-sm font-medium">{t('designWorkspace.title')}</h1>
       </WorkspaceHeader>
       <div className="flex min-h-0 flex-1 @max-[40rem]:flex-col">
-        <SecondarySidebar
-          title={t('designWorkspace.title')}
-          icon={WandSparklesIcon}
-          size="wide"
-          variant="controls"
-          className="space-y-3"
-        >
-          <section className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <label
-                htmlFor="voice-description"
-                className="flex min-w-0 items-center gap-2 text-sm font-medium"
-              >
-                <SparklesIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
-                {t('clone.describe_label')}
-              </label>
-              {(description.trim() ||
-                Object.values(draft.attrs).some((value) => value !== 'Auto')) && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  disabled={generation.isGenerating || mapper.pending}
-                  onClick={() => {
-                    // Reset drops the picks so the description alone decides again.
-                    setDraft((current) => ({ ...current, picks: {}, profileId: null }));
-                    mapper.reset(description);
-                  }}
+        {/* Hidden, not unmounted, in focus mode: its folds stay as they were. */}
+        <div hidden={focused} className="contents">
+          <SecondarySidebar
+            title={t('designWorkspace.title')}
+            icon={WandSparklesIcon}
+            size="wide"
+            variant="controls"
+            className="space-y-3"
+          >
+            <section className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="voice-description"
+                  className="flex min-w-0 items-center gap-2 text-sm font-medium"
                 >
-                  <RotateCcwIcon />
-                  {t('clone.reset_to_description')}
-                </Button>
-              )}
-            </div>
-            <textarea
-              id="voice-description"
-              maxLength={2000}
-              disabled={generation.isGenerating}
-              className="min-h-24 w-full resize-y rounded-lg border border-input bg-background/35 p-3 text-sm leading-5 outline-none transition-[border-color,background-color,box-shadow] focus-visible:border-primary/30 focus-visible:bg-background/50 focus-visible:ring-2 focus-visible:ring-ring/30"
-              value={description}
-              placeholder={t('clone.describe_placeholder')}
-              onChange={(event) => {
-                const value = event.target.value;
-                setDraft((current) => editVoice(current, { description: value }));
-                // Mapping runs for every engine so the details stay in step
-                // with the description when switching back to OmniVoice.
-                mapper.describe(value);
-              }}
-            />
-            <p role="status" className="text-xs text-muted-foreground">
-              {freeform
-                ? t('clone.describe_freeform')
-                : mapper.pending
-                  ? t('preferences.loading')
-                  : !mapper.matched
-                    ? t('clone.describe_no_match')
-                    : mapper.unmatched.length
-                      ? t('clone.describe_unmatched', {
-                          items: mapper.unmatched.join(', '),
-                        })
-                      : t('clone.describe_hint')}
-            </p>
-            {!freeform && mapper.failed && (
-              <Button variant="ghost" size="xs" onClick={() => mapper.describe(description)}>
-                {t('backend.retry')}
-              </Button>
-            )}
-          </section>
-          <details
-            ref={savedProfilesRef}
-            className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm"
-          >
-            <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
-              {t('clone.saved_profiles')}
-              <ChevronDownIcon className="ml-auto size-4 text-muted-foreground transition-transform group-open:rotate-180" />
-            </summary>
-            <div className="mt-2 space-y-1">
-              {designProfiles.map((profile) => (
-                <div key={profile.id} className="flex items-center gap-1">
+                  <SparklesIcon className="size-4 shrink-0 text-primary" aria-hidden="true" />
+                  {t('clone.describe_label')}
+                </label>
+                {(description.trim() ||
+                  Object.values(draft.attrs).some((value) => value !== 'Auto')) && (
                   <Button
-                    className="min-w-0 flex-1 justify-start truncate"
-                    variant={activeProfile?.id === profile.id ? 'secondary' : 'ghost'}
-                    size="sm"
-                    aria-pressed={activeProfile?.id === profile.id}
-                    disabled={generation.isGenerating}
-                    onClick={() => {
-                      mapper.cancel();
-                      const restored = restoreDesignProfile(profile, draft.seed);
-                      setDraft((current) =>
-                        replaceRecipe(current, {
-                          attrs: restored.attrs,
-                          seed: restored.seed,
-                          profileId: restored.profileId,
-                        }),
-                      );
-                      setCloneSetting('language', restored.language);
-                    }}
-                  >
-                    {profile.name}
-                  </Button>
-                  <Button
+                    type="button"
                     variant="ghost"
-                    size="icon-xs"
-                    aria-label={t('paneActions.edit') + ': ' + profile.name}
+                    size="xs"
+                    disabled={generation.isGenerating || mapper.pending}
                     onClick={() => {
-                      setEditingId(profile.id);
+                      // Reset drops the picks so the description alone decides again.
+                      setDraft((current) => ({ ...current, picks: {}, profileId: null }));
+                      mapper.reset(description);
                     }}
                   >
-                    <PencilIcon />
+                    <RotateCcwIcon />
+                    {t('clone.reset_to_description')}
                   </Button>
-                  <AudioPreviewButton
-                    src={profileAudioUrl(profile.id, profile.audio_url)}
-                    source={'design-profile-' + profile.id}
-                    activity={!profile.ref_audio_path ? 'synthesis' : undefined}
-                    disabled={!profile.ref_audio_path && Boolean(generation.designBlocker)}
-                    disabledLabel={
-                      generation.designBlocker === 'design'
-                        ? t('designWorkspace.engine_cannot_design', {
-                            engine: activeEngine?.display_name ?? '',
-                          })
-                        : t('engines.none_ready_title')
-                    }
-                    onReady={
-                      !profile.ref_audio_path
-                        ? () =>
-                            void client.invalidateQueries({
-                              queryKey: queryKeys.profiles,
-                            })
-                        : undefined
-                    }
-                  />
-                </div>
-              ))}
-            </div>
-          </details>
-          <details
-            open={startingOpen}
-            onToggle={(event) => setStartingOpen(event.currentTarget.open)}
-            className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm"
-          >
-            <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
-              <SparklesIcon className="size-4 text-muted-foreground" />
-              {t('clone.starting_points')}
-              <ChevronDownIcon className="ml-auto size-4 text-muted-foreground transition-transform group-open:rotate-180" />
-            </summary>
-            <div className="mt-3 space-y-2">
-              <PersonalityPresets
+                )}
+              </div>
+              <textarea
+                id="voice-description"
+                maxLength={2000}
                 disabled={generation.isGenerating}
-                attrs={draft.attrs}
-                onSelect={(attrs) => {
-                  mapper.cancel();
-                  setDraft((current) =>
-                    replaceRecipe(current, { attrs: mergeDescribedAttrs(attrs) }),
-                  );
+                className="min-h-24 w-full resize-y rounded-lg border border-input bg-background/35 p-3 text-sm leading-5 outline-none transition-[border-color,background-color,box-shadow] focus-visible:border-primary/30 focus-visible:bg-background/50 focus-visible:ring-2 focus-visible:ring-ring/30"
+                value={description}
+                placeholder={t('clone.describe_placeholder')}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setDraft((current) => editVoice(current, { description: value }));
+                  // Mapping runs for every engine so the details stay in step
+                  // with the description when switching back to OmniVoice.
+                  mapper.describe(value);
                 }}
               />
-              <div className="flex flex-wrap gap-1">
-                {PRESETS.map((preset) => (
-                  <Button
-                    key={preset.id}
-                    size="xs"
-                    variant="ghost"
-                    disabled={generation.isGenerating}
-                    onClick={() => {
-                      mapper.cancel();
-                      setDraft((current) =>
-                        replaceRecipe(current, { attrs: mergeDescribedAttrs(preset.attrs) }),
-                      );
-                    }}
-                  >
-                    {t('clone.preset_' + preset.id)
-                      .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
-                      .trim()}
-                  </Button>
+              <p role="status" className="text-xs text-muted-foreground">
+                {freeform
+                  ? t('clone.describe_freeform')
+                  : mapper.pending
+                    ? t('preferences.loading')
+                    : !mapper.matched
+                      ? t('clone.describe_no_match')
+                      : mapper.unmatched.length
+                        ? t('clone.describe_unmatched', {
+                            items: mapper.unmatched.join(', '),
+                          })
+                        : t('clone.describe_hint')}
+              </p>
+              {!freeform && mapper.failed && (
+                <Button variant="ghost" size="xs" onClick={() => mapper.describe(description)}>
+                  {t('backend.retry')}
+                </Button>
+              )}
+            </section>
+            <details
+              ref={savedProfilesRef}
+              className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
+                {t('clone.saved_profiles')}
+                <ChevronDownIcon className="ml-auto size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-2 space-y-1">
+                {designProfiles.map((profile) => (
+                  <div key={profile.id} className="flex items-center gap-1">
+                    <Button
+                      className="min-w-0 flex-1 justify-start truncate"
+                      variant={activeProfile?.id === profile.id ? 'secondary' : 'ghost'}
+                      size="sm"
+                      aria-pressed={activeProfile?.id === profile.id}
+                      disabled={generation.isGenerating}
+                      onClick={() => {
+                        mapper.cancel();
+                        const restored = restoreDesignProfile(profile, draft.seed);
+                        setDraft((current) =>
+                          replaceRecipe(current, {
+                            attrs: restored.attrs,
+                            seed: restored.seed,
+                            profileId: restored.profileId,
+                          }),
+                        );
+                        setCloneSetting('language', restored.language);
+                      }}
+                    >
+                      {profile.name}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={t('paneActions.edit') + ': ' + profile.name}
+                      onClick={() => {
+                        setEditingId(profile.id);
+                      }}
+                    >
+                      <PencilIcon />
+                    </Button>
+                    <AudioPreviewButton
+                      src={profileAudioUrl(profile.id, profile.audio_url)}
+                      source={'design-profile-' + profile.id}
+                      activity={!profile.ref_audio_path ? 'synthesis' : undefined}
+                      disabled={!profile.ref_audio_path && Boolean(generation.designBlocker)}
+                      disabledLabel={
+                        generation.designBlocker === 'design'
+                          ? t('designWorkspace.engine_cannot_design', {
+                              engine: activeEngine?.display_name ?? '',
+                            })
+                          : t('engines.none_ready_title')
+                      }
+                      onReady={
+                        !profile.ref_audio_path
+                          ? () =>
+                              void client.invalidateQueries({
+                                queryKey: queryKeys.profiles,
+                              })
+                          : undefined
+                      }
+                    />
+                  </div>
                 ))}
               </div>
-            </div>
-          </details>
-          <details className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm">
-            <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
-              <SlidersHorizontalIcon className="size-4 text-muted-foreground" />
-              {t('clone.details')}
-              <span
-                className="ml-auto min-w-0 truncate text-xs font-normal text-muted-foreground"
-                title={identityRecipe}
-              >
-                {identityRecipe}
-              </span>
-              <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-180" />
-            </summary>
-            <div className="mt-4 space-y-4">
-              {Object.entries(CATEGORIES).map(([category, values]) => (
-                <fieldset key={category} disabled={generation.isGenerating} className="space-y-2">
-                  <legend className="text-xs font-medium text-muted-foreground">
-                    {t('clone.cat_' + category)}
-                  </legend>
-                  <div className="flex flex-wrap gap-1">
-                    {values.map((value) => (
-                      <Button
-                        key={value}
-                        size="xs"
-                        variant={draft.attrs[category] === value ? 'secondary' : 'ghost'}
-                        aria-pressed={draft.attrs[category] === value}
-                        onClick={() => change(category, value)}
-                      >
-                        {value === 'Auto'
-                          ? t('clone.auto')
-                          : t('clone.opt_' + value.replaceAll(' ', '_').replaceAll('-', '_'), {
-                              defaultValue: value,
-                            })}
-                      </Button>
-                    ))}
-                  </div>
-                </fieldset>
-              ))}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">{t('clone.seed_label')}</span>
-                <Input
-                  className="min-w-0"
-                  type="number"
-                  min={0}
-                  max={2147483647}
-                  aria-label={t('clone.seed_label')}
+            </details>
+            <details
+              open={startingOpen}
+              onToggle={(event) => setStartingOpen(event.currentTarget.open)}
+              className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm"
+            >
+              <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
+                <SparklesIcon className="size-4 text-muted-foreground" />
+                {t('clone.starting_points')}
+                <ChevronDownIcon className="ml-auto size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-3 space-y-2">
+                <PersonalityPresets
                   disabled={generation.isGenerating}
-                  value={draft.seed}
-                  onChange={(event) => {
-                    const seed = Number(event.target.value);
-                    if (Number.isInteger(seed) && seed >= 0 && seed <= 2147483647)
-                      setDraft((current) => editVoice(current, { seed }));
+                  attrs={draft.attrs}
+                  onSelect={(attrs) => {
+                    mapper.cancel();
+                    setDraft((current) =>
+                      replaceRecipe(current, { attrs: mergeDescribedAttrs(attrs) }),
+                    );
                   }}
                 />
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={generation.isGenerating}
-                  aria-label={t('clone.seed_reroll')}
-                  onClick={() =>
-                    setDraft((current) => editVoice(current, { seed: pickDesignSeed(false, null) }))
-                  }
-                >
-                  <ShuffleIcon />
-                </Button>
+                <div className="flex flex-wrap gap-1">
+                  {PRESETS.map((preset) => (
+                    <Button
+                      key={preset.id}
+                      size="xs"
+                      variant="ghost"
+                      disabled={generation.isGenerating}
+                      onClick={() => {
+                        mapper.cancel();
+                        setDraft((current) =>
+                          replaceRecipe(current, { attrs: mergeDescribedAttrs(preset.attrs) }),
+                        );
+                      }}
+                    >
+                      {t('clone.preset_' + preset.id)
+                        .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, '')
+                        .trim()}
+                    </Button>
+                  ))}
+                </div>
               </div>
-            </div>
-          </details>
-          <form
-            className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void save();
-            }}
-          >
-            <Input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              aria-label={t('clone.profile_name')}
-              placeholder={`${t('clone.profile_name')}…`}
-            />
-            <Button
-              type="submit"
-              size="sm"
-              disabled={!name.trim() || saving || mapper.pending || generation.isGenerating}
+            </details>
+            <details className="group rounded-xl border border-border/60 bg-muted/20 p-3 text-sm">
+              <summary className="flex cursor-pointer list-none items-center gap-2 font-medium">
+                <SlidersHorizontalIcon className="size-4 text-muted-foreground" />
+                {t('clone.details')}
+                <span
+                  className="ml-auto min-w-0 truncate text-xs font-normal text-muted-foreground"
+                  title={identityRecipe}
+                >
+                  {identityRecipe}
+                </span>
+                <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-4 space-y-4">
+                {Object.entries(CATEGORIES).map(([category, values]) => (
+                  <fieldset key={category} disabled={generation.isGenerating} className="space-y-2">
+                    <legend className="text-xs font-medium text-muted-foreground">
+                      {t('clone.cat_' + category)}
+                    </legend>
+                    <div className="flex flex-wrap gap-1">
+                      {values.map((value) => (
+                        <Button
+                          key={value}
+                          size="xs"
+                          variant={draft.attrs[category] === value ? 'secondary' : 'ghost'}
+                          aria-pressed={draft.attrs[category] === value}
+                          onClick={() => change(category, value)}
+                        >
+                          {value === 'Auto'
+                            ? t('clone.auto')
+                            : t('clone.opt_' + value.replaceAll(' ', '_').replaceAll('-', '_'), {
+                                defaultValue: value,
+                              })}
+                        </Button>
+                      ))}
+                    </div>
+                  </fieldset>
+                ))}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">{t('clone.seed_label')}</span>
+                  <Input
+                    className="min-w-0"
+                    type="number"
+                    min={0}
+                    max={2147483647}
+                    aria-label={t('clone.seed_label')}
+                    disabled={generation.isGenerating}
+                    value={draft.seed}
+                    onChange={(event) => {
+                      const seed = Number(event.target.value);
+                      if (Number.isInteger(seed) && seed >= 0 && seed <= 2147483647)
+                        setDraft((current) => editVoice(current, { seed }));
+                    }}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={generation.isGenerating}
+                    aria-label={t('clone.seed_reroll')}
+                    onClick={() =>
+                      setDraft((current) => editVoice(current, { seed: pickDesignSeed(false, null) }))
+                    }
+                  >
+                    <ShuffleIcon />
+                  </Button>
+                </div>
+              </div>
+            </details>
+            <form
+              className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void save();
+              }}
             >
-              <SaveIcon />
-              {t('clone.save_as_profile')}
-            </Button>
-            {saveError && (
-              <p role="alert" className="text-xs text-destructive">
-                {t('clone.save_failed', { message: saveError })}
-              </p>
-            )}
-          </form>
-        </SecondarySidebar>
+              <Input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                aria-label={t('clone.profile_name')}
+                placeholder={`${t('clone.profile_name')}…`}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!name.trim() || saving || mapper.pending || generation.isGenerating}
+              >
+                <SaveIcon />
+                {t('clone.save_as_profile')}
+              </Button>
+              {saveError && (
+                <p role="alert" className="text-xs text-destructive">
+                  {t('clone.save_failed', { message: saveError })}
+                </p>
+              )}
+            </form>
+          </SecondarySidebar>
+        </div>
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-4 overflow-y-auto px-6 py-6">
+          <EditorFrame composer={composer} results={<TakesPanel mode="design" />}>
             <Button
               variant="ghost"
               disabled={generation.isGenerating || designProfiles.length === 0}
               aria-label={t('cloneFlow.change_voice')}
-              className="h-12 w-fit max-w-full justify-start gap-2.5 px-0 hover:bg-transparent"
+              className="h-12 w-fit max-w-full shrink-0 justify-start gap-2.5 px-0 hover:bg-transparent"
               onClick={() => {
+                // The saved voices live in the controls, which focus mode hides.
+                setEditorFocus(false);
                 const control = savedProfilesRef.current;
                 if (!control) return;
                 control.open = true;
-                control.scrollIntoView({
-                  behavior: 'smooth',
-                  block: 'nearest',
+                requestAnimationFrame(() => {
+                  control.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'nearest',
+                  });
+                  control.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
                 });
-                control.querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
               }}
             >
               {activeProfile ? (
@@ -505,169 +647,70 @@ export function DesignPage() {
                 setCloneSetting('language', preset.language || 'Auto');
               }}
             />
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <label htmlFor="design-script" className="text-sm font-medium">
                 {t('clone.text_label')}
               </label>
-              <ScriptInsertMenu menu={insert} setText={setScript} />
+              <div className="flex flex-wrap items-center justify-end gap-1">
+                <ScriptInsertMenu menu={insert} setText={setScript} />
+                <FocusToggle />
+              </div>
             </div>
-            <ScriptTagTools
-              menu={insert}
-              setText={setScript}
-              className="flex min-h-40 flex-1 flex-col"
-            >
-              <MarkupTextarea
-                id="design-script"
-                textareaRef={scriptRef}
-                className="min-h-40 flex-1"
-                textClassName="text-base leading-7"
-                value={draft.text}
-                unsupported={SCRIPT_UNSUPPORTED_TAGS}
-                placeholder={t('clone.prompt_placeholder')}
-                onValueChange={(text) => {
-                  insert.close();
-                  setScript(text);
-                }}
-                onKeyDown={insert.onEditorKeyDown}
-              />
-            </ScriptTagTools>
-          </div>
-          <div className="mx-auto w-full max-w-4xl shrink-0 px-6 pb-4">
-            {designBlocker === 'engine' && !generation.isGenerating && (
-              <div className="mb-3">
-                <EngineNotice operation="design" compact />
-              </div>
-            )}
-            {(designBlocker === 'design' || designBlocker === 'cloning') && !generation.isGenerating && (
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
-                <p role="status">
-                  {t(designBlocker === 'cloning' ? 'designWorkspace.engine_cannot_reuse_sample' : 'designWorkspace.engine_cannot_design', {
-                    engine: activeEngine?.display_name ?? '',
-                  })}
-                </p>
-                <Link
-                  to="/settings/models/$family"
-                  params={{ family: 'tts' }}
-                  className={buttonVariants({ variant: 'ghost', size: 'xs' })}
+            <ScriptEditorFrame className="min-h-32" text={draft.text} speed={speed}>
+              {(textStyle) => (
+                <ScriptTagTools
+                  menu={insert}
+                  setText={setScript}
+                  className="flex min-h-24 flex-1 flex-col"
                 >
-                  {t('engineSidebar.tts')}
-                </Link>
-              </div>
-            )}
-            {designBlocker === 'loading' && !generation.isGenerating && (
-              <p className="mb-3 px-1 text-sm text-muted-foreground" role="status">
-                {t('preferences.loading')}
-              </p>
-            )}
-            {generation.error && (
-              <PipelineFailure
-                className="mb-3"
-                fallback={generation.error}
-                onDismiss={generation.clearError}
-              />
-            )}
-            <div className="glass-panel relative grid min-h-16 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 overflow-hidden rounded-xl border border-border/60 bg-muted/30 p-3 max-md:grid-cols-[1fr_auto]">
-              <div className="min-w-0 justify-self-start">
-                <div className="flex items-center gap-1">
-                  <EngineLanguagePicker operation="tts" />
-                  <QualityControls size="sm" disabled={generation.isGenerating} />
-                  <ReadingSettingsButton
-                    side="top"
-                    disabled={generation.isGenerating}
-                    className="font-normal text-muted-foreground hover:text-foreground"
+                  <MarkupTextarea
+                    id="design-script"
+                    data-gate-target={SYNTHESIS_TARGET.designScript}
+                    textareaRef={scriptRef}
+                    className="min-h-24 flex-1"
+                    textClassName="px-4 py-3 text-base leading-7 placeholder:text-muted-foreground"
+                    textStyle={textStyle}
+                    value={draft.text}
+                    unsupported={SCRIPT_UNSUPPORTED_TAGS}
+                    placeholder={t('clone.prompt_placeholder')}
+                    onValueChange={(text) => {
+                      insert.close();
+                      setScript(text);
+                    }}
+                    onKeyDown={insert.onEditorKeyDown}
                   />
-                  <VoiceControls size="icon-sm" />
-                </div>
-              </div>
-              <span
-                role={generation.isGenerating ? 'status' : undefined}
-                className="min-w-24 text-center text-xs tabular-nums text-muted-foreground max-md:hidden"
-              >
-                {generation.isGenerating
-                  ? `${generationProgress == null ? '' : `${Math.round(generationProgress)}% · `}${generation.elapsedSeconds.toFixed(1)}s`
-                  : null}
-              </span>
-              <div className="flex w-64 justify-end gap-2 justify-self-end">
-                <Button
-                  className="h-10 w-52 shrink-0 overflow-hidden rounded-lg px-4"
-                  disabled={
-                    !draft.text.trim() ||
-                    // Free-form engines take the description itself, not its mapping.
-                    (!freeform && mapper.pending) ||
-                    generation.isGenerating ||
-                    designBlocker !== null
-                  }
-                  aria-busy={generation.isGenerating}
-                  aria-label={generationLabel}
-                  onClick={() =>
-                    void generation.generateDesign({
-                      text: draft.text,
-                      instruct: designInstruct(draft, generation.instructVocabulary),
-                      recipe: designRecipe(draft),
-                      seed: designRequestSeed(draft, activeProfile),
-                      profileId: activeProfile?.id ?? null,
-                    })
-                  }
-                >
-                  {generation.isGenerating ? (
-                    <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
-                  ) : (
-                    <PlayIcon />
-                  )}
-                  <span className="truncate">{generationLabel}</span>
-                </Button>
-                <Button
-                  size="icon-lg"
-                  className={cn('size-10 shrink-0', !generation.isGenerating && 'invisible')}
-                  variant="outline"
-                  disabled={!generation.isGenerating}
-                  onClick={generation.cancel}
-                  aria-label={t('clone.cancel_generation')}
-                >
-                  <XIcon />
-                </Button>
-              </div>
-              {generation.isGenerating && (
-                <div className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-muted">
-                  <div
-                    className={
-                      generationProgress == null
-                        ? 'h-full w-full animate-pulse bg-primary motion-reduce:animate-none'
-                        : 'h-full bg-primary transition-[width] duration-200'
-                    }
-                    style={
-                      generationProgress == null ? undefined : { width: `${generationProgress}%` }
-                    }
-                  />
-                </div>
+                </ScriptTagTools>
               )}
-            </div>
-          </div>
-          <OutputPanel />
+            </ScriptEditorFrame>
+          </EditorFrame>
         </section>
-        {editingProfile && (
-          <WorkspacePane
-            layout="editor"
-            title={t('paneActions.edit')}
-            icon={PencilIcon}
-            onClose={() => setEditingId(null)}
-          >
-            <EditProfile
-              key={editingProfile.id}
-              profile={editingProfile}
-              onDone={() => setEditingId(null)}
-            />
-          </WorkspacePane>
-        )}
-        {!editingProfile && selectedTake?.mode === 'design' && (
-          <WorkspacePane
-            title={t('clone.history_title')}
-            icon={HistoryIcon}
-            onClose={() => openTake(null)}
-          >
-            <TakeDetails item={selectedTake} />
-          </WorkspacePane>
-        )}
+        {/* Hidden, not unmounted, in focus mode: a profile edit keeps its
+            unsaved name and clip until Esc. */}
+        <div hidden={focused} className="contents">
+          {editingProfile && (
+            <WorkspacePane
+              layout="editor"
+              title={t('paneActions.edit')}
+              icon={PencilIcon}
+              onClose={() => setEditingId(null)}
+            >
+              <EditProfile
+                key={editingProfile.id}
+                profile={editingProfile}
+                onDone={() => setEditingId(null)}
+              />
+            </WorkspacePane>
+          )}
+          {!editingProfile && selectedTake?.mode === 'design' && (
+            <WorkspacePane
+              title={t('clone.history_title')}
+              icon={HistoryIcon}
+              onClose={() => openTake(null)}
+            >
+              <TakeDetails item={selectedTake} />
+            </WorkspacePane>
+          )}
+        </div>
       </div>
     </div>
   );

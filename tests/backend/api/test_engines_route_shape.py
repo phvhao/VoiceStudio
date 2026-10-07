@@ -157,9 +157,7 @@ def test_diarisation_status_distinguishes_model_from_native_runtime(
             "model_installed": True,
             "runtime_installed": False,
             "installed": False,
-            "reason": (
-                "The Sortformer model is installed. Install the audio.cpp runtime to use it"
-            ),
+            **diarization_runtime.reason_fields("sortformer_runtime_missing"),
         },
     )
 
@@ -174,9 +172,14 @@ def test_diarisation_status_distinguishes_model_from_native_runtime(
     assert body["reason"] == (
         "The Sortformer model is installed. Install the audio.cpp runtime to use it"
     )
+    assert body["reason_code"] == "sortformer_runtime_missing"
     native = next(item for item in body["options"] if item["id"] == body["active"])
     assert native["model_installed"] is True
     assert native["runtime_installed"] is False
+    assert native["reason_code"] == "sortformer_runtime_missing"
+    # pyannote's own option carries its code too, whichever runtime is active.
+    pyannote = next(item for item in body["options"] if item["id"] == "pyannote")
+    assert (pyannote["reason_code"] is None) is pyannote["installed"]
 
 
 def test_audiocpp_runtime_installer_routes_are_desktop_scoped(

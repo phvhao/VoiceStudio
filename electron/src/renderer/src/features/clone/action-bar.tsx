@@ -22,9 +22,11 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useId, useState } from 'react';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { GatedAction } from '@/components/gated-action';
+import { runRendererTask } from '@/lib/global-error-recovery';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/popover';
 import { Input } from '@/components/ui/input';
 import { Kbd, KbdGroup } from '@/components/ui/kbd';
@@ -37,6 +39,7 @@ import { useGenerateClone } from '@/hooks/use-generate';
 import {
   resetVoiceControls,
   setCloneSetting,
+  useCloneSetting,
   useCloneSettings,
   type CloneSettings,
 } from '@/lib/store/clone-settings';
@@ -46,6 +49,7 @@ import { QualityControls } from './quality-controls';
 import { ReadingSettingsButton } from '@/components/reading-settings';
 import { CloneDemoAction } from './clone-demo';
 import { useCloneDemo } from '@/hooks/use-clone-demo';
+import { SYNTHESIS_TARGET, cloneBlockers, describeSynthesisBlockers } from './synthesis-gates';
 
 type NumericKey = 'steps' | 'cfg' | 'speed' | 'tShift' | 'posTemp' | 'classTemp' | 'layerPenalty';
 
@@ -319,11 +323,25 @@ export function VoiceControls({ size = 'icon-lg' }: { size?: 'icon-sm' | 'icon-l
   );
 }
 
+/**
+ * Ctrl/⌘+Enter while Synthesize is blocked: open its explanation, as pressing
+ * the button does, instead of doing nothing. False when it can run, or is not
+ * on the page.
+ */
+export function explainBlockedSynthesis(): boolean {
+  const blocked = document.querySelector<HTMLElement>(
+    '[data-clone-generate][aria-disabled="true"]',
+  );
+  blocked?.click();
+  return Boolean(blocked);
+}
+
 export function ActionBar() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const demo = useCloneDemo();
   const mac = isMac();
-  const readinessId = useId();
+  const text = useCloneSetting('text');
   const {
     generate,
     cancel,
@@ -350,29 +368,23 @@ export function ActionBar() {
               : 'clone.generating_status',
       )
     : t('clone.synthesize');
+  // What Synthesize still needs, each with the way to its fix (see GatedAction).
+  const blockers = describeSynthesisBlockers(cloneBlockers(blocker, text), {
+    t,
+    script: SYNTHESIS_TARGET.cloneScript,
+    openSettings: () =>
+      runRendererTask('Open model settings', () =>
+        navigate({ to: '/settings/models/$family', params: { family: 'tts' } }),
+      ),
+    chooseVoice: () => setWorkspace({ libraryOpen: true, libraryTab: 'voices' }),
+  });
+  const blocked = blockers.length > 0 && !isGenerating;
 
   return (
     <section className="@container/composer">
-      {blocker && !isGenerating && (
-        <div
-          id={readinessId}
-          className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground"
-        >
-          <span role="status">
-            {t(
-              blocker === 'cloning'
-                ? 'convert.cloning_required'
-                : blocker === 'engine'
-                ? demo
-                  ? 'demo.prerendered_chip'
-                  : 'engines.none_ready_title'
-                : blocker === 'reference'
-                  ? 'tts_errors.upload_or_select'
-                  : blocker === 'text'
-                    ? 'tts_errors.enter_text'
-                    : 'preferences.loading',
-            )}
-          </span>
+      {blocked && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
+          <span role="status">{demo ? t('demo.prerendered_chip') : blockers[0].message}</span>
           {blocker === 'reference' && (
             <div className="flex gap-1">
               <Button
@@ -423,17 +435,20 @@ export function ActionBar() {
           {demo ? (
             <CloneDemoAction />
           ) : (
-            <Button
+            // Pressable while blocked: it lists what is missing, with the way to each.
+            <GatedAction
               size="lg"
+              align="end"
+              data-clone-generate
               className="h-10 w-60 shrink-0 justify-between overflow-hidden rounded-lg ps-4 pe-2.5 shadow-sm transition-colors"
               onClick={() => void generate()}
-              disabled={isGenerating || blocker !== null}
-              aria-describedby={blocker ? readinessId : undefined}
+              disabled={isGenerating}
+              blockers={blockers}
               aria-busy={isGenerating}
               aria-label={generationLabel}
               aria-keyshortcuts="Control+Enter Meta+Enter"
             >
-              <span className="flex min-w-0 items-center gap-2">
+              <span className="flex min-w-0 flex-1 items-center gap-2">
                 {isGenerating ? (
                   <LoaderCircleIcon className="shrink-0 animate-spin motion-reduce:animate-none" />
                 ) : (
@@ -443,11 +458,13 @@ export function ActionBar() {
                   {generationLabel}
                 </span>
               </span>
-              {isGenerating ? (
+              {isGenerating && (
                 <span className="shrink-0 text-xs font-normal tabular-nums opacity-80">
                   {`${modelProgress != null && stage === 'loading' ? `${Math.round(modelProgress)}% · ` : ''}${elapsedSeconds.toFixed(1)}s`}
                 </span>
-              ) : (
+              )}
+              {/* Blocked, the not-ready mark takes the shortcut's place. */}
+              {!isGenerating && !blocked && (
                 <KbdGroup aria-hidden="true" className="shrink-0">
                   {[mac ? '⌘' : 'Ctrl', '↵'].map((key) => (
                     <Kbd
@@ -459,7 +476,7 @@ export function ActionBar() {
                   ))}
                 </KbdGroup>
               )}
-            </Button>
+            </GatedAction>
           )}
           {isGenerating && !demo ? (
             <Button

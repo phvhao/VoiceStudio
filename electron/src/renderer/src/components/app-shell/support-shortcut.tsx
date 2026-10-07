@@ -20,7 +20,8 @@ export function SupportShortcut() {
           }
         >
           <GemIcon aria-hidden="true" className="size-3.5" />
-          <span className="hidden text-xs font-semibold sm:inline">
+          {/* A narrow title bar keeps its room for the screen's own controls. */}
+          <span className="hidden text-xs font-semibold @5xl:inline">
             {t('supportPlans.get_pro')}
           </span>
           <ArrowUpRightIcon aria-hidden="true" className="size-3" />

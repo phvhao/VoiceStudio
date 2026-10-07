@@ -15,8 +15,17 @@ interface QualityReport {
   }[];
 }
 
-/** Mounted with the output URL as key so dismissed state never leaks between takes. */
-export function AudioQuality({ audioPath }: { audioPath: string }) {
+/**
+ * Mounted with the output URL as key so dismissed state never leaks between
+ * takes. A warning seeks the player registered as `source`.
+ */
+export function AudioQuality({
+  audioPath,
+  source = 'output',
+}: {
+  audioPath: string;
+  source?: string;
+}) {
   const { t } = useTranslation();
   const [requested, setRequested] = useState(false);
   const id = /^([0-9a-f]{8})\.wav$/.exec(audioPath)?.[1];
@@ -52,7 +61,7 @@ export function AudioQuality({ audioPath }: { audioPath: string }) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => requestPlaybackSeek('output', warning.start)}
+                      onClick={() => requestPlaybackSeek(source, warning.start)}
                     >
                       {formatClock(warning.start)}–{formatClock(warning.end)}:{' '}
                       {t(`audioQuality.${warning.kind}`)}

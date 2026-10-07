@@ -4,13 +4,24 @@ import { ChevronDownIcon, DownloadIcon, LoaderCircleIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { getBridge } from '@/components/bridge';
+import { GatedAction, type ActionStep } from '@/components/gated-action';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiPath, describeError } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
 import { dubExportRequest, type DubExportFormat } from './dub-export';
+import { DUB_TARGET, describeDubBlockers, dubExportBlockers } from './dub-gates';
 import { setDubExportPreferences, type DubSession } from './dub-session';
 
-export function DubExportPanel({ session, disabled }: { session: DubSession; disabled: boolean }) {
+export function DubExportPanel({
+  session,
+  disabled,
+  steps,
+}: {
+  session: DubSession;
+  disabled: boolean;
+  /** Where the job is in Upload → Translate → Generate, shown when Export is not ready. */
+  steps?: ActionStep[];
+}) {
   const { t } = useTranslation();
   const preferences = session.exportOptions || {};
   const format =
@@ -44,10 +55,19 @@ export function DubExportPanel({ session, disabled }: { session: DubSession; dis
   const burnAllowed = session.generatedTiming !== 'stretch_video';
   const locked = disabled || saving;
   const subtitles = ['srt', 'vtt', 'ass'].includes(format);
-  const ready =
-    !!session.jobId &&
-    !!track &&
-    (subtitles ? session.segments.length > 0 : session.tracks.length > 0);
+  const blockers = describeDubBlockers(
+    dubExportBlockers({
+      busy: !['idle', 'editing', 'done'].includes(session.phase),
+      recovery: Boolean(session.recovery),
+      hasSource: Boolean(session.jobId),
+      segments: session.segments.length,
+      subtitles,
+      tracks: session.tracks.length,
+      hasTrack: Boolean(track),
+    }),
+    { t },
+  );
+  const ready = blockers.length === 0;
   const labels: Record<DubExportFormat, string> = {
     mp4: t('exportModal.mp4_h264'),
     wav: t('exportModal.wav_lossless'),
@@ -136,7 +156,7 @@ export function DubExportPanel({ session, disabled }: { session: DubSession; dis
             ))}
         </div>
         {format === 'mp4' && (
-          <div className="space-y-2">
+          <div data-gate-target={DUB_TARGET.tracks} className="space-y-2 rounded-lg">
             <p className="text-xs text-muted-foreground">{t('exportModal.tracks')}</p>
             {tracks.map((code) =>
               toggle(
@@ -202,14 +222,22 @@ export function DubExportPanel({ session, disabled }: { session: DubSession; dis
         {format === 'mp4' && !burnAllowed && (
           <p className="text-xs text-muted-foreground">{t('exportModal.stretch_subs_note')}</p>
         )}
-        {!ready && (
-          <p className="text-xs text-muted-foreground">{t('exportModal.nothing_selected')}</p>
-        )}
-        <Button className="w-full" disabled={!ready || locked} onClick={() => void save()}>
+      </fieldset>
+      {/* Outside the fieldset: a busy page disables the options, but Export
+          must stay pressable to say why it cannot run yet. */}
+      <div className="mt-3 space-y-2">
+        {!ready && <p className="text-xs text-muted-foreground">{blockers[0].message}</p>}
+        <GatedAction
+          className="w-full"
+          disabled={saving}
+          blockers={blockers}
+          steps={steps}
+          onClick={() => void save()}
+        >
           {saving ? <LoaderCircleIcon className="animate-spin" /> : <DownloadIcon />}
           {t(saving ? 'common.loading' : 'exportModal.export')}
-        </Button>
-      </fieldset>
+        </GatedAction>
+      </div>
       {error && (
         <PipelineFailure fallback={error} onDismiss={() => setError(null)} className="text-xs" />
       )}

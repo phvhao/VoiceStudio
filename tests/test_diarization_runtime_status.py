@@ -29,6 +29,7 @@ def test_sortformer_status_distinguishes_installed_model_from_missing_runtime(
         "runtime_installed": False,
         "installed": False,
         "reason": "The Sortformer model is installed. Install the audio.cpp runtime to use it",
+        "reason_code": "sortformer_runtime_missing",
     }
 
 
@@ -50,6 +51,7 @@ def test_sortformer_status_requires_matching_cli(monkeypatch, tmp_path):
     assert status["reason"] == (
         "The installed audio.cpp runtime does not include speaker diarisation"
     )
+    assert status["reason_code"] == "sortformer_cli_missing"
 
 
 def test_sortformer_status_reports_complete_runtime(monkeypatch, tmp_path):
@@ -71,6 +73,7 @@ def test_sortformer_status_reports_complete_runtime(monkeypatch, tmp_path):
         "runtime_installed": True,
         "installed": True,
         "reason": None,
+        "reason_code": None,
     }
 
 
@@ -86,4 +89,17 @@ def test_sortformer_status_rejects_corrupt_model_without_exposing_path(
     assert status["model_installed"] is False
     assert status["installed"] is False
     assert status["reason"] == "Repair the installed Sortformer model bundle"
+    assert status["reason_code"] == "sortformer_model_broken"
     assert str(model) not in repr(status)
+
+
+def test_a_missing_sortformer_model_names_its_code(monkeypatch):
+    def missing_model():
+        raise FileNotFoundError("not in the cache")
+
+    monkeypatch.setattr(diarization_runtime, "sortformer_model_path", missing_model)
+
+    status = diarization_runtime.sortformer_status()
+
+    assert status["reason"] == "Install the Sortformer model bundle"
+    assert status["reason_code"] == "sortformer_model_missing"

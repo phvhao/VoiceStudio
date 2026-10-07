@@ -391,8 +391,10 @@ async def prepare_smart_fit_video(
 
     Returns ``None`` when no chunk actually needs retiming (audio-only fit:
     every video_ratio is 1.0) — the caller should stream-copy the source.
-    ``track_dur`` is the fitted dub track's duration; when it exceeds the
-    expected retimed video length the tail is freeze-frame padded.
+    A chunk sped up for a short line (ratio < 1) needs retiming as much as
+    one slowed down. ``track_dur`` is the fitted dub track's duration; when
+    it exceeds the expected retimed video length the tail is freeze-frame
+    padded.
 
     Raises :class:`RetimeError` when rendering fails — the caller owns the
     fallback ladder (un-retimed export + structured warning).
@@ -409,7 +411,7 @@ async def prepare_smart_fit_video(
                           stage="plan")
 
     chunks = expand_retime_chunks(plan, orig_dur)
-    if not chunks or not any(r > 1.0 + 1e-6 for _a, _b, r in chunks):
+    if not chunks or not any(abs(r - 1.0) > 1e-6 for _a, _b, r in chunks):
         return None
 
     # VFR guard: trim-by-timestamp on a VFR stream lands on unpredictable

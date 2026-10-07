@@ -137,7 +137,7 @@ const ZOOM_ITEM =
   'flex cursor-default items-center gap-2 rounded-md px-2 py-1 text-xs tabular-nums outline-none data-highlighted:bg-accent';
 
 /** − / NN% / +: the editor's text size; the percentage opens the list of sizes. */
-function ZoomControl({
+export function ZoomControl({
   zoom,
   onChange,
   className,

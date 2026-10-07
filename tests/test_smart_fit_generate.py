@@ -271,15 +271,15 @@ def test_zero_and_negative_duration_segments_dont_crash(patched_generate):
 
 def test_smart_fit_audio_only_stretch_keeps_original_duration(patched_generate):
     run, model, job, job_dir = patched_generate
-    # seg0 [0,1] natural 0.5s → far short of its slack-extended ~1.95s slot →
-    # underrun fill slows it at the 0.85× floor (it still ends inside the
-    # slot).  seg1 [2,3] is last → slot extends to 4.0s (2.0s); natural 2.2s
-    # → need 1.1 → audio-only 1.1×, no video.
+    # Video speed-up off (video_speed_cap 1.0): seg0 [0,1] natural 0.5s → far
+    # short of its 1s of speech → underrun fill slows it at the 0.85× floor.
+    # seg1 [2,3] is last → slot extends to 4.0s (2.0s); natural 2.2s → need
+    # 1.1 → audio-only 1.1×, no video.
     segs = [
         {"start": 0.0, "end": 1.0, "text": "0.5:hola"},
         {"start": 2.0, "end": 3.0, "text": "2.2:buenos dias"},
     ]
-    done = _done(run(_body(segs, timing_strategy="smart_fit")))
+    done = _done(run(_body(segs, timing_strategy="smart_fit", fit_options={"video_speed_cap": 1.0})))
 
     assert done["timing_strategy"] == "smart_fit"
     fs = done["fit_status"]
@@ -309,6 +309,77 @@ def test_smart_fit_audio_only_stretch_keeps_original_duration(patched_generate):
     import torchaudio
     wav, sr2 = torchaudio.load(str(job_dir / "seg_es_1.wav"))
     assert wav.shape[-1] == int(2.2 * SR)
+
+
+# ── Two-way: short lines speed the video up, fitted timeline shrinks ───
+
+
+def test_smart_fit_speeds_short_lines_up_and_keeps_overrides(patched_generate):
+    """A short line slows to 0.9× and its speech's video speeds up to 1.25×;
+    Keep leaves the video alone, and a line that may be missing content is
+    never sped up. The override stays with the job's segments."""
+    run, model, job, job_dir = patched_generate
+    job["duration"] = 6.0
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "0.6:uno"},
+        {"start": 2.0, "end": 3.0, "text": "0.6:dos", "video_fit": "keep"},
+        {"start": 4.0, "end": 5.0, "text": "0.6:tres", "may_be_incomplete": True},
+    ]
+    done = _done(run(_body(segs, timing_strategy="smart_fit")))
+
+    fs = done["fit_status"]
+    assert fs[0]["status"] == "video_shrunk"
+    assert fs[0]["audio_rate"] == pytest.approx(0.9, abs=1e-3)
+    assert fs[0]["video_ratio"] == pytest.approx(0.8, abs=1e-3)
+    for entry in fs[1:]:
+        assert entry["status"] == "audio_slowed"
+        assert entry["audio_rate"] == pytest.approx(0.85, abs=1e-3)
+        assert "video_ratio" not in entry
+
+    plan = job["fit_plans"]["es"]
+    first = plan["plan"][0]
+    assert (first["orig_start"], first["orig_end"]) == (0.0, 1.0)   # speech only
+    assert first["stretch_ratio"] == pytest.approx(0.8)
+    assert plan["total_duration"] == pytest.approx(5.8, abs=1e-3)
+    assert plan["fitted_segments"][1]["start"] == pytest.approx(1.8, abs=1e-3)
+    assert plan["params"]["video_fit"] == "1:keep,2:auto!"
+    n, sr = _track_samples(job_dir)
+    assert n == int(5.8 * sr)
+
+    assert job["segments"][1]["video_fit"] == "keep"
+    assert "video_fit" not in job["segments"][0]
+    # Back to automatic: the stored override goes with it.
+    segs[1].pop("video_fit")
+    _done(run(_body(segs, timing_strategy="smart_fit", regen_only=[])))
+    assert "video_fit" not in job["segments"][1]
+
+
+def test_smart_fit_on_an_audio_only_dub_fits_by_audio_alone(patched_generate):
+    """No picture to retime: a "video" chunk would only change the tempo of
+    the background bed (the preserved background follows the plan) and
+    shorten the program. Lines fit by their audio, and per-line video
+    choices have nothing to act on."""
+    run, model, job, job_dir = patched_generate
+    job["duration"] = 6.0
+    job["input_type"] = "audio"
+    segs = [
+        {"start": 0.0, "end": 1.0, "text": "0.6:uno"},
+        {"start": 2.0, "end": 3.0, "text": "2.5:dos", "video_fit": "stretch"},
+        {"start": 4.0, "end": 5.0, "text": "0.6:tres", "video_fit": "shrink"},
+    ]
+    done = _done(run(_body(segs, timing_strategy="smart_fit")))
+
+    assert all("video_ratio" not in entry for entry in done["fit_status"])
+    assert [entry["status"] for entry in done["fit_status"]] == [
+        "audio_slowed", "audio_stretched", "audio_slowed",
+    ]
+    plan = job["fit_plans"]["es"]
+    assert all(chunk["stretch_ratio"] == pytest.approx(1.0) for chunk in plan["plan"])
+    assert plan["total_duration"] == pytest.approx(6.0, abs=1e-3)
+    assert plan["params"]["allow_video_retime"] is False
+    assert plan["params"]["video_fit"] == ""
+    n, sr = _track_samples(job_dir)
+    assert n == int(6.0 * sr)
 
 
 # ── Hybrid: audio + video split, fitted timeline grows ─────────────────
@@ -478,7 +549,9 @@ def test_natural_cache_remix_skips_mix_scratch_roundtrip(
     assert saved_paths == []
     assert loaded_paths == cache_paths
     samples, sample_rate = _track_samples(job_dir)
-    assert samples == int(4.0 * sample_rate)
+    # Smart Fit speeds these two short lines' video up, shortening the track.
+    expected = _job["fit_plans"]["es"]["total_duration"] if natural_strategy == "smart_fit" else 4.0
+    assert samples == int(expected * sample_rate)
 
 
 def test_foreign_rate_natural_cache_keeps_resample_scratch_fallback(

@@ -1,0 +1,5 @@
+/* Focus mode hides the sidebar the macOS window buttons sit over: the page's
+   title bar then starts clear of them. */
+html[data-editor-focus] .macos-notification-safe-area main .workspace-titlebar {
+  padding-left: 5.5rem;
+}

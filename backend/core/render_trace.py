@@ -83,6 +83,16 @@ def recent():
         return copy.deepcopy(list(_recent))
 
 
+def cancel_current() -> None:
+    """End this request's trace as 'cancelled': its client went away. A
+    finished trace is frozen, so the outcome the middleware sees once the
+    response is over (a 499 sent to nobody, a stream cut short) is not
+    recorded instead."""
+    trace = _current.get()
+    if trace is not None:
+        trace.finish('cancelled')
+
+
 @contextmanager
 def stage(name: str):
     if name not in _STAGES:

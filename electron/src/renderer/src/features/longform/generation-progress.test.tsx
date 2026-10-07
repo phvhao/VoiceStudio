@@ -5,7 +5,8 @@ const fetchMock = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api/client', () => ({ apiFetch: fetchMock }));
 import { queryClient } from '@/lib/query';
 import { refreshRenderSettingsDependents } from '@/lib/render-settings';
-import { GenerationProgress, renderTimeLeft } from './generation-progress';
+import { GenerationProgress, TakeProgressText, renderTimeLeft } from './generation-progress';
+import { takeProgress, type TakeProgress } from './take-progress';
 import {
   editLongform,
   longformSession,
@@ -81,6 +82,91 @@ describe('the time a render has left', () => {
     ).toBe(120);
   });
 
+  const takes = (more: Partial<TakeProgress>): TakeProgress => ({
+    index: 0,
+    phase: 'rendering',
+    done: 0,
+    total: 0,
+    phrases: true,
+    rate: null,
+    at: 0,
+    ...more,
+  });
+
+  it('times a one-chapter book from its takes, counted down between them', () => {
+    // 10 of 40 takes done at 6 s each, heard at 70 s: 180 s left then.
+    const progress = takes({ done: 10, total: 40, rate: 6, at: 70_000 });
+    const one = timing([null], { progress });
+    expect(renderTimeLeft(chapters('rendering'), one, 70_000)).toBe(180);
+    expect(renderTimeLeft(chapters('rendering'), one, 100_000)).toBe(150);
+    // Before a take is timed, or while the model loads, nothing tells it.
+    expect(
+      renderTimeLeft(chapters('rendering'), timing([null], { progress: takes({ total: 40 }) }), 0),
+    ).toBeNull();
+    expect(
+      renderTimeLeft(
+        chapters('rendering'),
+        timing([null], { progress: takes({ phase: 'loading' }) }),
+        0,
+      ),
+    ).toBeNull();
+  });
+
+  it('times the chapters after it at its pace until one has rendered, then at theirs', () => {
+    // Equal chapters; the first is a quarter done 60 s in, 180 s from its end.
+    const progress = takes({ done: 10, total: 40, rate: 6, at: 60_000 });
+    const first = timing([null, null, null], { progress });
+    expect(renderTimeLeft(chapters('rendering', 'pending', 'pending'), first, 60_000)).toBe(
+      180 + 2 * 240,
+    );
+    // Chapter one took 100 s: the other chapter after the second takes as long.
+    const second = timing([100_000, null, null], {
+      progress: takes({ index: 1, done: 5, total: 10, rate: 10, at: 130_000 }),
+    });
+    expect(renderTimeLeft(chapters('done', 'rendering', 'pending'), second, 130_000)).toBe(
+      50 + 100,
+    );
+    // A cached chapter takes no time; the takes of a finished chapter tell
+    // nothing more: the chapters' own pace times the rest.
+    const cached = timing([100_000, null, null], {
+      cached: [false, false, true],
+      progress: takes({ index: 1, done: 5, total: 10, rate: 10, at: 130_000 }),
+    });
+    expect(renderTimeLeft(chapters('done', 'rendering', 'pending'), cached, 130_000)).toBe(50);
+    const stale = timing([100_000, null], { progress: takes({ done: 5, total: 10, rate: 10 }) });
+    expect(renderTimeLeft(chapters('done', 'rendering'), stale, 130_000)).toBe(70);
+  });
+
+  it('reads a progress event, and refuses one it cannot read', () => {
+    expect(
+      takeProgress(
+        {
+          type: 'progress',
+          index: 2,
+          phase: 'rendering',
+          done: 3,
+          total: 9,
+          rate: 4.5,
+          phrases: true,
+        },
+        7,
+      ),
+    ).toEqual({ index: 2, phase: 'rendering', done: 3, total: 9, phrases: true, rate: 4.5, at: 7 });
+    expect(takeProgress({ type: 'progress', index: 0, phase: 'queued' }, 1)).toMatchObject({
+      phase: 'queued',
+      done: 0,
+      total: 0,
+      rate: null,
+    });
+    // A count that ran past its estimate grows the total with it.
+    expect(takeProgress({ phase: 'rendering', done: 5, total: 4 }, 0)?.total).toBe(5);
+    expect(takeProgress({ phase: 'mystery' }, 0)).toBeNull();
+    expect(takeProgress({ phase: 'rendering', done: -1, rate: Infinity }, 0)).toMatchObject({
+      done: 0,
+      rate: null,
+    });
+  });
+
   it('tells nothing before a chapter has rendered, or once nothing is left', () => {
     expect(
       renderTimeLeft(chapters('rendering', 'pending'), timing([null, null]), 5_000),
@@ -114,6 +200,52 @@ it('shows the time since the render started and the time left', () => {
     />,
   );
   expect(screen.getByText('2:00 · ~1:00 left')).toBeVisible();
+});
+
+it('says how far the chapter rendering now is, and moves the bar inside it', () => {
+  vi.spyOn(performance, 'now').mockReturnValue(1_000_000);
+  const progress = {
+    index: 1,
+    phase: 'rendering' as const,
+    done: 3,
+    total: 4,
+    phrases: true,
+    rate: 5,
+    at: 1_000_000,
+  };
+  render(
+    <GenerationProgress
+      chapters={chapters('done', 'rendering')}
+      assembling={false}
+      timing={timing([940_000, null], { startedAt: 880_000, progress })}
+    />,
+  );
+  expect(screen.getByText('3 of 4 sentences', { exact: false })).toBeVisible();
+  // One chapter done, three quarters of the second: 88 %.
+  expect(document.querySelector<HTMLElement>('[style]')!.style.width).toBe('88%');
+});
+
+it('names what a chapter waits for, and its takes with the time they have left', () => {
+  vi.spyOn(performance, 'now').mockReturnValue(10_000);
+  const base = { index: 0, done: 0, total: 0, phrases: true, rate: null, at: 10_000 };
+  const view = render(<TakeProgressText progress={{ ...base, phase: 'loading' }} />);
+  expect(screen.getByText('Loading the voice model…')).toBeVisible();
+  view.rerender(<TakeProgressText progress={{ ...base, phase: 'queued' }} />);
+  expect(screen.getByText('Waiting for another job to finish…')).toBeVisible();
+  view.rerender(
+    <TakeProgressText
+      timeLeft
+      progress={{ ...base, phase: 'rendering', done: 1, total: 1, rate: 2, phrases: false }}
+    />,
+  );
+  expect(screen.getByText('1 of 1 part · ~0:00 left')).toBeVisible();
+  view.rerender(
+    <TakeProgressText
+      timeLeft
+      progress={{ ...base, phase: 'rendering', done: 2, total: 12, rate: 5 }}
+    />,
+  );
+  expect(screen.getByText('2 of 12 sentences · ~0:50 left')).toBeVisible();
 });
 
 describe('a render keeps its clock', () => {
@@ -197,5 +329,35 @@ describe('a render keeps its clock', () => {
     fetchMock.mockResolvedValue(eventResponse(story));
     await renderLongform('stories', 'manifest');
     expect(longformSession.state.timing).toMatchObject({ words: null, cached: null });
+  });
+
+  it('with the last word on the chapter rendering now', async () => {
+    editLongform('audiobook', { script: '# One\nHello there.', voice: 'voice' });
+    fetchMock.mockResolvedValue(
+      eventResponse([
+        { type: 'started', chapters: 1 },
+        { type: 'progress', index: 0, phase: 'loading' },
+        {
+          type: 'progress',
+          index: 0,
+          phase: 'rendering',
+          done: 2,
+          total: 5,
+          rate: 4,
+          phrases: true,
+        },
+        // Not a chapter of this render: ignored.
+        { type: 'progress', index: 3, phase: 'rendering', done: 1, total: 1 },
+        { type: 'done', output: 'one.m4b', failed_chapters: [] },
+      ]),
+    );
+    await renderLongform('audiobook');
+    expect(longformSession.state.timing?.progress).toMatchObject({
+      index: 0,
+      phase: 'rendering',
+      done: 2,
+      total: 5,
+      rate: 4,
+    });
   });
 });

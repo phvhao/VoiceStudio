@@ -38,7 +38,7 @@ import {
   type PerformanceTier,
 } from '@/hooks/use-performance-profile';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { SettingsSection, SettingsRow } from './settings-layout';
+import { SettingsSection, SettingsRow, settingsCardGrid } from './settings-layout';
 import { familyIcons, type ModelFamily } from './model-family';
 import { useModelCatalogue, type CatalogueModel } from './model-catalogue-query';
 import { resolvePerformanceModelPack } from './performance-model-packs';
@@ -48,6 +48,7 @@ import {
   engineSelectionFeedback,
   type EngineSelectionResult,
 } from '@/lib/engine-selection-feedback';
+import { unloadModel } from '@/lib/api/engines';
 
 interface RecommendedModel {
   repo_id: string;
@@ -701,14 +702,7 @@ export function ModelLibrary({
             entry.checkpoint === model.repo_id ||
             Boolean(model.dictation_id && entry.checkpoint === model.dictation_id),
         );
-  const unloadEntry = async (entry: LoadedModel) => {
-    const result = await apiJson<{ success?: boolean; reason?: string }>(
-      `/model/unload/${encodeURIComponent(entry.id)}`,
-      { method: 'POST' },
-    );
-    if (result.success === false)
-      throw new Error(result.reason || t('modelMaintenance.unloadFailed'));
-  };
+  const unloadEntry = (entry: LoadedModel) => unloadModel(entry.id, t);
   const unloadForRemoval = async (model: CatalogueModel) => {
     const resident = residentFor(model);
     if (!resident) return;
@@ -783,7 +777,7 @@ export function ModelLibrary({
         client.invalidateQueries({ queryKey: ['engines'] }),
         client.invalidateQueries({ queryKey: ['performance-profile'] }),
       ]);
-      const feedback = engineSelectionFeedback(result, 'asr');
+      const feedback = engineSelectionFeedback(result, 'asr', t);
       if (feedback.tone === 'warning') toast.warning(t(feedback.key, feedback.values));
       else toast.success(t(feedback.key, feedback.values));
     } catch (error) {
@@ -946,14 +940,16 @@ export function ModelLibrary({
               {t('modelSettings.selected')}
             </span>
           )}
+        {/* Sized by the card, never by its own text: the summary and the
+            action labels wrap instead of pushing the panel past the card. */}
         {(model.gated || gatedFailure) && !model.installed && (
-          <details className="group/access order-last basis-full rounded-lg border border-warning/20 bg-warning/5 text-xs @2xl:max-w-2xl">
+          <details className="group/access order-last min-w-0 basis-full rounded-lg border border-warning/20 bg-warning/5 text-xs">
             <summary
               role={gatedFailure || access?.ready === false ? 'alert' : 'status'}
-              className="flex min-h-8 cursor-pointer list-none items-center gap-1.5 rounded-lg px-3 py-2 font-medium text-foreground outline-none marker:hidden hover:bg-warning/5 focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
+              className="flex min-h-8 cursor-pointer list-none items-start gap-1.5 rounded-lg px-3 py-2 font-medium text-foreground outline-none marker:hidden hover:bg-warning/5 focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden"
             >
-              {access?.ready && <CheckIcon className="size-3.5 text-emerald-500" />}
-              <span className="min-w-0 flex-1 truncate">
+              {access?.ready && <CheckIcon className="mt-px size-3.5 shrink-0 text-emerald-500" />}
+              <span className="min-w-0 flex-1 text-pretty [overflow-wrap:anywhere]">
                 {t(
                   access?.ready
                     ? 'modelMaintenance.gatedAccessReady'
@@ -962,10 +958,10 @@ export function ModelLibrary({
                       : 'modelMaintenance.gatedAccessRequired',
                 )}
               </span>
-              <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/access:rotate-180 motion-reduce:transition-none" />
+              <ChevronDownIcon className="mt-px size-3.5 shrink-0 text-muted-foreground transition-transform group-open/access:rotate-180 motion-reduce:transition-none" />
             </summary>
             <div className="border-t border-warning/15 px-3 py-2.5">
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-1.5 [&>*]:h-auto [&>*]:min-h-7 [&>*]:max-w-full [&>*]:whitespace-normal [&>*]:py-1 [&>*]:text-start">
                 {model.access_url && (
                   <ExternalLink href={model.access_url}>
                     {t('modelMaintenance.requestModelAccess')}
@@ -1029,7 +1025,7 @@ export function ModelLibrary({
           </details>
         )}
         {failedJob && !gatedFailure && (
-          <details className="basis-full rounded-lg border border-destructive/15 bg-destructive/5 px-3 py-2 text-xs @2xl:max-w-xl">
+          <details className="min-w-0 basis-full rounded-lg border border-destructive/15 bg-destructive/5 px-3 py-2 text-xs">
             <summary className="cursor-pointer font-medium text-destructive">
               {t('modelMaintenance.failed')}
             </summary>
@@ -1287,9 +1283,7 @@ export function ModelLibrary({
                 <summary className="glass-panel cursor-pointer rounded-xl border border-border/60 bg-card/40 px-4 py-3 text-sm text-muted-foreground shadow-xs/5 focus-visible:outline-ring">
                   {t('firstrun.lib_show_all', { count: optional.length })}
                 </summary>
-                <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-3">
-                  {optional.map(renderModel)}
-                </div>
+                <div className={`mt-3 ${settingsCardGrid}`}>{optional.map(renderModel)}</div>
               </details>
             )}
             {incompatible.length > 0 && (
@@ -1297,9 +1291,7 @@ export function ModelLibrary({
                 <summary className="glass-panel cursor-pointer rounded-xl border border-border/60 bg-card/40 px-4 py-3 text-sm text-muted-foreground shadow-xs/5 focus-visible:outline-ring">
                   {t('modelSettings.unavailable')} ({incompatible.length})
                 </summary>
-                <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] gap-3">
-                  {incompatible.map(renderModel)}
-                </div>
+                <div className={`mt-3 ${settingsCardGrid}`}>{incompatible.map(renderModel)}</div>
               </details>
             )}
             {primary?.length === 0 && optional.length === 0 && incompatible.length === 0 && (

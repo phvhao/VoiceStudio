@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import { describe, expect, it } from 'vitest';
 import { engineSelectionFeedback } from './engine-selection-feedback';
 
@@ -30,6 +31,22 @@ describe('engineSelectionFeedback', () => {
         'tts',
       ).key,
     ).toBe('engines.selectWithCaveat');
+  });
+
+  it('names the caveat in the app language when the backend sends its code', () => {
+    const t = ((key: string) => `t:${key}`) as unknown as TFunction;
+    expect(
+      engineSelectionFeedback(
+        {
+          active: 'omnivoice',
+          routing_status: 'cpu_fallback',
+          routing_reason: 'GPU acceleration is unavailable; this engine will use CPU.',
+          routing_reason_code: 'cpu_fallback',
+        },
+        'tts',
+        t,
+      ).values.reason,
+    ).toBe('t:engineReason.routing.cpu_fallback');
   });
 
   it('keeps ordinary CPU-only selections as success', () => {
