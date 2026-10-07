@@ -181,6 +181,7 @@ jobs:
           node electron/tests/dub-smoke.mjs
           node electron/tests/longform-layout-smoke.mjs
           node electron/tests/language-picker-smoke.mjs
+          node electron/tests/settings-model-cards-smoke.mjs
 
   linux-native-package:
     name: Linux native package
