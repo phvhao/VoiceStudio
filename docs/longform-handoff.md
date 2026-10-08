@@ -1,6 +1,6 @@
 # Bàn giao: nâng cấp Sách nói / Truyện (fork phvhao)
 
-Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
+Cập nhật: 2026-10-08 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
 `phvhao/VoiceStudio` trỏ cùng commit mới nhất). Bản cài đặt Windows cuối:
 `electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `95cbf842`). Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
 
@@ -10,9 +10,12 @@ Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (
 - Kiểm tra lần cuối đạt: typecheck, lint, locale (21 ngôn ngữ), ~1775 test renderer, ~2990 test
   shared, hơn 2500 test Python, các smoke giao diện CI chạy (longform-layout, playback, longform,
   language-picker, dub).
-- Một test luôn đỏ trên máy này do môi trường, không do thay đổi: `electron/src/main/backend-setup.test.ts`
-  ("only ever names a uv that is really there", `OMNIVOICE_BUNDLED_UV` rỗng).
-- Repo gốc có thêm commit (MCP generation budgets, PR #2612, có thể nhiều hơn) chưa đồng bộ vào nhánh này.
+- Test `backend-setup.test.ts` ("only ever names a uv that is really there") từng đỏ trên máy không có uv:
+  `OMNIVOICE_BUNDLED_UV` rỗng được truyền nguyên cho backend. Đã sửa (bỏ biến khi không tìm thấy uv).
+- 2026-10-08: đã gộp repo gốc đến `06c6e077` (bản 0.5.7 chính thức, 206 commit: bảo mật chặn yêu cầu
+  từ trang web lạ, chuyển model sang RAM sau khi tạo, phụ đề lồng tiếng…). Gỡ 20 file xung đột, giữ cả
+  hai phía; route tải bản xuất HTML (xóa file sau khi gửi) được thêm lớp chặn GET từ trang lạ như các
+  route tải khác của repo gốc.
 - Sau phần tính năng là 6 đợt tối ưu theo bản rà soát đo đạc (xem mục "Đợt tối ưu"); mỗi đợt có kiểm tra
   toàn bộ, review đối kháng và sửa lỗi trước khi commit.
 
@@ -40,6 +43,8 @@ Cập nhật: 2026-10-07 · Nhánh `feat/longform-voice-preview-pronunciation` (
 | `f1ec3cd3` | Đợt 5: 6 mẫu HTML + 14 phông OFL, Truyện xuất HTML, editor nhanh hơn, rà tiếng Việt |
 | `3ed6a2fc` | Đợt 6: bộ giải mã OmniVoice nhanh hơn 26–31% (CUDA), 35–39% (CPU) |
 | `95cbf842` | Nhân bản/Thiết kế/API chuẩn hóa theo mức lời nói −20 dBFS (chênh 9,2 → 2,2 LU); tiêu đề trang không bị cắt |
+| `e37f599b` | Thẻ tag giọng đổi được giọng của tag; editor giãn theo cửa sổ rộng (Khổ đọc / Vừa khung) |
+| merge `upstream/main` | Gộp repo gốc 0.5.7 chính thức (2026-10-08) |
 
 ## Đã làm
 
@@ -118,7 +123,6 @@ bản thu khác trước (`OMNIVOICE_PACKED_CFG=0` để trở lại); máy GPU 
 | L1–L12 của bản rà soát (CUDA graph, FLAC cache, giới hạn cache…) | Để sau |
 | Lưu mức âm lượng đo được vào hồ sơ giọng | Chờ quyết định; chỉ để tham khảo, không thay cân bằng |
 | PR lên repo gốc | Chưa gửi |
-| Đồng bộ 4 commit mới của repo gốc | `git merge upstream/main`, chạy lại test rồi push |
 
 ## Cần kiểm tra thủ công
 
