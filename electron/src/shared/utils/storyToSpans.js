@@ -1,6 +1,11 @@
 import { isChapterLine, chapterTitle } from './storyExport';
 import { effectiveProfile } from './storyCast';
-import { parseChapterBody } from './longformParser';
+import {
+  attachImageMarks,
+  extractImageMarks,
+  giveCarriedImages,
+  parseChapterBody,
+} from './longformParser';
 
 /**
  * Compile the Stories Editor's cast + ordered lines into the chapter/span plan
@@ -29,6 +34,11 @@ import { parseChapterBody } from './longformParser';
  * only: the rendered timeline carries them for the HTML book's turns; no take
  * or cache key reads them.
  *
+ * `[image: NAME]` tags never reach the engine: each line's are taken out and
+ * given to the spans read where they stood (`images`); a line that says
+ * nothing (only a picture) passes its pictures to the next line that speaks,
+ * and a chapter line's go to its chapter's first.
+ *
  * @returns Array<{ title, spans: [{ voice_id, text, pause_ms_after, speed }] }>
  */
 export function storyToSpans(tracks, cast, globalSpeed = null, { layout = false } = {}) {
@@ -40,12 +50,15 @@ export function storyToSpans(tracks, cast, globalSpeed = null, { layout = false 
   // 1.0× is the engine default → treat it as "no global override" so we don't
   // stamp an explicit speed on every span when the control is at rest.
   const gspeed = globalSpeed && globalSpeed !== 1 ? globalSpeed : null;
+  // Pictures from lines with nothing spoken after them yet.
+  let carried = [];
 
   for (const tk of tracks || []) {
-    const text = tk.text || '';
+    const [text, marks] = extractImageMarks(tk.text || '');
     if (isChapterLine(text)) {
       flush();
       cur = { title: chapterTitle(text), spans: [] };
+      carried = carried.concat(marks);
       continue;
     }
     const voiceId = effectiveProfile(tk, cast) || null;
@@ -53,6 +66,8 @@ export function storyToSpans(tracks, cast, globalSpeed = null, { layout = false 
     // (falsy 0 → fall through to global/null, per the #27 zero-is-default rule.)
     const speed = tk.speed || gspeed || null;
     const spans = parseChapterBody(text, { defaultVoice: voiceId, defaultSpeed: speed });
+    carried = giveCarriedImages(spans, carried);
+    carried = carried.concat(attachImageMarks(text, spans, marks));
     const speaker = layout ? lineSpeaker(tk, cast) : null;
     let opens = layout;
     spans.forEach((s, i) => {

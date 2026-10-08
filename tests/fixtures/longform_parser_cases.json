@@ -2606,5 +2606,399 @@
         "untitled": true
       }
     ]
+  },
+  {
+    "name": "image_tag_own_line_is_not_spoken",
+    "input": "A.\n[image: rung.jpg]\nB.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "A.\nB.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 3,
+                "name": "rung.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_inline_contain",
+    "input": "A. [image: x.jpg contain] B.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "A. B.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 3,
+                "name": "x.jpg",
+                "fit": "contain"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_on_h1_line_and_none",
+    "input": "# Ch [image: c.png]\nHello.\n# Two\n[image: none]\nWorld.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Ch",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Hello.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "c.png",
+                "fit": "auto"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Two",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "World.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": null,
+                "fit": "auto"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "image_tag_before_first_heading",
+    "input": "[image: a.jpg]\n# One\nHi.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "One",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Hi.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "a.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "image_tag_after_last_text",
+    "input": "Hi.\n[image: end.jpg]",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Hi.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 3,
+                "name": "end.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_in_silent_chapter_carries_on",
+    "input": "# Empty\n[image: e.jpg]\n# Next\nText.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Next",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Text.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "e.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "image_tag_mid_sentence_and_on_section_line",
+    "input": "One. Two [image: m.jpg] three.\n## Part [image: s.jpg]\nBody.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "One. Two three.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "join": "paragraph",
+            "images": [
+              {
+                "at": 9,
+                "name": "m.jpg",
+                "fit": "auto"
+              }
+            ]
+          },
+          {
+            "voice_id": "v1",
+            "text": "Part",
+            "pause_ms_after": 0,
+            "speed": null,
+            "section": "Part",
+            "section_level": 2,
+            "join": "paragraph",
+            "images": [
+              {
+                "at": 0,
+                "name": "s.jpg",
+                "fit": "auto"
+              }
+            ]
+          },
+          {
+            "voice_id": "v1",
+            "text": "Body.",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_between_voice_and_delivery",
+    "input": "[voice:B]\n[image: q.jpg]\n[slow]Yo[/slow] there.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "B",
+            "text": "Yo",
+            "pause_ms_after": 0,
+            "speed": 0.85,
+            "join": "continue",
+            "images": [
+              {
+                "at": 0,
+                "name": "q.jpg",
+                "fit": "auto"
+              }
+            ]
+          },
+          {
+            "voice_id": "B",
+            "text": "there.",
+            "pause_ms_after": 0,
+            "speed": null
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tags_two_on_one_line",
+    "input": "[image: a.jpg] [image: b.jpg]\nText.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Text.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "a.jpg",
+                "fit": "auto"
+              },
+              {
+                "at": 0,
+                "name": "b.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_case_and_spacing",
+    "input": "[IMAGE:   Rung.JPG   CONTAIN ]\nText.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Text.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "rung.jpg",
+                "fit": "contain"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_next_to_a_pause",
+    "input": "Hi. [pause 1s] [image: z.jpg] Bye.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Hi.",
+            "pause_ms_after": 1000,
+            "speed": null
+          },
+          {
+            "voice_id": "v1",
+            "text": "Bye.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 0,
+                "name": "z.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_unknown_fit_is_cover",
+    "input": "Go [image: w.webp sideways] on.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "Go on.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 3,
+                "name": "w.webp",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
+  },
+  {
+    "name": "image_tag_astral_text_counts_code_points",
+    "input": "A 😀 b [image: e.jpg] c.",
+    "default_voice": "v1",
+    "expected": [
+      {
+        "title": "Chapter 1",
+        "spans": [
+          {
+            "voice_id": "v1",
+            "text": "A 😀 b c.",
+            "pause_ms_after": 0,
+            "speed": null,
+            "images": [
+              {
+                "at": 6,
+                "name": "e.jpg",
+                "fit": "auto"
+              }
+            ]
+          }
+        ],
+        "untitled": true
+      }
+    ]
   }
 ]

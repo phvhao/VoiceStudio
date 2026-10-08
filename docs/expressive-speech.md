@@ -15,6 +15,7 @@ ignores.
 | Pauses, voice switches and tags in Stories or Audiobook | The toolbar above the script: **Pause**, **Voice** (select text first to voice only that part), **Slow / Fast / Emphasis / Spell**, **Volume**, **Pronounce**, **Reactions**, **Chapter**; Audiobook adds **Listen** for the selected text or the paragraph at the cursor. **?** opens the markup guide. Clicking a tag (or **Alt+Enter** on it) opens a card to change it, right-clicking offers the same actions, and typing `[` suggests tags — see [The script editor](#the-script-editor) | Every engine (Reactions: default engine) |
 | Voices at an even volume, or one voice louder | **Even out voice volume** (on by default), plus a −12 to +12 dB volume per voice in **Cast** or a voice tag's card — see [Voice volume](#voice-volume) | Every engine |
 | One passage quieter or louder (a whisper, a shout) | Wrap it in `[volume -6dB]…[/volume]` — the toolbar's **Volume** does it for the selected text — see [Voice volume](#voice-volume) | Every engine |
+| A picture for the slideshow and the video | `[image: NAME]` on the line it shows from — the toolbar's **Picture** picks one from the picture library, and pictures dropped on the script or pasted into it are added there; never read aloud, and adding one renders nothing again — see [Pictures, slideshow and video](electron-longform.md#pictures-slideshow-and-video) | Audiobook and Stories |
 | One sentence of a book or story read again (a stumble, an odd laugh) | Right-click it → **Retake this sentence**; the rest of the chapter is reused — see [Sentence-by-sentence rendering](#sentence-by-sentence-rendering-and-punctuation-pauses) | Every engine, read sentence by sentence |
 | Laughter or a sigh | ⊕ Insert → `[laughter]` / `[sigh]` | Default engine (VoiceStudio) |
 | An audible breath **on demand** | `[breath]` in the text | CosyVoice 3 only (opt-in) — see [Breaths](#breaths-specifically) |
@@ -230,6 +231,10 @@ In Audiobook and Stories, click a tag — or put the cursor on it and press
   louder) or set the passage's gain with the slider; from either half, only
   the opening tag changes. **Remove this markup** unwraps the words.
 - **`[[word|respelling]]`** — edit the respelling.
+- **`[image: NAME]`** — see the picture, choose how it fills the frame
+  (**Auto**, **Fill** or **Whole**), **Change picture…** from the library, or
+  remove the tag (alone on its line, the line goes with it, so no paragraph
+  break appears).
 - **Reactions** — swap for another sound.
 - **Unknown tags** — the card explains that the engine reads them aloud as
   written.

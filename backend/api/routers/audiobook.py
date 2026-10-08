@@ -3123,6 +3123,8 @@ class HtmlBookDesign(BaseModel):
     heading_font: str | None = Field(default=None, max_length=40)
     show_names: bool | None = None
     numbering: str | None = Field(default=None, max_length=10)
+    # Which view the page opens in: the text ("read") or the slideshow ("show").
+    view: Literal["read", "show"] | None = None
 
 
 class AudiobookHtmlExportRequest(BaseModel):
@@ -3292,6 +3294,16 @@ async def _html_book(req: AudiobookHtmlExportRequest, *, preview: bool = False) 
     cover_src = cover_entry
     if preview and cover:
         cover_src = await asyncio.to_thread(_preview_cover, cover)
+    # The slideshow's pictures: those of the library the timeline still names.
+    from services import longform_images
+
+    pictures = {}
+    for chapter in chapters:
+        for image in chapter.get("images") or []:
+            name = image.get("name") if isinstance(image, dict) else None
+            path = longform_images.path_of(name) if isinstance(name, str) else None
+            if path and name not in pictures:
+                pictures[name] = (path, f"images/{os.path.basename(path)}")
     page = await asyncio.to_thread(
         render_page,
         title=title, timeline=timeline, audio_src="" if preview else entry, labels=labels,
@@ -3300,9 +3312,11 @@ async def _html_book(req: AudiobookHtmlExportRequest, *, preview: bool = False) 
         direction=req.direction,
         book_lang=req.book_lang if _LANG_TAG_RE.fullmatch(req.book_lang) else "",
         duration=float((timeline or {}).get("duration") or 0), design=design,
-        story=is_story, voice_names=voice_names, preview=preview)
+        story=is_story, voice_names=voice_names, preview=preview,
+        images={name: entry for name, (_, entry) in pictures.items()},
+        view=chosen.view or "read")
     return {"page": page, "audio": audio_path, "audio_entry": entry, "cover": cover,
-            "cover_entry": cover_entry}
+            "cover_entry": cover_entry, "images": list(pictures.values())}
 
 
 @router.post("/audiobook/export/html")
@@ -3323,7 +3337,7 @@ async def audiobook_export_html(req: AudiobookHtmlExportRequest) -> dict:
     size = await asyncio.to_thread(
         write_export_zip, zip_path, page=book["page"], audio_path=book["audio"],
         audio_entry=book["audio_entry"], cover_path=book["cover"],
-        cover_entry=book["cover_entry"])
+        cover_entry=book["cover_entry"], images=book["images"])
     return {"id": export_id, "bytes": size}
 
 
@@ -3422,6 +3436,15 @@ class LongformSpeaker(BaseModel):
     accent: int | None = Field(default=None, ge=0, le=10_000)
 
 
+class LongformImage(BaseModel):
+    """A picture shown from inside a span (``Span.images``): the character
+    of its text it shows from, the library name (``None``: the book's own
+    backdrop again) and how it meets the frame."""
+    at: int = Field(default=0, ge=0, le=10_000_000)
+    name: str | None = Field(default=None, max_length=120)
+    fit: Literal["auto", "cover", "contain"] = "auto"
+
+
 class LongformSpan(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     voice_id: str | None = None
@@ -3439,6 +3462,9 @@ class LongformSpan(BaseModel):
     # HTML book sets the story as turns.
     break_before: Literal["line", "paragraph"] | None = None
     speaker: LongformSpeaker | None = None
+    # Display only, like ``break_before``: the pictures ``[image:]`` tags show
+    # from inside this span (the editor took the tags out of ``text``).
+    images: list[LongformImage] | None = Field(default=None, max_length=64)
 
 
 class LongformChapter(BaseModel):
@@ -3466,21 +3492,44 @@ def _story_chapter(chapter: LongformChapter, index: int = 0):
     """Chapter ``index`` of a posted plan as the render reads it, or ``None``
     when it holds nothing to render: a span is kept if it has text to speak
     or a pause to render (pause-only spans carry the silence between lines).
-    A dropped span's line break passes to the span after it."""
+    A dropped span's line break passes to the span after it, and so do its
+    pictures, shown from that span's start. ``[image:]`` tags still in a
+    span's text (a client that left them in) are taken out the same way the
+    parser does, so they are never spoken."""
     from services.audiobook import Chapter, Span
+    from services.longform_parser import extract_image_marks
 
-    spans, pending = [], None
+    spans, pending, carried = [], None, []
     for s in chapter.spans:
         brk = "paragraph" if "paragraph" in (pending, s.break_before) else (
             pending or s.break_before)
-        if not ((s.text and s.text.strip()) or s.pause_ms_after > 0):
+        text, marks = extract_image_marks((s.text or "").strip())
+        text = text.strip()
+        images = [image.model_dump() for image in s.images or []] + [
+            {"at": min(m["pos"], len(text)), "name": m["name"], "fit": m["fit"]} for m in marks]
+        if not (text or s.pause_ms_after > 0):
             pending = brk
+            carried += [{**image, "at": 0} for image in images]
             continue
+        if not text:
+            # A pause only: its pictures show from what is read next.
+            carried += [{**image, "at": 0} for image in images]
+            images = []
+        else:
+            images = [{**image, "at": 0} for image in carried] + images
+            carried = []
         pending = None
-        spans.append(Span(voice_id=s.voice_id, text=(s.text or "").strip(),
+        spans.append(Span(voice_id=s.voice_id, text=text,
                           pause_ms_after=max(0, int(s.pause_ms_after)), speed=s.speed,
                           join=s.join, gain_db=s.gain_db or None, break_before=brk,
-                          speaker=s.speaker.model_dump() if s.speaker else None))
+                          speaker=s.speaker.model_dump() if s.speaker else None,
+                          images=sorted(images, key=lambda image: image["at"]) or None))
+    if carried and spans:
+        # Nothing spoken after them: they show from the end of the last text.
+        last = next((span for span in reversed(spans) if span.text), None)
+        if last is not None:
+            last.images = (last.images or []) + [{**image, "at": len(last.text)}
+                                                 for image in carried]
     if not spans:
         return None
     return Chapter(title=chapter.title or f"Chapter {index + 1}", spans=spans,

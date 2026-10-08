@@ -87,21 +87,26 @@ export interface RetakeTools {
   retakeAt(from: number, to: number): void;
 }
 
-// Markup that is never shown: chapter headings, a section's marks, and the
-// tags the parser turns into voices, pauses, delivery and volume. Bracket
-// tags left in the text (reactions, unknown tags) are not shown either.
-const HIDDEN: ReadonlySet<MarkupKind> = new Set([
-  'heading',
-  'section',
-  'voice',
-  'voiceReset',
-  'pause',
-  'delivery',
-  'volume',
-  'expression',
-  'unknown',
-]);
-const TAGS: ReadonlySet<MarkupKind> = new Set(['expression', 'unknown']);
+// How each kind of markup shows in the text the reader is shown: never
+// (chapter headings, a section's marks, and the tags the parser turns into
+// voices, pauses, delivery, volume and pictures), as a bracket tag left in
+// the text (reactions, unknown tags: not shown either, but what a take of
+// tags alone reads), or as words. Every kind is named, so a new one is
+// placed here before it builds.
+const SHOWN_AS: Record<MarkupKind, 'words' | 'tag' | 'hidden'> = {
+  text: 'words',
+  pronunciation: 'words',
+  expression: 'tag',
+  unknown: 'tag',
+  heading: 'hidden',
+  section: 'hidden',
+  voice: 'hidden',
+  voiceReset: 'hidden',
+  pause: 'hidden',
+  delivery: 'hidden',
+  volume: 'hidden',
+  image: 'hidden',
+};
 const WHITESPACE = /\s/;
 
 interface Shown {
@@ -123,12 +128,12 @@ function shownText(sources: readonly TakeSource[]): Shown {
     for (const { text, kind } of tokenizeMarkup(source.text.slice(from, to), {
       headings: source.headings,
     })) {
-      if (TAGS.has(kind)) shown.tags.push([index, offset, offset + text.length]);
+      if (SHOWN_AS[kind] === 'tag') shown.tags.push([index, offset, offset + text.length]);
       // `[[word|respelling]]` shows its word; `[[respelling]]` the respelling.
       const [visible, length] =
         kind === 'pronunciation'
           ? [offset + 2, text.slice(2, -2).split('|')[0].length]
-          : HIDDEN.has(kind)
+          : SHOWN_AS[kind] !== 'words'
             ? [offset, 0]
             : [offset, text.length];
       for (let i = visible; i < visible + length; i++) {

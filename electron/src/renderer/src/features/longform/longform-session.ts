@@ -12,6 +12,7 @@ import { parseCastNames, scriptStats } from '@shared/utils/audiobookScript';
 import { LANG_CODES } from '@shared/utils/languages';
 import { restoreBookOptions, lexiconMap, type BookOptions } from './book-options';
 import { restoreHtmlDesign, type HtmlDesign } from './html-design';
+import { restoreVideoDesign, type VideoDesign } from './video-design';
 import { createCoalescedJsonStorage } from '@shared/utils/coalescedJsonStorage';
 import { Store } from '@tanstack/store';
 import { useStore } from '@tanstack/react-store';
@@ -121,6 +122,8 @@ export interface Draft extends BookOptions {
   editedAt: number;
   /** The book's look as a web page (Export HTML); null until one is picked. */
   htmlExport: HtmlDesign | null;
+  /** How the book's video looks (Export video); null until one is made. */
+  videoExport: VideoDesign | null;
 }
 /** What the progress panel tells a render's time left from (`renderTimeLeft`). */
 export interface RenderTiming {
@@ -178,6 +181,7 @@ export const blankLongformDraft = (): Draft => ({
   outputFailedChapters: 0,
   editedAt: 0,
   htmlExport: null,
+  videoExport: null,
 });
 /**
  * A stored draft as the editor can use it — the working copy in localStorage
@@ -225,6 +229,7 @@ export function restoreDraft(s: any): Draft | null {
     outputFailedChapters: typeof s.outputFailedChapters === 'number' ? s.outputFailedChapters : 0,
     editedAt: Number.isFinite(s.editedAt) && s.editedAt > 0 ? s.editedAt : 0,
     htmlExport: restoreHtmlDesign(s.htmlExport),
+    videoExport: restoreVideoDesign(s.videoExport),
   };
 }
 const key = 'voicestudio.longform.v1';

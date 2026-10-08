@@ -20,5 +20,7 @@ export function storyToSpans(
     break_before?: 'paragraph';
     /** `layout`: the line's character, by name and cast slot (the editor's colour). */
     speaker?: { name: string; accent: number };
+    /** `[image:]` pictures shown from inside this span: the character (code point) of `text` each shows from. */
+    images?: { at: number; name: string | null; fit: 'auto' | 'cover' | 'contain' }[];
   }[];
 }[];

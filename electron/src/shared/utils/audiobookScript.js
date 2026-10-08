@@ -28,6 +28,8 @@ const INLINE_OVERRIDE_RE = /\[\[([^\]]{0,256})\]\]/g;
 // Recognized (non-voice) bracket tokens, so validation can flag the rest.
 const PAUSE_TOKEN_RE = /^\[\s*pause(?:\s+\d+(?:\.\d+)?(?:\s*(?:ms|s))?)?\s*\]$/i;
 const SSML_TOKEN_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
+// `[image: NAME]` (longform_parser._IMAGE_RE): a picture, taken out before reading.
+const IMAGE_TOKEN_RE = /^\[image:[^\][\n]*\]$/i;
 // [volume ±N dB] / [/volume] (mirrors ssml_lite._TAG_RE: a bounded number, an
 // optional dB). A [volume] without a readable gain is read aloud: unknown.
 export const VOLUME_TOKEN_RE =
@@ -194,6 +196,7 @@ export function validateScript(text, { mappedNames = [], profileIds = [] } = {})
       PAUSE_TOKEN_RE.test(tok) ||
       SSML_TOKEN_RE.test(tok) ||
       VOLUME_TOKEN_RE.test(tok) ||
+      IMAGE_TOKEN_RE.test(tok) ||
       REACTION_TOKENS.has(lower);
     VOICE_RE.lastIndex = 0; // test() advances a /g regex — reset it
     if (!known && !seenTags.has(lower)) {

@@ -13,6 +13,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   CircleAlertIcon,
+  ImageIcon,
   PauseIcon,
   PlayIcon,
   RabbitIcon,
@@ -41,6 +42,8 @@ import {
 import { castVoice } from './cast-map';
 import { VoiceGainControl, useVoiceGainText } from './cast-settings';
 import type { MarkupEditorHandle } from './markup-editor-context';
+import { useLibraryImages, type ImageTools, type LibraryImage } from './image-library';
+import { imageUrl, showsWhole, type ImageFit } from './slideshow';
 import { applyMarkupEdit, castProfileVoice, type MarkupTarget } from './markup-toolbar';
 import {
   DELIVERY_TAGS,
@@ -57,6 +60,8 @@ import {
   expressionGroups,
   expressionVariant,
   formatPauseSeconds,
+  imageTagParts,
+  imageToken,
   isBareVoiceReset,
   isProfileCastName,
   pauseMs,
@@ -75,7 +80,9 @@ import {
   voiceToken,
   volumeDb,
   volumeOpening,
+  IMAGE_TAG_FITS,
   type DeliveryTag,
+  type ImageTagFit,
   type MarkupEdit,
   type MarkupKind,
   type MarkupToken,
@@ -123,6 +130,8 @@ export interface TagToolProps {
    * removed, and none of these is offered to insert.
    */
   unsupported?: readonly MarkupKind[];
+  /** The picture library (Audiobook and Stories): `[image:]` tags are chosen, changed and dropped in. */
+  images?: ImageTools;
 }
 
 export const DELIVERY_LABELS: Record<DeliveryTag, string> = {
@@ -175,6 +184,8 @@ function tagKindLabel(token: MarkupToken): string {
       return 'audiobook.insert_reactions';
     case 'pronunciation':
       return 'markup.pronounce';
+    case 'image':
+      return 'markup.image';
     case 'unknown':
       return 'editor.card_unknown_title';
   }
@@ -330,6 +341,18 @@ export function tagActions(tools: TagToolProps, token: MarkupToken) {
     respell: (respelling: string) => edit((value) => setRespelling(value, token, respelling)),
     /** Select the respelling in the editor, to retype it there. */
     selectRespelling: () => select(respellingRange(token)),
+    /** What an `[image:]` tag shows (its picture and fit); null on other tags. */
+    image: imageTagParts(token.text),
+    /** Choose another picture for an `[image:]` tag in the library (its fit is kept). */
+    changeImage() {
+      const shown = imageTagParts(token.text);
+      tools.images?.pick({
+        current: shown?.name ?? null,
+        onChoose: (picture) => void replace(imageToken(picture, shown?.fit ?? 'auto')),
+      });
+    },
+    /** Show an `[image:]` tag's picture another way (fill the frame, whole, or as its shape suits). */
+    setImageFit: (fit: ImageTagFit) => replace(imageToken(imageTagParts(token.text)?.name ?? null, fit)),
   };
 }
 
@@ -658,6 +681,8 @@ function TagCardBody({ token: shown, tools, focusRef, onDone }: Omit<BodyProps, 
       return <VolumeBody {...props} />;
     case 'pronunciation':
       return <PronunciationBody {...props} />;
+    case 'image':
+      return <ImageBody {...props} remove={remove} />;
     case 'unknown':
       return (
         <>
@@ -1167,6 +1192,101 @@ function VolumeBody({ token, act, focusRef, onDone }: BodyProps) {
           </Button>
         }
       />
+    </>
+  );
+}
+
+const IMAGE_FIT_LABELS: Record<ImageTagFit, string> = {
+  auto: 'markup.image_fit_auto',
+  cover: 'markup.image_fit_cover',
+  contain: 'markup.image_fit_contain',
+};
+
+/**
+ * `[image: NAME]`: the picture shown from here (a missing one said so), how
+ * it meets the frame, and another one from the library.
+ */
+/** The picture as a 16:9 frame shows it with this fit: filled, or whole on a blurred copy. */
+function FitPreview({ picture, fit }: { picture: LibraryImage; fit: ImageFit }) {
+  const src = imageUrl(picture.name, { thumb: true, version: picture.version });
+  const whole = showsWhole(fit, picture, { width: 16, height: 9 });
+  return (
+    <div
+      data-fit={whole ? 'whole' : 'fill'}
+      className="relative aspect-video w-full overflow-hidden rounded-md border border-border/50 bg-black/40"
+    >
+      {whole && (
+        <img src={src} alt="" aria-hidden className="absolute inset-0 size-full scale-110 object-cover blur-md brightness-50" />
+      )}
+      <img src={src} alt="" className={cn('relative size-full', whole ? 'object-contain' : 'object-cover')} />
+    </div>
+  );
+}
+
+function ImageBody({ token, tools, act, focusRef, onDone, remove }: BodyProps & { remove: ReactNode }) {
+  const { t } = useTranslation();
+  const shown = act.image ?? { name: null, fit: 'auto' as const };
+  const library = useLibraryImages({ enabled: Boolean(tools.images) && shown.name !== null });
+  const kept = shown.name ? library.data?.find((image) => image.name === shown.name) : null;
+  const missing = Boolean(shown.name && library.isSuccess && !kept);
+  return (
+    <>
+      <Header
+        icon={<ImageIcon className="size-3.5 shrink-0 text-teal-500" />}
+        title={t('markup.image')}
+        token={token}
+      >
+        {shown.name === null
+          ? t('editor.card_image_none')
+          : missing
+            ? t('editor.card_image_missing', { name: shown.name })
+            : t('editor.card_image', { name: shown.name })}
+      </Header>
+      {kept && <FitPreview picture={kept} fit={shown.fit} />}
+      {shown.name !== null && (
+        <div
+          role="radiogroup"
+          aria-label={t('markup.image_fit')}
+          className="flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5 ring-1 ring-border/50 ring-inset"
+        >
+          {IMAGE_TAG_FITS.map((fit) => (
+            <button
+              key={fit}
+              type="button"
+              role="radio"
+              aria-checked={shown.fit === fit}
+              onClick={() => {
+                if (fit !== shown.fit) act.setImageFit(fit);
+                onDone();
+              }}
+              className={cn(
+                'h-7 flex-1 rounded-md px-2 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
+                shown.fit === fit
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t(IMAGE_FIT_LABELS[fit])}
+            </button>
+          ))}
+        </div>
+      )}
+      <Footer end={remove}>
+        {tools.images && (
+          <Button
+            ref={(node) => void (focusRef.current = node)}
+            size="xs"
+            variant="secondary"
+            onClick={() => {
+              act.changeImage();
+              onDone();
+            }}
+          >
+            <ImageIcon />
+            {t('editor.change_image')}
+          </Button>
+        )}
+      </Footer>
     </>
   );
 }

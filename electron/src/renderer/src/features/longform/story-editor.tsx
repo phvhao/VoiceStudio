@@ -47,6 +47,8 @@ import type { VoiceGains } from '@shared/utils/longformOverrides';
 import { MarkupTextarea } from './markup-textarea';
 import { MarkupToolbar, type MarkupTarget } from './markup-toolbar';
 import { MarkupEditorTools } from './markup-editor-tools';
+import { useImagePicker, type ImageTools } from './image-library';
+import { insertImageAtLineStart } from './script-markup';
 import type { RetakeTools } from './take-retake';
 import { VOICE_ACCENTS } from './voice-palette';
 import type { Draft } from './longform-session';
@@ -412,6 +414,7 @@ const LineCard = memo(function LineCard({
   preview,
   outdated,
   retakes,
+  images,
   actions,
 }: {
   line: Line;
@@ -440,6 +443,8 @@ const LineCard = memo(function LineCard({
   preview: LinePreview | null;
   outdated: boolean;
   retakes?: Props['retakes'];
+  /** The picture library: `[image:]` at the start of a line shows as it is read. */
+  images?: ImageTools;
   actions: LineActions;
 }) {
   const { t } = useTranslation();
@@ -579,6 +584,7 @@ const LineCard = memo(function LineCard({
         defaultVoiceName={defaultVoiceName}
         onChapter={() => actions.addChapter(line.id)}
         retakes={lineRetakes}
+        images={images}
       >
         <MarkupTextarea
           textareaRef={textareaRef}
@@ -622,6 +628,8 @@ export function StoryEditor({
 }: Props) {
   const { t } = useTranslation();
   const spellcheck = useScriptSpellcheck();
+  // The story's pictures: each line's at its start (a line is a text of its own).
+  const imagePicker = useImagePicker(insertImageAtLineStart);
   // A fresh `[]` while the profiles load is the list the cards already have.
   const profiles = useSameArray(allProfiles);
   const controller = useRef<AbortController | null>(null);
@@ -985,11 +993,13 @@ export function StoryEditor({
         </div>
       )}
 
+      {imagePicker.dialog}
       {draft.lines.length > 0 && (
         <MarkupToolbar
           className="sticky top-0 z-20 shadow-sm"
           getTarget={getTarget}
           disabled={disabled || !targetLine}
+          images={imagePicker.tools}
           profiles={profiles}
           loading={profilesLoading}
           scriptNames={scriptNames}
@@ -1046,6 +1056,7 @@ export function StoryEditor({
                 settingsChanged(heard.settings, previewSettings))
             }
             retakes={ready ? retakes : undefined}
+            images={imagePicker.tools}
             actions={actions}
           />
         );

@@ -48,6 +48,15 @@ const read = (text: string, takes: ReturnType<typeof placeTakes>) =>
   takes.map((take) => text.slice(take.start, take.end));
 
 describe('placeTakes', () => {
+  it('finds takes around a picture, which is never shown', () => {
+    const text = 'Hello [image: a.jpg] world. Bye now.\n[image: b.jpg]\nLast one.';
+    const takes = placeTakes(
+      [{ id: 'script', text, headings: true }],
+      listed('Hello world.', 'Bye now.', 'Last one.'),
+    );
+    expect(read(text, takes)).toEqual(['Hello [image: a.jpg] world.', 'Bye now.', 'Last one.']);
+  });
+
   it('finds each take in the script as the reader shows it, markup aside', () => {
     const text =
       '# One\nIt was late. [voice:Mara] [slow]Who is [[there|thair]]?[/slow]\n\n' +

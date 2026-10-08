@@ -11,9 +11,9 @@ metadata and the backend fallback mirror it.
 **Highlights**
 - Stories and Audiobook get one markup toolbar for pauses, voices, delivery, expressions and chapters, with tags colored as you type
 - Long books are read sentence by sentence, so clauses are no longer skipped, repeated or swapped, with a pause you set for each punctuation mark
-- Voices in a book come out at the same volume, and each voice can be turned up or down
+- Voices in a book come out at the same volume and can each be turned up or down; editing or retaking one sentence renders just that sentence again
 - Audiobooks get sections, a Contents panel, sentence-exact highlighting in the reader and an offline HTML export in six designs, for Stories too
-- Editing or retaking one sentence of a book renders just that sentence again; the rest of its chapter is reused
+- Pictures in a script become a slideshow in the reader and the HTML book, and a finished book exports as an MP4 video with read-along captions
 
 ### Changed
 - Wide windows fill the script editors, Contents and player edge to edge; Reading width keeps lines to about 100 characters, centred, and Fit frame runs them the full width (Audiobook, Stories, Clone, Voice Design)
@@ -148,6 +148,13 @@ metadata and the backend fallback mirror it.
 - Source Serif 4 ships whole, as its Reserved Font Name requires, like Lora and Playfair Display
 - The tray menu's Quit item says Quit in every language, not "exit code"; Vietnamese labels are in sentence case and no longer call speech synthesis "tổng hợp"
 - Settings forms no longer squeeze or clip: the Pronunciation dictionary and MCP voice binding forms use the full width, and Save buttons stay beside their field (proxy, translation keys, worker join codes)
+- `[image: NAME]` shows a picture from that line of an Audiobook or Stories script until the next one; it is never read aloud and changes no audio, so adding pictures renders nothing again
+- A picture library kept on this computer: add pictures from the Picture button, by dropping them on the script or by pasting them; uploads are straightened, stripped of camera and location data and named plainly
+- A picture tag's card shows the picture, how it fills the frame (auto, fill or whole) and Change picture; typing `[im` suggests the library's pictures
+- The reader switches between the text and a slideshow: the picture of the moment with a slow zoom and crossfades, and the sentence being read filled word by word, full screen on request
+- Finished stories get the reader too, read along or as a slideshow
+- The exported HTML book has the same slideshow, carries its pictures, and can open in it
+- Export video makes an MP4 of a finished book or story on this computer: its pictures, read-along captions in a bundled font, title cards and chapter marks, in 16:9, 9:16 or 1:1 at 720p or 1080p, with progress, a time estimate and Stop
 
 ## [0.5.7] — 2026-10-07
 

@@ -1,6 +1,6 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { BookOpenTextIcon } from 'lucide-react';
+import { BookOpenTextIcon, ImagesIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   MediaProvider,
@@ -27,7 +27,9 @@ import {
   sentencePieces,
   usePlayhead,
   type ReaderBook,
+  type ReaderView,
 } from './audiobook-reader';
+import { timelineSlides } from './slideshow';
 import type { AudiobookRenderChapter } from './longform-session';
 
 /**
@@ -64,6 +66,7 @@ export function SyncedAudiobookPlayer({
   chapters,
   output,
   lang = '',
+  cover,
 }: {
   src: string;
   script: string;
@@ -71,6 +74,8 @@ export function SyncedAudiobookPlayer({
   output?: string;
   /** The book's language tag (`bookLanguageTag`); '' when it is not known. */
   lang?: string;
+  /** The book's cover (its URL): the slideshow's backdrop before the first picture. */
+  cover?: string;
 }) {
   const player = useRef<MediaPlayerInstance>(null);
   const timeline = useQuery({
@@ -95,6 +100,7 @@ export function SyncedAudiobookPlayer({
         chapters={chapters}
         timeline={timeline.data ?? null}
         lang={lang}
+        cover={cover}
       />
     </StudioMediaPlayer>
   );
@@ -106,15 +112,20 @@ function NowPlayingCard({
   chapters,
   timeline,
   lang,
+  cover,
 }: {
   player: RefObject<MediaPlayerInstance | null>;
   script: string;
   chapters: AudiobookRenderChapter[];
   timeline: AudiobookTimeline | null;
   lang: string;
+  cover?: string;
 }) {
   const { t } = useTranslation();
   const [reading, setReading] = useState(false);
+  // The view the reader opens in: the transcript, or straight to the slideshow.
+  const [opensIn, setOpensIn] = useState<ReaderView | undefined>();
+  const slides = useMemo(() => timelineSlides(timeline), [timeline]);
   const duration = useMediaState('duration');
   const error = useMediaState('error');
   const book = useMemo(
@@ -140,11 +151,29 @@ function NowPlayingCard({
             aria-label={t('reader.open')}
             title={t('reader.open')}
             disabled={!book.words.length}
-            onClick={() => setReading(true)}
+            onClick={() => {
+              setOpensIn(undefined);
+              setReading(true);
+            }}
           >
             <BookOpenTextIcon />
             {/* A narrow card keeps its width for the sentence being read. */}
             <span className="hidden @min-[26rem]/card:inline">{t('reader.open')}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-sm"
+            aria-haspopup="dialog"
+            aria-label={t('reader.open_slideshow')}
+            title={t('reader.open_slideshow')}
+            disabled={!book.words.length}
+            onClick={() => {
+              setOpensIn('show');
+              setReading(true);
+            }}
+          >
+            <ImagesIcon />
           </Button>
         </div>
         <div className="flex items-center gap-1">
@@ -162,7 +191,15 @@ function NowPlayingCard({
           {t('player.unavailable')}
         </p>
       )}
-      <AudiobookReader open={reading} onOpenChange={setReading} player={player} book={book} />
+      <AudiobookReader
+        open={reading}
+        onOpenChange={setReading}
+        player={player}
+        book={book}
+        slides={slides}
+        cover={cover}
+        view={opensIn}
+      />
     </>
   );
 }

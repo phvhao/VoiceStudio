@@ -9,7 +9,7 @@
  * plain {sampleRate, numberOfChannels, length, getChannelData} shapes so they
  * are testable without a real AudioContext.
  */
-import { parseChapterBody } from './longformParser';
+import { extractImageMarks, parseChapterBody } from './longformParser';
 
 /** Mono buffer of `seconds` of silence at `sampleRate`. */
 export function silenceBuffer(seconds, sampleRate) {
@@ -246,8 +246,10 @@ export async function exportStoryAudio(tracks, resolveOpts, fetchChunkBlob, onPr
   try {
     const plan = [];
     for (const tk of tracks) {
-      if (isChapterLine(tk.text)) {
-        plan.push({ chapter: chapterTitle(tk.text) });
+      // A chapter line's pictures are no part of its title (storyToSpans).
+      const [line] = extractImageMarks(tk.text || '');
+      if (isChapterLine(line)) {
+        plan.push({ chapter: chapterTitle(line) });
         continue;
       }
       const opts = resolveOpts(tk) || {};

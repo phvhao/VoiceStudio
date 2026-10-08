@@ -174,6 +174,21 @@ it('stays current while another chapter changes, and is outdated once its own do
   expect(screen.queryByText('audiobook.preview_outdated')).toBeNull();
 });
 
+it('stays current when a picture is added, moved or removed: pictures change no audio', async () => {
+  mock.fetch.mockResolvedValue(sse([{ type: 'done', output: 'one.wav', title: 'One' }]));
+  const view = render(<Harness value={twoChapters} />);
+  await act(() => state.render(0));
+  for (const script of [
+    '# One\n[image: a.jpg]\nFirst words.\n# Two\nLast words.',
+    '# One\nFirst [image: a.jpg contain] words.\n# Two\nLast words.',
+  ]) {
+    view.rerender(<Harness value={{ ...twoChapters, script }} />);
+    expect(screen.queryByText('audiobook.preview_outdated')).toBeNull();
+  }
+  view.rerender(<Harness value={{ ...twoChapters, script: '# One\nFirst [image: a.jpg] word.\n# Two\nLast words.' }} />);
+  expect(screen.getByText('audiobook.preview_outdated')).toBeVisible();
+});
+
 it('is outdated by a volume its chapter speaks, not by one it does not', async () => {
   mock.fetch.mockResolvedValue(sse([{ type: 'done', output: 'longform_cache/abc.wav' }]));
   const view = render(<Harness value={draft} />);

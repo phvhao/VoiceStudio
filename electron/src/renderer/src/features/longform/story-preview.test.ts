@@ -45,6 +45,8 @@ it('dates a line audition by its own line and the settings, not by another line'
   expect(linePreviewKey(typed, typed.lines[0])).toBe(key);
   expect(linePreviewKey(draft, { ...lines[0], text: 'Hello there.' })).not.toBe(key);
   expect(linePreviewKey({ ...draft, voice: 'other' }, lines[0])).not.toBe(key);
+  // Its pictures change no audio.
+  expect(linePreviewKey(draft, { ...lines[0], text: '[image: a.jpg] Hello.' })).toBe(key);
 });
 it('assembles canonical voice, pause and speed spans for auditions', async () => {
   const close = vi.fn();
@@ -72,6 +74,25 @@ it('assembles canonical voice, pause and speed spans for auditions', async () =>
   ]);
   expect(result.durationSec).toBe(2.5);
   expect(close).toHaveBeenCalledOnce();
+});
+it('reads no picture aloud and names no chapter after one', async () => {
+  vi.stubGlobal(
+    'AudioContext',
+    class {
+      sampleRate = 10;
+      async decodeAudioData() {
+        return { length: 10, getChannelData: () => new Float32Array(10) };
+      }
+    },
+  );
+  const chunks = vi.fn(async (_text: string) => new Blob(['audio']));
+  const result = await exportStoryAudio(
+    [{ text: '# Chapter one [image: a.jpg]' }, { text: '[image: b.jpg] Hello there.' }],
+    () => ({ profileId: 'narrator', speed: null }),
+    chunks,
+  );
+  expect(result.chapters.map((chapter) => chapter.title)).toEqual(['Chapter one']);
+  expect(chunks.mock.calls.map(([text]) => text)).toEqual(['Hello there.']);
 });
 it('preserves default longform steps and resolves named inline voices', () => {
   const draft = { ...blankLongformDraft(), voice: 'narrator', voiceCast: { Mara: 'actor' } };

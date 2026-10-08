@@ -164,6 +164,36 @@ function timedBook(
   return buildReaderBook(script, buildLyricsTimeline(script, { timeline }));
 }
 
+describe('buildReaderBook — pictures', () => {
+  const plain = '# One\nRoses are red\nviolets are blue.\n\nNew one. Still it.\n# Two\nLast.';
+  // A picture's own line inside a paragraph is no paragraph break.
+  const pictured =
+    '# One\n[image: a.jpg]\nRoses are red\n[image: b.jpg]\nviolets [image: c.jpg] are blue.\n\n' +
+    '[image: none]\nNew one. Still it.\n# Two\n[IMAGE: d.jpg contain]\nLast.';
+  const layout = (reader: ReaderBook) => ({
+    sentences: sentences(reader),
+    gaps: reader.words.map((word) => word.gap),
+    paragraphs: reader.chapters.map((chapter) => chapter.paragraphs),
+  });
+
+  it('lays a script with pictures out as without them: estimated', () => {
+    const reader = book(pictured, [10, 2]);
+    expect(layout(reader)).toEqual(layout(book(plain, [10, 2])));
+    expect(reader.words[reader.sentences[1].start].gap).toBe('line');
+  });
+
+  it('lays a script with pictures out as without them: from a timeline sidecar', () => {
+    const chapters: Array<[string, 'phrase', string[]]> = [
+      ['One', 'phrase', ['Roses are red', 'violets are blue.', 'New one.', 'Still it.']],
+      ['Two', 'phrase', ['Last.']],
+    ];
+    const reader = timedBook(pictured, chapters);
+    expect(layout(reader)).toEqual(layout(timedBook(plain, chapters)));
+    expect(sentences(reader)).toEqual(['Roses are red', 'violets are blue.', 'New one.', 'Still it.', 'Last.']);
+    expect(reader.words[reader.sentences[1].start].gap).toBe('line');
+  });
+});
+
 describe('buildReaderBook — timeline sidecar', () => {
   it('makes every phrase take a sentence, where punctuation alone would not split', () => {
     const reader = timedBook('# One\nDr. Watson came, slowly. Then left.', [

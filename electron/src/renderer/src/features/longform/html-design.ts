@@ -22,6 +22,8 @@ export interface HtmlDesign {
   /** Voice (Audiobook) or character (Stories) names beside the text. */
   showNames: boolean;
   numbering: Numbering;
+  /** The page opens in its slideshow; left out, in its text. */
+  view?: 'show';
 }
 
 /** A template as the backend lists it. */
@@ -75,6 +77,8 @@ export function restoreHtmlDesign(value: unknown): HtmlDesign | null {
     headingFont: v.headingFont,
     showNames: v.showNames,
     numbering: v.numbering as Numbering,
+    // Kept only when set: a design saved before the slideshow restores as it was.
+    ...(v.view === 'show' ? { view: 'show' as const } : {}),
   };
 }
 
@@ -102,5 +106,6 @@ export function designRequest(design: HtmlDesign) {
     heading_font: design.headingFont,
     show_names: design.showNames,
     numbering: design.numbering,
+    ...(design.view === 'show' ? { view: 'show' as const } : {}),
   };
 }

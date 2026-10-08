@@ -745,6 +745,9 @@ def _phase_a_build_inner() -> None:
     from api.routers import calls as _calls_router  # noqa: E402
     # The reading fonts bundled for HTML books, served to the app's reader.
     from api.routers import fonts as _fonts_router  # noqa: E402
+    # The pictures long-form scripts show ([image: NAME]), and a book's video.
+    from api.routers import longform_images as _longform_images_router  # noqa: E402
+    from api.routers import book_video as _book_video_router  # noqa: E402
     _router_modules.extend([
         system, profiles, profile_images, exports, generation, voice_convert, dub_core, dub_generate,
         dub_export, dub_translate, projects, glossary, engines, tools,
@@ -753,7 +756,8 @@ def _phase_a_build_inner() -> None:
         openai_compat, tts_stream, marketplace, personas, sonitranslate,
         audiobook, longform_jobs, pronunciation, settings_router,
         media_tools_router, auth_router, _mcp_bindings_router, workers_router,
-        _telephony_twilio_router, _calls_router, _fonts_router,
+        _telephony_twilio_router, _calls_router, _fonts_router, _longform_images_router,
+        _book_video_router,
     ])
     # Download-acceleration state, once, for triage-from-logs (FDL-03).
     try:
@@ -954,6 +958,13 @@ async def _phase_b(app: FastAPI) -> None:
         sweep_html_exports()
     except Exception:
         logger.exception("Startup HTML-export sweep failed (non-fatal).")
+    # Videos an earlier run left unsaved or half made: each can be gigabytes.
+    try:
+        from api.routers.book_video import sweep_video_exports
+
+        sweep_video_exports()
+    except Exception:
+        logger.exception("Startup video-export sweep failed (non-fatal).")
     # #2279: note the voices root in the longform cache before anything can
     # move the data dir, so legacy-keyed chapters stay findable after a move.
     from services.longform_render import record_startup_voices_root

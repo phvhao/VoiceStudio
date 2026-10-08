@@ -37,6 +37,12 @@ export interface MarkupEditorEvents {
    * including changes that were not typed (an undo, a loaded project).
    */
   onEditorChange?(handle: MarkupEditorHandle, reason: 'input' | 'caret' | 'scroll' | 'blur'): void;
+  /**
+   * Picture files were dropped on the editor (`at`: the start of the line
+   * they landed on) or pasted into it (`at`: the caret). Without it the
+   * editor ignores them, as on pages that show no pictures.
+   */
+  onImageFiles?(files: File[], at: number, handle: MarkupEditorHandle): void;
   /** ARIA state for the textarea while a popup listens to it (a suggestion list). */
   textareaAria?: Pick<
     AriaAttributes,

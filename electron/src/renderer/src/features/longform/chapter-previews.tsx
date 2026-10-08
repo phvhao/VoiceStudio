@@ -6,6 +6,7 @@ import { WaveformPlayer } from '@/components/waveform-player';
 import { PipelineFailure } from '@/components/pipeline-failure';
 import { apiPath, describeError } from '@/lib/api/client';
 import type { PublicFailure } from '@/lib/api/failure';
+import { extractImageMarks } from '@shared/utils/longformParser';
 import { chapterPreviewBody, type Draft } from './longform-session';
 import { beginAppActivity } from '@/lib/app-activity';
 import { TakeProgressText } from './generation-progress';
@@ -65,7 +66,10 @@ export function chapterFingerprint(
 ): string | null {
   const chapter = outline.find((node) => node.plan === index);
   if (!chapter) return null;
-  const script = draft.script.slice(chapter.start, chapter.end);
+  // As the render reads it: a picture added, moved or removed changes no audio.
+  const [script] = extractImageMarks(
+    draft.script.slice(chapter.start, chapter.end).replace(/\r\n?/g, '\n'),
+  );
   return JSON.stringify(chapterPreviewBody({ ...draft, script }, 0));
 }
 

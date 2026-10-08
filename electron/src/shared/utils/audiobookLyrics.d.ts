@@ -41,7 +41,21 @@ export interface AudiobookTimeline {
     sections?: AudiobookTimelineSection[];
     /** The cached chapter audio it came from (newer renders only). */
     key?: string;
+    /** Where the script's `[image:]` pictures show (only when it shows any). */
+    images?: AudiobookTimelineImage[];
   }>;
+}
+
+/** An `[image: NAME]` picture in the timeline sidecar. */
+export interface AudiobookTimelineImage {
+  /** Index of the entry in the chapter's `phrases` it shows from. */
+  phrase: number;
+  /** When it shows, in seconds into the file. */
+  start: number;
+  /** The picture library's name; null: the book's own backdrop again. */
+  name: string | null;
+  /** `auto`: fill the frame when the shapes are close, else show it whole. */
+  fit: 'auto' | 'cover' | 'contain';
 }
 
 /** A `## Section` / `### Section` heading in the timeline sidecar. */

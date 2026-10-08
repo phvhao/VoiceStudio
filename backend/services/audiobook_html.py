@@ -67,6 +67,8 @@ DEFAULT_LABELS = {
     "back_to_current": "Back to current",
     "shortcuts": "Keyboard shortcuts",
     "close": "Close",
+    "slideshow": "Slideshow",
+    "fullscreen": "Full screen",
 }
 #: The longest label kept (a sentence, not a payload).
 _LABEL_MAX = 300
@@ -265,7 +267,16 @@ def page_timeline(timeline: Optional[dict], labels: Optional[dict] = None,
         if intro or (chapter.get("untitled") and not (lone and book_title)):
             doc["app_title"] = True
         chapters.append(doc)
-    return {"chapters": chapters, "people": people}
+    out = {"chapters": chapters, "people": people}
+    slides = [{"start": float(s["start"]), "name": s.get("name") if isinstance(s.get("name"), str)
+               else None, "fit": s.get("fit") if s.get("fit") in ("auto", "cover", "contain")
+               else "auto"}
+              for c in found for s in c.get("images") or []
+              if isinstance(s, dict) and isinstance(s.get("start"), (int, float))]
+    if slides:
+        # The slideshow's pictures, in time order (``name`` None: the cover again).
+        out["slides"] = sorted(slides, key=lambda s: s["start"])
+    return out
 
 
 def _page_phrase(phrase: dict, who: Optional[int] = None) -> dict:
@@ -477,10 +488,51 @@ main{padding-top:1.5rem;font-size:calc(var(--base-phone) * var(--scale))}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 """
 
+#: The slideshow: the picture of the moment (two layers, so one fades into the
+#: next) with a slow zoom, and the sentence being read, large, each word
+#: filled as it is heard. Its shadow is a filter on the whole caption: a
+#: text-shadow would paint over a word's fill (background-clip:text).
+_STAGE_CSS = """
+.stage{position:fixed;left:0;right:0;top:var(--bar-h,3.5rem);bottom:var(--player-h,6rem);z-index:15;
+overflow:hidden;color:#fff;background:radial-gradient(120% 90% at 50% 35%,#272b38 0,#0e0f14 70%)}
+.stage[hidden]{display:none}
+body.show .shell,body.show .pill,body.show .hero{display:none!important}
+.stage-layer{position:absolute;inset:0;opacity:0;transition:opacity .8s ease}
+.stage-layer.on{opacity:1}
+.stage-layer.empty{display:none}
+.stage-layer img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.stage-bg{opacity:0;filter:blur(28px) brightness(.55);transform:scale(1.12)}
+.stage-layer.whole .stage-bg{opacity:1}
+.stage-layer.whole .stage-fg{object-fit:contain}
+.stage-layer.on .stage-fg{animation:stage-in var(--kb,20s) ease-out both}
+.stage-layer.out.on .stage-fg{animation-name:stage-out}
+@keyframes stage-in{from{transform:scale(1)}to{transform:scale(1.06)}}
+@keyframes stage-out{from{transform:scale(1.06)}to{transform:scale(1)}}
+body:not(.playing) .stage-fg,body:not(.playing) .stage-caption .sw.on{animation-play-state:paused}
+.stage-shade{position:absolute;left:0;right:0;bottom:0;height:52%;pointer-events:none;
+background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.62))}
+.stage-caption{position:absolute;left:6%;right:6%;bottom:7%;margin:0;text-align:center;
+font-family:var(--body-font);font-weight:600;font-size:clamp(1.15rem,3.1vw,2.5rem);line-height:1.35;
+color:#fff;filter:drop-shadow(0 2px 6px rgba(0,0,0,.75));text-wrap:balance}
+.stage-caption .sw.done{color:#ffd25a}
+.stage-caption .sw.on{color:transparent;
+background:linear-gradient(90deg,#ffd25a 50%,#fff 50%) 100% 0/200% 100% no-repeat;
+-webkit-background-clip:text;background-clip:text;animation:stage-word var(--d,.4s) linear forwards}
+@keyframes stage-word{to{background-position:0 0}}
+.stage-full{position:absolute;top:.75rem;inset-inline-end:.75rem;color:#fff;background:rgba(0,0,0,.35);
+border-radius:999px}
+.stage:fullscreen{top:0;bottom:0}
+#view-toggle[aria-pressed=true]{color:var(--accent)}
+@media (prefers-reduced-motion:reduce){.stage-layer{transition:none}
+.stage-layer.on .stage-fg,.stage-caption .sw.on{animation:none}
+.stage-caption .sw.on{color:#ffd25a;background:none}}
+"""
+
 _PRINT_CSS = """
 @page{margin:2cm}
 body{background:#fff;color:#000;padding:0}
-.bar,.player,.toc,.pill,.scrim,.note,#settings,#keys,.cover-play{display:none!important}
+.bar,.player,.toc,.pill,.scrim,.note,#settings,#keys,.cover-play,.stage{display:none!important}
+body.show .shell{display:block!important}
 .shell{display:block;max-width:none;padding:0}
 main{max-width:none;padding:0;margin:0;font-size:11.5pt;line-height:1.55;background:none;box-shadow:none}
 .cover{break-after:page;border:0}
@@ -527,7 +579,7 @@ _JS = r"""
   // alignment are the book's own until the reader picks one.
   var STORE = 'voicestudio-book-reader';
   var SCALES = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6];
-  var prefs = { scale: 2, theme: null, align: null, follow: true };
+  var prefs = { scale: 2, theme: null, align: null, follow: true, view: null };
   try {
     var saved = JSON.parse(window.localStorage.getItem(STORE) || 'null');
     if (saved && typeof saved === 'object') {
@@ -535,6 +587,7 @@ _JS = r"""
       if (/^(auto|light|sepia|dark)$/.test(saved.theme)) prefs.theme = saved.theme;
       if (saved.align === 'justify' || saved.align === 'start') prefs.align = saved.align;
       if (typeof saved.follow === 'boolean') prefs.follow = saved.follow;
+      if (saved.view === 'read' || saved.view === 'show') prefs.view = saved.view;
     }
   } catch (e) { /* storage off: defaults */ }
   function savePrefs() {
@@ -553,6 +606,7 @@ _JS = r"""
     if (theme === 'auto') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', theme);
     root.setAttribute('data-align', chosen('align'));
+    body.classList.toggle('show', chosen('view') === 'show');
     fontSize.textContent = Math.round(SCALES[prefs.scale] * 100) + '%';
     fontDown.disabled = prefs.scale === 0;
     fontUp.disabled = prefs.scale === SCALES.length - 1;
@@ -804,6 +858,7 @@ _JS = r"""
       timeText.textContent = time;
       seekBar.setAttribute('aria-valuetext', time);
     }
+    if (stage && showing()) paintStage(t, index);
   }
   var frame = 0;
   function loop() { paint(); frame = audio.paused ? 0 : requestAnimationFrame(loop); }
@@ -941,6 +996,145 @@ _JS = r"""
     }
   });
 
+  // ---- Slideshow: the picture of the moment and the sentence being read,
+  // large, each word filled as it is heard. Pictures change where the
+  // book's [image:] tags stand; before the first, the cover (or the plain stage).
+  var stage = byId('stage');
+  var stageCaption = byId('stage-caption');
+  var viewToggle = byId('view-toggle');
+  var stageFull = byId('stage-full');
+  var layers = Array.prototype.slice.call(stage.querySelectorAll('.stage-layer'));
+  var slides = (data.slides || []).filter(function (s) { return s && typeof s.start === 'number'; });
+  var slideAt = -2;
+  var layerOn = 0;
+  var captionFrom = -1;
+  var captionTo = -1;
+  var captionWord = -2;
+  var captionSpans = [];
+  var CAPTION_CHARS = 90;
+  function showing() { return body.classList.contains('show'); }
+  function refreshStage() {
+    stage.hidden = !showing();
+    viewToggle.setAttribute('aria-pressed', String(showing()));
+    slideAt = -2;
+    captionFrom = captionTo = -1;
+    captionWord = -2;
+    paint();
+  }
+  // A picture fills the stage when the two are about the same shape, else
+  // shows whole on a blurred copy of itself (as the video does).
+  function fitPicture(layer) {
+    var front = layer.querySelector('.stage-fg');
+    function decide() {
+      var fit = layer.dataset.fit;
+      if (fit === 'auto') {
+        var shape = (front.naturalWidth / Math.max(1, front.naturalHeight)) /
+          (stage.clientWidth / Math.max(1, stage.clientHeight));
+        fit = shape >= 1 / 1.3 && shape <= 1.3 ? 'cover' : 'contain';
+      }
+      layer.classList.toggle('whole', fit === 'contain');
+    }
+    if (front.complete && front.naturalWidth) decide(); else front.onload = decide;
+  }
+  function showSlide(s) {
+    var slide = s >= 0 ? slides[s] : null;
+    var src = slide && slide.src ? slide.src : (data.cover || '');
+    var next = layers[1 - layerOn];
+    Array.prototype.forEach.call(next.querySelectorAll('img'), function (img) {
+      if (src) img.src = src; else img.removeAttribute('src');
+    });
+    next.classList.toggle('empty', !src);
+    next.classList.toggle('out', s % 2 === 1);
+    next.dataset.fit = slide ? slide.fit : 'auto';
+    var until = s + 1 < slides.length ? slides[s + 1].start : total();
+    var span = until - (slide ? slide.start : 0);
+    next.style.setProperty('--kb', Math.max(6, Math.min(30, span || 20)) + 's');
+    if (src) fitPicture(next);
+    next.classList.remove('on');
+    void next.offsetWidth;
+    next.classList.add('on');
+    layers[layerOn].classList.remove('on');
+    layerOn = 1 - layerOn;
+  }
+  function wordEnd(i) {
+    var after = words[i + 1];
+    if (after && after.phrase === words[i].phrase) return after.start;
+    return Number(phraseEls[words[i].phrase].getAttribute('data-e')) || words[i].start;
+  }
+  // The words of the caption holding word `index`: its sentence, cut into
+  // pieces of about CAPTION_CHARS characters.
+  function captionRange(index) {
+    var phrase = words[index].phrase;
+    var a = index, b = index;
+    while (a > 0 && words[a - 1].phrase === phrase) a--;
+    while (b + 1 < words.length && words[b + 1].phrase === phrase) b++;
+    var from = a, size = 0;
+    for (var i = a; i <= b; i++) {
+      var add = words[i].el.textContent.length + (i > from ? 1 : 0);
+      if (i > from && size + add > CAPTION_CHARS) {
+        if (index < i) return [from, i - 1];
+        from = i;
+        size = 0;
+        add = words[i].el.textContent.length;
+      }
+      size += add;
+    }
+    return [from, b];
+  }
+  function buildCaption(index) {
+    var range = captionRange(index);
+    captionFrom = range[0];
+    captionTo = range[1];
+    captionSpans = [];
+    stageCaption.textContent = '';
+    for (var i = captionFrom; i <= captionTo; i++) {
+      if (i > captionFrom) stageCaption.appendChild(document.createTextNode(' '));
+      var span = el('span', 'sw', words[i].el.textContent);
+      stageCaption.appendChild(span);
+      captionSpans.push(span);
+    }
+    captionWord = -2;
+  }
+  function markCaption(index) {
+    captionWord = index;
+    var rate = audio.playbackRate || 1;
+    captionSpans.forEach(function (span, k) {
+      var i = captionFrom + k;
+      span.classList.toggle('done', i < index);
+      if (i === index) {
+        span.style.setProperty('--d', Math.max(0.05, (wordEnd(i) - words[i].start) / rate) + 's');
+        span.classList.remove('on');
+        void span.offsetWidth;
+      }
+      span.classList.toggle('on', i === index);
+    });
+  }
+  function paintStage(t, index) {
+    var s = find(slides, t);
+    if (s !== slideAt) { slideAt = s; showSlide(s); }
+    if (index < 0) {
+      if (captionFrom !== -1) { stageCaption.textContent = ''; captionSpans = []; }
+      captionFrom = captionTo = -1;
+      captionWord = -2;
+      return;
+    }
+    if (index < captionFrom || index > captionTo) buildCaption(index);
+    if (index !== captionWord) markCaption(index);
+  }
+  viewToggle.addEventListener('click', function () {
+    setPref('view', showing() ? 'read' : 'show');
+    refreshStage();
+  });
+  if (stage.requestFullscreen) {
+    stageFull.addEventListener('click', function () {
+      if (document.fullscreenElement) document.exitFullscreen(); else stage.requestFullscreen();
+    });
+  } else {
+    stageFull.hidden = true;
+  }
+  stage.hidden = !showing();
+  viewToggle.setAttribute('aria-pressed', String(showing()));
+
   // The title shows in the top bar once the title block has scrolled away.
   var h1 = byId('book-title');
   if (h1 && window.IntersectionObserver) {
@@ -971,6 +1165,8 @@ _ICONS = {
     "next": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6h2v12h-2zM6 18l8.5-6L6 6z"/></svg>',
     "menu": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>',
     "close": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>',
+    "slides": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v9.6l3.5-3.5 2.5 2.5 4-4 4 4V6zm3.5 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z"/></svg>',
+    "expand": '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/></svg>',
 }
 
 _ROMAN = ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
@@ -1209,7 +1405,8 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
                 cover_src: Optional[str] = None, lang: str = "en", direction: str = "ltr",
                 book_lang: str = "", duration: float = 0.0,
                 design: Optional[book_templates.Design] = None, story: bool = False,
-                voice_names: Optional[dict] = None, preview: bool = False) -> str:
+                voice_names: Optional[dict] = None, preview: bool = False,
+                images: Optional[dict] = None, view: str = "read") -> str:
     """The book's ``index.html``. Every text from the book goes through
     :func:`html.escape` or :func:`_script_json`; the script builds its words
     with ``textContent`` only.
@@ -1223,7 +1420,13 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
     named rather than its voices.
 
     ``preview`` is the export dialog's: no script and no audio, the first
-    phrase shown as being read so the highlight's look shows."""
+    phrase shown as being read so the highlight's look shows.
+
+    ``images`` maps each ``[image:]`` picture the export carries to its file
+    in it; the slideshow (``view`` ``"show"``: the page opens in it) shows
+    them by the book's clock, the cover before the first and after
+    ``[image: none]``. A picture the export does not carry is left out (the
+    one before it shows on)."""
     labels = labels_for(labels)
     design = design or book_templates.resolve(story=story)
     template = design.template
@@ -1292,12 +1495,19 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 
     themes = "".join(choice("theme", v, f"theme_{v}") for v in ("auto", "light", "sepia", "dark"))
     aligns = choice("align", "justify", "justify") + choice("align", "start", "align_start")
-    css = (_CSS + book_templates.theme_css(design) + book_templates.font_css(design)
+    css = (_CSS + _STAGE_CSS + book_templates.theme_css(design) + book_templates.font_css(design)
            + template.css + "@media print{" + _PRINT_CSS + book_templates.print_css(design) + "}")
     faces = "".join(book_fonts.face_css([font], italic=italic) for font, italic in design.embedded)
     page_data = {"labels": {"play": labels["play"], "pause": labels["pause"]},
                  "duration": float(duration or 0), "theme": template.theme,
-                 "align": template.align}
+                 "align": template.align, "view": "show" if view == "show" else "read"}
+    if cover_src and not preview:
+        page_data["cover"] = cover_src
+    slides = [{"start": s["start"], "src": (images or {}).get(s["name"], "") if s["name"] else "",
+               "fit": s["fit"]}
+              for s in data.get("slides") or [] if not s["name"] or s["name"] in (images or {})]
+    if slides:
+        page_data["slides"] = slides
     theme_attr = f' data-theme="{template.theme}"' if template.theme != "auto" else ""
     classes = f"tpl-{template.id}" + (" no-toc" if no_toc else "") + (" turns" if turns else "")
     audio = (f'<audio id="audio" preload="metadata" src="{esc(audio_src)}"></audio>'
@@ -1318,6 +1528,7 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 <header class="bar" id="bar">
 <button type="button" class="icon only-narrow" id="toc-toggle" aria-label="{label('contents')}" title="{label('contents')}" aria-expanded="false" aria-controls="toc-panel">{_ICONS['menu']}</button>
 <span class="bar-title"{text_lang}>{esc(title)}</span>
+<button type="button" class="icon" id="view-toggle" aria-label="{label('slideshow')}" title="{label('slideshow')}" aria-pressed="false">{_ICONS['slides']}</button>
 <button type="button" class="icon aa" id="settings-toggle" aria-label="{label('settings')}" title="{label('settings')}" aria-expanded="false" aria-controls="settings">Aa</button>
 <div class="menu" id="settings" role="dialog" aria-label="{label('settings')}" hidden>
 <fieldset><legend>{label('text_size')}</legend><div class="seg">
@@ -1339,6 +1550,13 @@ def render_page(*, title: str, timeline: Optional[dict], audio_src: str,
 <main id="text"{text_lang}>
 {title_block}{note}{sections}
 </main>
+</div>
+<div class="stage" id="stage" hidden>
+<div class="stage-layer"><img class="stage-bg" alt=""><img class="stage-fg" alt=""></div>
+<div class="stage-layer"><img class="stage-bg" alt=""><img class="stage-fg" alt=""></div>
+<div class="stage-shade"></div>
+<p class="stage-caption" id="stage-caption"{text_lang}></p>
+<button type="button" class="icon stage-full" id="stage-full" aria-label="{label('fullscreen')}" title="{label('fullscreen')}">{_ICONS['expand']}</button>
 </div>
 <button type="button" class="pill" id="back-to-current" hidden>{label('back_to_current')}</button>
 <div class="player" id="player" role="region" aria-label="{label('player')}">
@@ -1382,9 +1600,11 @@ def audio_name(output: str) -> str:
 
 def write_export_zip(zip_path: str, *, page: str, audio_path: str, audio_entry: str,
                      cover_path: Optional[str] = None,
-                     cover_entry: Optional[str] = None) -> int:
+                     cover_entry: Optional[str] = None,
+                     images: Optional[list] = None) -> int:
     """Write the export atomically (a temp file, then a rename): ``index.html``
-    compressed, the audio and cover stored as they are. Returns its size."""
+    compressed, the audio, cover and slideshow pictures (``images``:
+    ``[(path, entry)]``) stored as they are. Returns its size."""
     partial = f"{zip_path}.part"
     try:
         with zipfile.ZipFile(partial, "w") as archive:
@@ -1392,6 +1612,8 @@ def write_export_zip(zip_path: str, *, page: str, audio_path: str, audio_entry: 
             archive.write(audio_path, audio_entry, zipfile.ZIP_STORED)
             if cover_path and cover_entry:
                 archive.write(cover_path, cover_entry, zipfile.ZIP_STORED)
+            for path, entry in images or []:
+                archive.write(path, entry, zipfile.ZIP_STORED)
         os.replace(partial, zip_path)
     finally:
         if os.path.exists(partial):

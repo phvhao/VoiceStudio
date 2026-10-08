@@ -43,6 +43,8 @@ export function htmlExportLabels(t: TFunction) {
     back_to_current: t('book.html_back_to_current'),
     shortcuts: t('book.html_shortcuts'),
     close: t('book.html_close'),
+    slideshow: t('book.html_slideshow'),
+    fullscreen: t('book.html_fullscreen'),
   };
 }
 

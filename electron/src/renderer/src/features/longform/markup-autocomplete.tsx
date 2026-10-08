@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Popover } from '@base-ui/react/popover';
 import type { TFunction } from 'i18next';
-import { PauseIcon, SmileIcon, Volume2Icon } from 'lucide-react';
+import { ImageIcon, PauseIcon, SmileIcon, Volume2Icon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { isImeComposing } from '@/lib/ime';
@@ -38,6 +38,7 @@ import {
   expressionGroups,
   expressionVariant,
   formatPauseSeconds,
+  imageToken,
   pauseToken,
   typedTagAt,
   voiceToken,
@@ -45,12 +46,13 @@ import {
   type TypedTag,
 } from './script-markup';
 import { voiceAccent } from './voice-palette';
+import { useLibraryImages } from './image-library';
 
 /** One tag the suggestions offer. */
 export interface Suggestion {
   /** Unique within the list. */
   key: string;
-  group: 'voice' | 'pause' | 'delivery' | 'volume' | 'expression';
+  group: 'voice' | 'pause' | 'delivery' | 'volume' | 'expression' | 'image';
   /** The tag inserted, or the opening half of a delivery pair. */
   open: string;
   /** The closing half of a delivery pair. */
@@ -71,17 +73,22 @@ const GROUP_LABELS: Record<SuggestionGroup, string> = {
   delivery: 'context.delivery',
   volume: 'markup.volume',
   expression: 'audiobook.insert_reactions',
+  image: 'markup.image',
 };
 
 /** Every kind of tag the suggestions can offer; each is named after its markup kind. */
 export const SUGGESTION_GROUPS = Object.keys(GROUP_LABELS) as SuggestionGroup[];
 
 /** The voices a script can switch to; a single-voice editor has none. */
-type VoiceContext = Partial<Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>>;
+type VoiceContext = Partial<Pick<TagToolProps, 'scriptNames' | 'profiles' | 'voiceCast'>> & {
+  /** The picture library's names (Audiobook and Stories). */
+  pictures?: readonly string[];
+};
 
 const NO_NAMES: string[] = [];
 const NO_PROFILES: TagProfile[] = [];
 const NO_CAST: Record<string, string> = {};
+const NO_PICTURES: readonly string[] = [];
 
 /**
  * Every tag the suggestions can offer, in list order: the script's voices, the
@@ -95,6 +102,7 @@ export function tagSuggestions(
     scriptNames = NO_NAMES,
     profiles = NO_PROFILES,
     voiceCast = NO_CAST,
+    pictures = NO_PICTURES,
     groups,
   }: VoiceContext & { groups?: readonly SuggestionGroup[] },
   locale?: string,
@@ -159,6 +167,12 @@ export function tagSuggestions(
           .join(' · '),
       })),
     ),
+    ...pictures.map((name): Suggestion => ({
+      key: `image:${name}`,
+      group: 'image',
+      open: imageToken(name),
+      label: name,
+    })),
   ];
   return groups ? all.filter((item) => groups.includes(item.group)) : all;
 }
@@ -170,7 +184,8 @@ export function tagSuggestions(
  */
 export function matchSuggestions(items: readonly Suggestion[], query: string): Suggestion[] {
   const typed = searchKey(query.trim());
-  if (!typed) return items.filter((item) => !item.profile);
+  // Profiles and pictures wait for something to be typed: there may be many.
+  if (!typed) return items.filter((item) => !item.profile && item.group !== 'image');
   return items.filter(
     (item) =>
       searchKey(item.open + (item.close ?? '')).includes(typed) ||
@@ -216,12 +231,15 @@ export function useMarkupAutocomplete({
   scriptNames,
   voiceCast,
   onVoiceCast,
+  offersPictures = false,
   groups,
   disabled,
   onOpen,
 }: Pick<TagToolProps, 'getTarget' | 'headings'> &
-  VoiceContext &
+  Omit<VoiceContext, 'pictures'> &
   Partial<Pick<TagToolProps, 'onVoiceCast'>> & {
+    /** The page shows `[image:]` pictures: the library's are offered. */
+    offersPictures?: boolean;
     /** Offer only these kinds of tag; every kind by default. */
     groups?: readonly SuggestionGroup[];
     disabled: boolean;
@@ -240,9 +258,17 @@ export function useMarkupAutocomplete({
   const query = state?.tag.query;
   const typing = query !== undefined;
   const locale = i18n.resolvedLanguage || i18n.language;
+  const library = useLibraryImages({ enabled: typing && offersPictures });
+  const pictures = useMemo(
+    () => (offersPictures ? library.data?.map((image) => image.name) : undefined),
+    [offersPictures, library.data],
+  );
   const all = useMemo(
-    () => (typing ? tagSuggestions(t, { scriptNames, profiles, voiceCast, groups }, locale) : []),
-    [typing, t, scriptNames, profiles, voiceCast, groups, locale],
+    () =>
+      typing
+        ? tagSuggestions(t, { scriptNames, profiles, voiceCast, pictures, groups }, locale)
+        : [],
+    [typing, t, scriptNames, profiles, voiceCast, pictures, groups, locale],
   );
   const items = useMemo(
     () => (query === undefined ? [] : matchSuggestions(all, query)),
@@ -411,6 +437,8 @@ function SuggestionIcon({ item, voices }: { item: Suggestion; voices: readonly s
       return <Volume2Icon className="text-fuchsia-500" />;
     case 'expression':
       return <SmileIcon className="text-emerald-500" />;
+    case 'image':
+      return <ImageIcon className="text-teal-500" />;
   }
 }
 

@@ -595,7 +595,10 @@ export function HtmlExportDialog({
                 <TemplateGallery
                   templates={templates}
                   value={design.template}
-                  onChange={(next) => change(templateDesign(next))}
+                  // A template starts the look over; where the page opens stays.
+                  onChange={(next) =>
+                    change({ ...templateDesign(next), ...(design?.view ? { view: design.view } : {}) })
+                  }
                 />
                 <AccentPicker
                   value={design.accent}
@@ -629,6 +632,25 @@ export function HtmlExportDialog({
                   <Switch
                     checked={design.showNames}
                     onCheckedChange={(showNames) => patch({ showNames })}
+                  />
+                </label>
+                <label className="flex items-center justify-between gap-3 text-sm">
+                  <span>
+                    <span className="block">{t('bookExport.open_slideshow')}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {t('bookExport.open_slideshow_hint')}
+                    </span>
+                  </span>
+                  <Switch
+                    checked={design.view === 'show'}
+                    onCheckedChange={(on) =>
+                      design &&
+                      change(
+                        on
+                          ? { ...design, view: 'show' }
+                          : (({ view: _view, ...rest }) => rest)(design),
+                      )
+                    }
                   />
                 </label>
                 <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">

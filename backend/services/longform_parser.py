@@ -1,7 +1,7 @@
 """Canonical longform marker parser (#27) — the single source of grammar truth.
 
 The longform marker dialect (``# heading``, ``[voice:NAME]``, ``[pause …]``,
-``[slow]/[fast]/[emphasis]/[spell]``, ``[volume -6dB]``) was parsed by three independent code
+``[slow]/[fast]/[emphasis]/[spell]``, ``[volume -6dB]``, ``[image: NAME]``) was parsed by three independent code
 paths that disagreed (client/server/regex-level). This module is the one
 canonical Python parser; ``electron/src/shared/utils/longformParser.js`` is its
 mechanically-mirrored JS twin, and ``tests/fixtures/longform_parser_cases.json``
@@ -47,6 +47,130 @@ _BLANK_LINE_RE = re.compile(r"\n[ \t\r]*\n")
 #: took out there: a line holding only ``[pause]`` or ``[voice:B]`` is a line,
 #: not a blank one.
 LAYOUT_MARK = "\x00"
+# ``[image: NAME]`` shows a picture from where it stands until the next one
+# (``[image: NAME contain]``: the whole picture, not cropped to the frame;
+# ``[image: NAME cover]``: always filling it; ``[image: none]``: back to the
+# book's own backdrop). Display only: it is
+# taken out of the text before anything else reads it (``extract_image_marks``),
+# so it is never spoken and no span, join or cache key changes. The content
+# excludes both brackets and line breaks: linear, like ``_VOICE_RE``.
+_IMAGE_RE = re.compile(r"\[image:([^\]\[\n]*)\]", re.IGNORECASE)
+#: How a picture meets the frame: ``auto`` (no word given) fills it when the
+#: two are about the same shape and shows all of it otherwise, ``cover`` fills
+#: it (cropping what spills over), ``contain`` shows all of it (on a blurred
+#: copy of itself).
+IMAGE_FITS = ("auto", "cover", "contain")
+#: The name ``[image: none]`` uses: no picture of the script's from there on.
+IMAGE_NONE = "none"
+
+
+def _image_mark(content: str) -> dict:
+    """The picture an ``[image: …]`` tag names: ``{"name", "fit"}``, the name
+    lower-cased (the library's names are) and ``None`` for ``none``/empty."""
+    parts = content.split()
+    name = parts[0].lower() if parts else ""
+    fit = parts[1].lower() if len(parts) > 1 else ""
+    return {"name": None if name in ("", IMAGE_NONE) else name[:120],
+            "fit": fit if fit in IMAGE_FITS else IMAGE_FITS[0]}
+
+
+def extract_image_marks(text: str) -> tuple[str, list[dict]]:
+    """``text`` without its ``[image:]`` tags, and each tag's mark:
+    ``{"pos": where it stood in the returned text, "name", "fit"}``, in order.
+
+    The text left is what the script would say without the tags: a tag alone
+    on its line goes with its line (and one line break), one inside a line
+    with one space next to it. So a script parses (spans, joins, every cache
+    key) exactly as it would if the pictures were never there."""
+    if "[" not in text:
+        return text, []
+    marks: list[dict] = []
+    pos = 0
+    while True:
+        m = _IMAGE_RE.search(text, pos)
+        if m is None:
+            break
+        s, e = m.start(), m.end()
+        line_start = text.rfind("\n", 0, s) + 1
+        line_end = text.find("\n", e)
+        if line_end < 0:
+            line_end = len(text)
+        if not text[line_start:s].strip(" \t") and not text[e:line_end].strip(" \t"):
+            if line_end < len(text):
+                cut, at = (line_start, line_end + 1), line_start
+            elif line_start > 0:
+                cut, at = (line_start - 1, line_end), line_start - 1
+            else:
+                cut, at = (line_start, line_end), line_start
+        else:
+            if e < len(text) and text[e] in " \t":
+                cut = (s, e + 1)
+            elif s > 0 and text[s - 1] in " \t":
+                cut = (s - 1, e)
+            else:
+                cut = (s, e)
+            at = cut[0]
+        removed = cut[1] - cut[0]
+        # Only marks standing at the cut can move (the scan runs forward), and
+        # they are the last ones: linear even for a line of thousands of tags.
+        for mark in reversed(marks):
+            if mark["pos"] <= cut[0]:
+                break
+            mark["pos"] = max(cut[0], mark["pos"] - removed)
+        marks.append({"pos": at, **_image_mark(m.group(1))})
+        text = text[:cut[0]] + text[cut[1]:]
+        pos = cut[0]
+    return text, marks
+
+
+def _attach_image_marks(body: str, spans: list[dict], marks: list[dict]) -> list[dict]:
+    """Give each of ``marks`` (``pos`` in ``body``) to the span read there:
+    ``images: [{"at", "name", "fit"}]`` on it, ``at`` the character of its
+    text the picture shows from (its length: from the span after it). A tag
+    on a ``##`` heading's line shows with the heading. A span's text is found
+    in ``body`` in order; one that is not there as written (``[spell]``
+    spelled it out) is passed over. Returns the marks after every span, for
+    whatever is read next."""
+    located: list = []
+    cursor = 0
+    for span in spans:
+        found = body.find(span["text"], cursor) if span["text"] else -1
+        if found < 0:
+            located.append(None)
+            continue
+        located.append((found, found + len(span["text"])))
+        cursor = found + len(span["text"])
+    last = max((k for k, loc in enumerate(located) if loc is not None), default=None)
+    left: list[dict] = []
+    k = 0  # marks come in order: one walk over the spans serves them all
+    for mark in marks:
+        pos, target = mark["pos"], None
+        while k < len(located):
+            loc = located[k]
+            if loc is None or loc[1] < pos or (loc[1] == pos and "section" not in spans[k]):
+                k += 1
+                continue
+            target = (k, 0 if loc[1] == pos else max(0, pos - loc[0]))
+            break
+        if target is None:
+            if last is None:
+                left.append(mark)
+                continue
+            target = (last, len(spans[last]["text"]))
+        spans[target[0]].setdefault("images", []).append(
+            {"at": target[1], "name": mark["name"], "fit": mark["fit"]})
+    return left
+
+
+def _give_carried_images(spans: list[dict], carried: list[dict]) -> list[dict]:
+    """Marks left over from text with nothing spoken after them go to the
+    first span that speaks, from its start; still left when there is none."""
+    first = next((span for span in spans if span["text"]), None)
+    if first is None or not carried:
+        return carried
+    first["images"] = ([{"at": 0, "name": m["name"], "fit": m["fit"]} for m in carried]
+                       + first.get("images", []))
+    return []
 
 
 def layout_break(gap: str) -> Optional[str]:
@@ -94,9 +218,15 @@ def _parse_chapter_body(
     Returns a list of span dicts ``{voice_id, text, pause_ms_after, speed}``.
     A ``#`` inside ``body`` is NOT treated as a heading here — that is the
     caller's (chapter-split) concern. The JS twin (``parseChapterBody``) is what
-    ``storyToSpans`` calls per spoken track."""
+    ``storyToSpans`` calls per spoken track. ``[image:]`` tags are taken out
+    first and given to the spans read where they stood (``images``); one with
+    nothing spoken after it goes to the end of the last span."""
+    body, marks = extract_image_marks(body or "")
     runs, _ = _voice_runs(body, default_voice, default_voice)
-    return _runs_to_spans(runs, default_speed)
+    spans = _runs_to_spans(runs, default_speed)
+    if marks:
+        _attach_image_marks(body, spans, marks)
+    return spans
 
 
 def _runs_to_spans(
@@ -279,6 +409,13 @@ def parse_script_to_spans(
     Contract:
       * None / "" / whitespace-only input → ``[]``.
       * CRLF/CR normalized to LF at entry (cross-platform parity).
+      * ``[image: NAME]`` tags are taken out before anything else
+        (:func:`extract_image_marks`), so they change no span; the span read
+        where one stood carries ``images: [{"at", "name", "fit"}]`` (``at``:
+        the character of its text the picture shows from). One with nothing
+        spoken after it in its chapter goes to the chapter's last span, at its
+        end; one in a chapter with nothing spoken goes to the next chapter's
+        first span.
       * H1 (``# <non-space>…``) opens a chapter; ``##``/``###`` open a
         section inside it, read aloud without the marks
         (:func:`_parse_sectioned_body`); ``####``…``######`` and ``# ``
@@ -295,23 +432,32 @@ def parse_script_to_spans(
         first text of a chapter. It is display only: synthesis and every
         cache key ignore it, and the golden corpus parses without it.
     """
-    text = _normalize(text)
+    text, marks = extract_image_marks(_normalize(text))
     matches = list(_HEADING_RE.finditer(text))
+    # (title, body, where the body starts in ``text``, where the text the
+    # chapter owns starts: its heading line, so a tag there opens it).
     if not matches:
-        raw = [(None, text)]
+        raw = [(None, text, 0, 0)]
     else:
         raw = []
         intro = text[:matches[0].start()]
         if intro.strip():
-            raw.append((None, intro))
+            raw.append((None, intro, 0, 0))
         for i, m in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            raw.append((m.group(1).strip(), text[m.end():end]))
+            raw.append((m.group(1).strip(), text[m.end():end], m.end(), m.start() if raw else 0))
 
     chapters: list[dict] = []
-    for title, body in raw:
+    carried: list[dict] = []
+    for n, (title, body, offset, owns) in enumerate(raw):
         spans = _parse_sectioned_body(body, default_voice=default_voice,
                                       default_speed=default_speed, layout=layout)
+        if marks:
+            limit = raw[n + 1][3] if n + 1 < len(raw) else len(text) + 1
+            mine = [{**m, "pos": max(0, m["pos"] - offset)} for m in marks
+                    if owns <= m["pos"] < limit]
+            carried = _give_carried_images(spans, carried)
+            carried += _attach_image_marks(body, spans, mine)
         if not spans:
             continue
         chapter = {"title": title or f"Chapter {len(chapters) + 1}", "spans": spans}

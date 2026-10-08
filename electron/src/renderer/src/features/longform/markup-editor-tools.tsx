@@ -7,6 +7,13 @@ import {
 import { MarkupContextMenu } from './markup-context-menu';
 import { MarkupEditorContext, type MarkupEditorEvents } from './markup-editor-context';
 import { MarkupTagCard, type TagActivation, type TagToolProps } from './markup-tag-card';
+import { applyMarkupEdit } from './markup-toolbar';
+import { imageToken } from './script-markup';
+
+/** Whether a page offers pictures: it has a library and reads `[image:]`. */
+function takesImagesFor(images: TagToolProps['images'], unsupported?: TagToolProps['unsupported']) {
+  return Boolean(images) && !unsupported?.includes('image');
+}
 
 /**
  * What makes the tags of a script editor interactive: the right-click menu
@@ -41,13 +48,14 @@ export function MarkupEditorTools({
   const [card, setCard] = useState<TagActivation | null>(null);
   if ((disabled || otherPopupOpen) && card) setCard(null);
   const activations = useRef(0);
-  const { unsupported } = tools;
+  const { unsupported, images, getTarget } = tools;
   const groups = useMemo(
     () => unsupported && SUGGESTION_GROUPS.filter((group) => !unsupported.includes(group)),
     [unsupported],
   );
   const suggestions = useMarkupAutocomplete({
     ...tools,
+    offersPictures: takesImagesFor(images, unsupported),
     groups,
     disabled,
     // One popup at a time: typing a new tag puts the card away.
@@ -57,10 +65,12 @@ export function MarkupEditorTools({
     },
   });
   // The editor calls these between renders: they read the latest state.
-  const latest = useRef({ card, suggestions, onOpen });
+  const latest = useRef({ card, suggestions, onOpen, images, getTarget });
   useLayoutEffect(() => {
-    latest.current = { card, suggestions, onOpen };
+    latest.current = { card, suggestions, onOpen, images, getTarget };
   });
+  // Pictures are offered only where the page shows them.
+  const takesImages = takesImagesFor(images, unsupported);
   const events = useMemo<MarkupEditorEvents>(
     () => ({
       onTokenActivate(token, handle, via) {
@@ -83,8 +93,21 @@ export function MarkupEditorTools({
         latest.current.suggestions.onChange(handle, reason);
       },
       textareaAria: suggestions.aria,
+      onImageFiles: takesImages
+        ? (files, at, handle) =>
+            void (async () => {
+              const library = latest.current.images;
+              const names = library ? await library.upload(files) : [];
+              if (!library || !names.length) return;
+              handle.element.focus();
+              const target = latest.current.getTarget();
+              if (target?.element !== handle.element) return;
+              const tags = names.map((name) => imageToken(name)).join('\n');
+              applyMarkupEdit(target, (value) => library.insert(value, Math.min(at, value.length), tags));
+            })()
+        : undefined,
     }),
-    [suggestions.aria],
+    [suggestions.aria, takesImages],
   );
   return (
     <>

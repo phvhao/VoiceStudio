@@ -15,6 +15,7 @@ import { Menu } from '@base-ui/react/menu';
 import {
   BookOpenTextIcon,
   CheckIcon,
+  ImagesIcon,
   CircleAlertIcon,
   LoaderCircleIcon,
   LocateFixedIcon,
@@ -47,10 +48,14 @@ import {
   type AudiobookLyricsTimeline,
   type AudiobookLyricsWord,
 } from '@shared/utils/audiobookLyrics';
+import { extractImageMarks } from '@shared/utils/longformParser';
 import { tokenizeMarkup, type MarkupKind } from './script-markup';
 import { useStore } from '@tanstack/react-store';
 import { useBookFontFamily } from './book-fonts';
 import { longformSession } from './longform-session';
+import { ReaderSlideshow } from './reader-slideshow';
+import type { Slide } from './slideshow';
+import { useRadioKeys } from '@/hooks/use-radio-keys';
 
 /**
  * Read-along for a rendered audiobook: the book model (words, sentences and
@@ -60,6 +65,10 @@ import { longformSession } from './longform-session';
  */
 
 type PlayerRef = RefObject<MediaPlayerInstance | null>;
+
+const NO_SLIDES: readonly Slide[] = [];
+/** The view the listener picked last, while the app runs: the next reader opens in it. */
+let lastView: ReaderView = 'read';
 
 /** How a word follows the one before it in the script. */
 export type WordGap = 'joined' | 'space' | 'line' | 'paragraph';
@@ -98,17 +107,26 @@ interface ChapterLayout {
   shapes: WordShape[];
 }
 
-// Markup the parser drops before speaking: no spoken token comes from it.
-const UNSPOKEN: ReadonlySet<MarkupKind> = new Set([
-  'heading',
-  // A section's `##` marks; its title is read aloud.
-  'section',
-  'voice',
-  'voiceReset',
-  'pause',
-  'delivery',
-  'volume',
-]);
+// What the parser makes of each kind of markup: words it speaks, a tag the
+// engine performs (a reaction), a tag it leaves in the text unread, or
+// nothing spoken (a section's kind is its `##` marks; its title is read
+// aloud). Every kind is named, so a new one is placed here before it builds.
+// `[image:]` pictures never get here: buildReaderBook takes them out first,
+// since blanked in place a picture's own line would read as a paragraph break.
+const SPOKEN_AS: Record<MarkupKind, 'words' | 'performed' | 'left' | 'unspoken'> = {
+  text: 'words',
+  pronunciation: 'words',
+  expression: 'performed',
+  unknown: 'left',
+  heading: 'unspoken',
+  section: 'unspoken',
+  voice: 'unspoken',
+  voiceReset: 'unspoken',
+  pause: 'unspoken',
+  delivery: 'unspoken',
+  volume: 'unspoken',
+  image: 'unspoken',
+};
 // The parser splits tokens on JS whitespace; the walk below must agree.
 const WHITESPACE = /\s/;
 
@@ -147,15 +165,16 @@ function scriptText(script: string): ScriptText {
   const headings: number[] = [];
   for (const { text: part, kind } of tokenizeMarkup(text, { headings: true })) {
     if (kind === 'heading') headings.push(spoken.length);
-    if (UNSPOKEN.has(kind)) {
+    const as = SPOKEN_AS[kind];
+    if (as === 'unspoken') {
       spoken += ' '.repeat(part.length);
       written += '\0'.repeat(part.length);
     } else {
-      if (kind === 'expression') tags.add(spoken.length);
+      if (as === 'performed') tags.add(spoken.length);
       spoken += part;
       written += kind === 'pronunciation' ? writtenTerm(part) : part;
     }
-    const tag = kind === 'expression' || kind === 'unknown';
+    const tag = as === 'performed' || as === 'left';
     for (let i = 0; i < part.length; i++) bracketed.push(tag);
   }
   return { spoken, written, tags, bracketed, headings };
@@ -359,9 +378,12 @@ function sameTokens(tokens: readonly string[], words: readonly AudiobookLyricsWo
  * timeline sidecar's own `break` marks.
  */
 export function buildReaderBook(script: string, timeline: AudiobookLyricsTimeline): ReaderBook {
-  const text = scriptText(script);
+  // Pictures show beside the words, never among them: lay out the text the
+  // render read, taken out of the script as the parser takes them.
+  const [read] = extractImageMarks(script.replace(/\r\n?/g, '\n'));
+  const text = scriptText(read);
   const timed = timeline.chapters.some((chapter) => chapter.precision !== 'estimate');
-  const layouts = timed ? [] : (scriptLayout(script, text) ?? []);
+  const layouts = timed ? [] : (scriptLayout(read, text) ?? []);
   const written = timed ? writtenChapters(text) : [];
   const words: ReaderWord[] = [];
   const sentences: ReaderSentence[] = [];
@@ -921,14 +943,61 @@ const ChapterMenu = memo(function ChapterMenu({
   );
 });
 
+/** What the reader shows: the transcript, or the slideshow over it. */
+export type ReaderView = 'read' | 'show';
+const READER_VIEWS: readonly ReaderView[] = ['read', 'show'];
+
+function ViewSwitch({ view, onChange }: { view: ReaderView; onChange(view: ReaderView): void }) {
+  const { t } = useTranslation();
+  const keys = useRadioKeys(READER_VIEWS, view, onChange);
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t('reader.view')}
+      {...keys.group}
+      className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/50 p-0.5 ring-1 ring-border/50 ring-inset"
+    >
+      {READER_VIEWS.map((value, index) => {
+        const Icon = value === 'show' ? ImagesIcon : BookOpenTextIcon;
+        const label = value === 'show' ? t('reader.view_show') : t('reader.view_read');
+        return (
+          <button
+            key={value}
+            type="button"
+            role="radio"
+            aria-checked={view === value}
+            aria-label={label}
+            title={label}
+            {...keys.option(index)}
+            onClick={() => onChange(value)}
+            className={cn(
+              'flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none',
+              view === value
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="size-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">{label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ReaderHeader({
   book,
   player,
   onSeek,
+  view,
+  onViewChange,
 }: {
   book: ReaderBook;
   player: PlayerRef;
   onSeek(): void;
+  view: ReaderView;
+  onViewChange(view: ReaderView): void;
 }) {
   const { t } = useTranslation();
   const chapter = usePlayingChapter(book);
@@ -952,6 +1021,7 @@ function ReaderHeader({
           {chapter >= 0 ? chapterTitle(t, book, chapter) : '\u00a0'}
         </p>
       </div>
+      <ViewSwitch view={view} onChange={onViewChange} />
       {book.chapters.length > 1 && (
         <ChapterMenu book={book} player={player} current={chapter} onSeek={onSeek} />
       )}
@@ -1461,29 +1531,47 @@ const USES_ARROWS =
 
 /**
  * Full-window read-along over the inline player's audio element: the
- * transcript by chapter, paragraph and sentence, following the playhead.
- * Render it inside the `StudioMediaPlayer` that owns `player`.
+ * transcript by chapter, paragraph and sentence, following the playhead, or
+ * the slideshow — the script's `[image:]` pictures (`slides`, the `cover`
+ * before the first) with the sentence being read as a caption. Render it
+ * inside the `StudioMediaPlayer` that owns `player`. `view` is the view it
+ * opens in (the listener's last pick while the app runs, by default).
  */
 export function AudiobookReader({
   open,
   onOpenChange,
   player,
   book,
+  slides = NO_SLIDES,
+  cover,
+  view: opensIn,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
   player: PlayerRef;
   book: ReaderBook;
+  slides?: readonly Slide[];
+  cover?: string;
+  view?: ReaderView;
 }) {
   const pane = useRef<HTMLDivElement>(null);
   const [following, setFollowing] = useState(true);
-  // Every opening follows the playhead again. Adjusted while rendering, so
-  // the first frame already lands on the line being read.
+  const [view, setView] = useState<ReaderView>(opensIn ?? lastView);
+  // Every opening follows the playhead again (and opens in the view asked
+  // for). Adjusted while rendering, so the first frame already lands on the
+  // line being read.
   const [wasOpen, setWasOpen] = useState(open);
   if (open !== wasOpen) {
     setWasOpen(open);
-    if (open) setFollowing(true);
+    if (open) {
+      setFollowing(true);
+      setView(opensIn ?? lastView);
+    }
   }
+  const changeView = (next: ReaderView) => {
+    lastView = next;
+    setView(next);
+  };
   // Every jump the listener asks for brings the transcript back to the playhead.
   const follow = useCallback(() => setFollowing(true), []);
 
@@ -1519,14 +1607,24 @@ export function AudiobookReader({
         className="flex h-[min(90vh,52rem)] w-[min(96vw,64rem)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         onKeyDown={onKeyDown}
       >
-        <ReaderHeader book={book} player={player} onSeek={follow} />
-        <ReaderTranscript
+        <ReaderHeader
           book={book}
           player={player}
-          paneRef={pane}
-          following={following}
-          onFollowingChange={setFollowing}
+          onSeek={follow}
+          view={view}
+          onViewChange={changeView}
         />
+        {view === 'show' ? (
+          <ReaderSlideshow book={book} slides={slides} cover={cover} />
+        ) : (
+          <ReaderTranscript
+            book={book}
+            player={player}
+            paneRef={pane}
+            following={following}
+            onFollowingChange={setFollowing}
+          />
+        )}
         <ReaderFooter book={book} player={player} onSeek={follow} />
       </DialogContent>
     </Dialog>

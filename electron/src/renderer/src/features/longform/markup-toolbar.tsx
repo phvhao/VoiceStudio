@@ -8,6 +8,7 @@ import {
   CircleHelpIcon,
   CircleQuestionMarkIcon,
   HeadingIcon,
+  ImageIcon,
   LaughIcon,
   PauseIcon,
   PlusIcon,
@@ -32,6 +33,7 @@ import { castVoice } from './cast-map';
 import { MARKUP_STYLES } from './markup-textarea';
 import { voiceAccent } from './voice-palette';
 import { useVoiceGainText } from './cast-settings';
+import type { ImageTools } from './image-library';
 import {
   MAX_PASSAGE_GAIN_DB,
   PAUSE_MAX_MS,
@@ -45,6 +47,7 @@ import {
   expressionGroups,
   expressionVariant,
   formatPauseSeconds,
+  imageToken,
   insertChapter,
   insertToken,
   pauseToken,
@@ -180,6 +183,7 @@ export function MarkupToolbar({
   onVoiceCast,
   allowNewCharacter = false,
   onChapter,
+  images,
   actions,
   className,
 }: {
@@ -196,6 +200,8 @@ export function MarkupToolbar({
   allowNewCharacter?: boolean;
   /** Replaces inserting a `# Chapter` heading into the text. */
   onChapter?(): void;
+  /** The picture library: offers `[image:]` (Audiobook and Stories). */
+  images?: ImageTools;
   /** Extra controls for this editor, placed before the markup guide. */
   actions?: ReactNode;
   className?: string;
@@ -248,6 +254,15 @@ export function MarkupToolbar({
     if (!name) return;
     setNewCharacter('');
     voice(name);
+  };
+
+  // The caret before the library opens: the picture goes on its line.
+  const pickImage = () => {
+    const at = getTarget()?.element.selectionStart ?? 0;
+    images?.pick({
+      onChoose: (name) =>
+        apply((value) => images.insert(value, Math.min(at, value.length), imageToken(name))),
+    });
   };
 
   const chapter = () => {
@@ -584,6 +599,20 @@ export function MarkupToolbar({
         {t('markup.chapter')}
       </Button>
 
+      {images && (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={disabled}
+          title={t('markup.image_hint')}
+          onMouseDown={keepFocus}
+          onClick={pickImage}
+        >
+          <ImageIcon />
+          {t('markup.image')}
+        </Button>
+      )}
+
       {actions}
 
       <Popover open={open === 'guide'} onOpenChange={toggle('guide')}>
@@ -633,6 +662,14 @@ export function MarkupToolbar({
               <Swatch kind="section">## …</Swatch>
             </dt>
             <dd className="text-muted-foreground">{t('book.guide_section')}</dd>
+            {images && (
+              <>
+                <dt>
+                  <Swatch kind="image">[image: rung.jpg]</Swatch>
+                </dt>
+                <dd className="text-muted-foreground">{t('markup.guide_image')}</dd>
+              </>
+            )}
             <dt>
               <Swatch kind="unknown">[other]</Swatch>
             </dt>

@@ -240,6 +240,8 @@ def test_side_effectful_get_routes_carry_the_cross_site_dependency():
         "/api/settings/perf/offload-after-generation",
         "/system/tailscale/status",
         "/audiobook/export/html/{export_id}",
+        "/audiobook/export/video/{export_id}",
+        "/longform/images/{name}",
     }
     guarded = set()
     for route in app.routes:

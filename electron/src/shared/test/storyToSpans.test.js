@@ -216,6 +216,38 @@ describe('storyToSpans', () => {
     );
   });
 
+  it('never speaks an [image:] tag and shows each picture from where it stood', () => {
+    const tracks = [
+      { character: 'narrator', text: '[image: dawn.jpg]' },
+      { character: 'narrator', text: 'Once.' },
+      { character: 'c_fox', text: 'Hi [image: fox.png contain] there.' },
+      { character: 'narrator', text: '# Two [image: night.jpg]' },
+      { character: 'narrator', text: '[image: none]' },
+      { character: 'c_fox', text: 'Again.' },
+    ];
+    const chapters = storyToSpans(tracks, CAST, null, { layout: true });
+    const spans = chapters.flatMap((chapter) => chapter.spans);
+    expect(spans.map((s) => s.text)).toEqual(['Once.', 'Hi there.', 'Again.']);
+    expect(chapters.map((chapter) => chapter.title)).toEqual(['', 'Two']);
+    // A line holding only a picture gives it to the next line read, from its start.
+    expect(spans[0].images).toEqual([{ at: 0, name: 'dawn.jpg', fit: 'auto' }]);
+    expect(spans[1].images).toEqual([{ at: 3, name: 'fox.png', fit: 'contain' }]);
+    // A chapter line's picture opens its chapter; `none` goes back to the backdrop.
+    expect(spans[2].images).toEqual([
+      { at: 0, name: 'night.jpg', fit: 'auto' },
+      { at: 0, name: null, fit: 'auto' },
+    ]);
+    // The plan is otherwise exactly the one without pictures: no take moves.
+    const bare = storyToSpans(
+      tracks.map((track) => ({ ...track, text: track.text.replace(/ ?\[image:[^\]]*\]/g, '') })),
+      CAST,
+      null,
+      { layout: true },
+    );
+    const strip = (list) => list.flatMap((c) => c.spans).map(({ images: _images, ...rest }) => rest);
+    expect(strip(chapters)).toEqual(strip(bare));
+  });
+
   it('[voice:] reverts to the resolved cast voice, not null', () => {
     const tracks = [{ character: 'c_fox', text: 'hi [voice:p_bob] there [voice:] back' }];
     const spans = storyToSpans(tracks, CAST)[0].spans;

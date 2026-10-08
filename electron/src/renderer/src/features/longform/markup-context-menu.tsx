@@ -7,6 +7,7 @@ import {
   ClipboardPasteIcon,
   CopyIcon,
   HeadingIcon,
+  ImageIcon,
   PauseIcon,
   PencilLineIcon,
   PlayIcon,
@@ -52,6 +53,7 @@ import {
   expressionGroups,
   expressionVariant,
   formatPauseSeconds,
+  imageToken,
   insertChapter,
   insertToken,
   pauseToken,
@@ -428,6 +430,9 @@ function TagItems({ token, tools }: { token: MarkupToken; tools: TagToolProps })
           onClick={act.selectRespelling}
         />
       )}
+      {token.kind === 'image' && tools.images && (
+        <Item icon={<ImageIcon />} label={t('editor.change_image')} onClick={act.changeImage} />
+      )}
       <Item icon={<Trash2Icon />} label={t(removeTagLabel(token.kind))} onClick={act.remove} />
       <ContextMenu.Separator className={SEPARATOR} />
     </>
@@ -613,6 +618,20 @@ function MenuItems({
             choose={(tag) => run((value, start, end) => insertToken(value, start, end, tag))}
           />
         </Submenu>
+      )}
+      {reads('image') && tools.images && (
+        <Item
+          icon={<ImageIcon />}
+          label={t('markup.image_insert')}
+          onClick={() => {
+            const library = tools.images;
+            const at = getTarget()?.element.selectionStart ?? 0;
+            library?.pick({
+              onChoose: (name) =>
+                run((value) => library.insert(value, Math.min(at, value.length), imageToken(name))),
+            });
+          }}
+        />
       )}
       {reads('heading') && (
         <Item

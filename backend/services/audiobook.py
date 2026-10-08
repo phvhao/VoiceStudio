@@ -389,6 +389,13 @@ class Span:
     #: rendered timeline only, for the HTML book's turns — never by synthesis
     #: or a cache key. Emitted only when set.
     speaker: Optional[dict] = None
+    #: The pictures an ``[image: NAME]`` tag shows from inside this span:
+    #: ``[{"at", "name", "fit"}]`` — the character of ``text`` (code points)
+    #: each shows from (its length: from what is read next), the library name
+    #: (``None``: back to the book's backdrop) and ``"auto"``/``"cover"``/``"contain"``.
+    #: Read by the rendered timeline only, for the slideshow and the video —
+    #: never by synthesis or a cache key. Emitted only when set.
+    images: Optional[list] = None
 
     def to_dict(self) -> dict:
         d = {"voice_id": self.voice_id, "text": self.text,
@@ -404,6 +411,8 @@ class Span:
             d["break_before"] = self.break_before
         if self.speaker:
             d["speaker"] = dict(self.speaker)
+        if self.images:
+            d["images"] = [dict(image) for image in self.images]
         return d
 
 
@@ -1391,6 +1400,61 @@ def span_display_takes(original: str, normalized: str, *, lexicon: Optional[dict
     return [_display_text(t) for t in spoken]
 
 
+def _timeline_images(spans: list, phrases: list, owners: list, precision: str,
+                     carried: list) -> tuple[list, list]:
+    """Where each ``[image:]`` picture of one chapter shows (``Span.images``):
+    ``[{"phrase", "start", "name", "fit"}]`` in time order, and the pictures
+    no entry of the chapter follows (for the next chapter's first).
+
+    A picture inside a span shows from the entry its character falls in, at
+    that character's share of the entry's time (an estimate, like a word's);
+    one at a span's end shows from the next entry. When only the chapter is
+    timed, it shows from the entry (a paragraph) its span is in. ``carried``
+    pictures, left over by the chapter before, show from the first entry."""
+    out: list = []
+    left: list = []
+
+    def show(k: int, at: float, image: dict) -> None:
+        out.append({"phrase": k, "start": round(at, 3), "name": image.get("name"),
+                    "fit": image.get("fit") or "auto"})
+
+    for image in carried:
+        if phrases:
+            show(0, phrases[0]["start"], image)
+        else:
+            left.append(image)
+    for index, span in enumerate(spans):
+        for image in getattr(span, "images", None) or []:
+            placed = False
+            if precision == "chapter":
+                inside = [k for k, owner in enumerate(owners) if owner <= index]
+                if inside:
+                    show(inside[-1], phrases[inside[-1]]["start"], image)
+                    placed = True
+            else:
+                before = span.text[:max(0, int(image.get("at") or 0))]
+                need = len(_shown_marks(_written_overrides(before))[0])
+                done = 0
+                for k, owner in enumerate(owners):
+                    if owner != index:
+                        continue
+                    count = len("".join(phrases[k]["text"].split()))
+                    if need < done + count:
+                        a, b = phrases[k]["start"], phrases[k]["end"]
+                        show(k, a + (b - a) * (need - done) / count, image)
+                        placed = True
+                        break
+                    done += count
+            if not placed:
+                following = next((k for k, owner in enumerate(owners) if owner > index), None)
+                if following is None:
+                    left.append(image)
+                else:
+                    show(following, phrases[following]["start"], image)
+    out.sort(key=lambda item: (item["start"], item["phrase"]))
+    return out, left
+
+
 def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] = None,
                   voice_map: Optional[dict] = None, language: Optional[str] = None,
                   lexicon: Optional[dict] = None,
@@ -1412,6 +1476,12 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
     ``sections`` lists the chapter's ``##``/``###`` headings in order:
     ``{"title", "level", "start", "phrase"}`` — the title as the listener reads
     it, where it is heard, and the index of its first entry in ``phrases``.
+
+    ``images`` (only when the script shows any) lists where each
+    ``[image:]`` picture shows: ``{"phrase", "start", "name", "fit"}``, in
+    time order (:func:`_timeline_images`); ``name`` ``None`` is the book's own
+    backdrop again. A picture with nothing read after it in its chapter shows
+    from the next chapter's first entry.
 
     A phrase that starts a new line or paragraph of the script carries
     ``"break": "line" | "paragraph"`` (never the first of a chapter), from the
@@ -1437,6 +1507,7 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
         return {"text": text, "start": round(start, 3), "end": round(end, 3), "voice": voice}
 
     out, offset = [], 0.0
+    carried: list = []  # pictures no entry followed in their chapter
     for chapter, duration, timing, *rest in chapters:
         start, end = offset, offset + float(duration)
         offset = end
@@ -1549,6 +1620,9 @@ def book_timeline(output: str, chapters: list, *, default_voice: Optional[str] =
                              "start": phrases[first]["start"], "phrase": first})
         doc = {"title": chapter.title, "start": round(start, 3), "end": round(end, 3),
                "precision": precision, "phrases": phrases, "sections": sections}
+        images, carried = _timeline_images(spans, phrases, owners, precision, carried)
+        if images:
+            doc["images"] = images
         if getattr(chapter, "untitled", False):
             doc["untitled"] = True
         if rest and rest[0]:
@@ -1647,12 +1721,13 @@ def _laid_out(timeline: dict, marks: list, known: tuple) -> dict:
                     where += len("".join(shown.split()))
                 laid.append(item)
         doc = {**chapter, "phrases": laid}
-        if isinstance(chapter.get("sections"), list):
-            doc["sections"] = [
-                {**s, "phrase": moved[s["phrase"]]}
-                if isinstance(s, dict) and type(s.get("phrase")) is int
-                and 0 <= s["phrase"] < len(moved) else s
-                for s in chapter["sections"]]
+        for key in ("sections", "images"):
+            if isinstance(chapter.get(key), list):
+                doc[key] = [
+                    {**s, "phrase": moved[s["phrase"]]}
+                    if isinstance(s, dict) and type(s.get("phrase")) is int
+                    and 0 <= s["phrase"] < len(moved) else s
+                    for s in chapter[key]]
         out.append(doc)
     return {**timeline, "chapters": out}
 

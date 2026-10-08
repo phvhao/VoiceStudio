@@ -47,6 +47,7 @@ export const SCRIPT_UNSUPPORTED_TAGS: readonly MarkupKind[] = [
   'delivery',
   'volume',
   'heading',
+  'image',
 ];
 
 // A single-voice script has no voices to switch to or cast.

@@ -448,6 +448,17 @@ as root, so files it adds there are root-owned on the host.
   only forces it onto foreign kernels. See
   [Pull and run (AMD GPU / ROCm)](#pull-and-run-amd-gpu--rocm) above for when
   to set one by hand.
+- **Video captions show boxes instead of Chinese, Japanese, Korean, Thai or
+  Indic text:** the caption fonts VoiceStudio bundles cover Latin and
+  Vietnamese; other scripts use the system's fonts, and the image has only
+  DejaVu. Add fonts in an image of your own:
+
+  ```dockerfile
+  FROM ghcr.io/debpalash/voicestudio:stable
+  RUN apt-get update && apt-get install -y --no-install-recommends \
+        fonts-noto-cjk fonts-noto-core fonts-thai-tlwg \
+      && rm -rf /var/lib/apt/lists/*
+  ```
 - More entries: [docs/install/troubleshooting.md](troubleshooting.md).
 
 ### CTranslate2 compatibility

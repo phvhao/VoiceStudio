@@ -17,8 +17,10 @@ import { useTranslation } from 'react-i18next';
 import { useScriptSpellcheck } from '@/hooks/use-script-spellcheck';
 import { cn } from '@/lib/utils';
 import { MarkupEditorContext, type MarkupEditorHandle } from './markup-editor-context';
+import { imageFiles } from './image-library';
 import {
   classifyToken,
+  imageTagParts,
   formatPauseSeconds,
   formatSignedDb,
   normalizeNewlines,
@@ -67,6 +69,8 @@ export const MARKUP_STYLES: Record<Exclude<MarkupKind, 'text'>, string> = {
     'rounded-sm bg-emerald-500/18 ring-1 ring-emerald-500/40 data-hover:bg-emerald-500/30 data-hover:ring-emerald-500/70 data-current:ring-2',
   pronunciation:
     'rounded-sm bg-rose-500/18 ring-1 ring-rose-500/40 data-hover:bg-rose-500/30 data-hover:ring-rose-500/70 data-current:ring-2',
+  image:
+    'rounded-sm bg-teal-500/18 ring-1 ring-teal-500/40 data-hover:bg-teal-500/30 data-hover:ring-teal-500/70 data-current:ring-2',
   unknown:
     'rounded-sm underline decoration-destructive decoration-wavy underline-offset-4 data-hover:bg-destructive/10 data-current:bg-destructive/15',
 };
@@ -93,6 +97,7 @@ const TOKEN_KINDS = new Set<string>([
   'volume',
   'expression',
   'pronunciation',
+  'image',
   'unknown',
 ]);
 
@@ -566,10 +571,33 @@ function tokenHint(
         respelling: token.text.slice(from - token.start, to - token.start),
       });
     }
+    case 'image': {
+      const name = imageTagParts(token.text)?.name;
+      return name ? t('editor.hint_image', { name }) : t('editor.hint_image_none');
+    }
     case 'unknown':
       if (unsupported?.includes(classifyToken(token.text))) return t('editor.hint_unsupported');
       return t(clickable ? 'editor.hint_unknown' : 'editor.hint_unknown_static');
   }
+}
+
+/** The text offset where the line under viewport height `y` starts; null without layout. */
+function lineStartAtPoint(
+  overlay: HTMLElement,
+  rows: HTMLElement,
+  starts: readonly number[],
+  y: number,
+): number | null {
+  const bounds = overlay.getBoundingClientRect();
+  if (!bounds.height) return null;
+  const top = y - bounds.top + overlay.scrollTop;
+  const lines = rows.children;
+  let line = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if ((lines[i] as HTMLElement).offsetTop <= top) line = i;
+    else break;
+  }
+  return starts[line] ?? null;
 }
 
 /**
@@ -896,6 +924,9 @@ export function MarkupTextarea({
   onPointerLeave,
   onCompositionStart,
   onCompositionEnd,
+  onDragOver,
+  onDrop,
+  onPaste,
   ...props
 }: TextareaProps & {
   value: string;
@@ -1322,6 +1353,34 @@ export function MarkupTextarea({
           onPointerLeave?.(event);
           pointer.current = null;
           showHover(null);
+        }}
+        onDragOver={(event) => {
+          onDragOver?.(event);
+          // Pictures may land here (the page shows them): a copy, not a move.
+          if (editable && tools?.onImageFiles && event.dataTransfer?.types.includes('Files')) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'copy';
+          }
+        }}
+        onDrop={(event) => {
+          onDrop?.(event);
+          const files = editable && tools?.onImageFiles ? imageFiles(event.dataTransfer?.files) : [];
+          if (event.defaultPrevented || !files.length) return;
+          event.preventDefault();
+          const at =
+            (overlay.current &&
+              rows.current &&
+              lineStartAtPoint(overlay.current, rows.current, starts, event.clientY)) ??
+            event.currentTarget.selectionStart;
+          tools?.onImageFiles?.(files, at, handle);
+        }}
+        onPaste={(event) => {
+          onPaste?.(event);
+          const files = editable && tools?.onImageFiles ? imageFiles(event.clipboardData?.files) : [];
+          // A copied picture comes with its name as text too: the picture wins.
+          if (event.defaultPrevented || !files.length) return;
+          event.preventDefault();
+          tools?.onImageFiles?.(files, event.currentTarget.selectionStart, handle);
         }}
         onCompositionStart={(event) => {
           onCompositionStart?.(event);

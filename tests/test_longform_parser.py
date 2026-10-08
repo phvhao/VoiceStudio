@@ -44,7 +44,8 @@ def test_pathological_inputs_are_linear():
     for blob in ("[slow]" * 5000, "[pause" * 5000, "[voice:" * 5000,
                  "# \n" * 5000, "## \t" * 5000, "##x \n" * 5000, "[a]" * 5000,
                  "[volume " * 5000, "[volume 1" * 5000, "[volume -1.5 " * 5000,
-                 "[volume 3]" * 5000):
+                 "[volume 3]" * 5000, "[image:" * 5000, "[image: a" * 5000,
+                 "[image: a]" * 5000, "x [image: a]\n" * 5000):
         t0 = time.perf_counter()
         parse_script_to_spans(blob, default_voice="v")
         assert time.perf_counter() - t0 < 1.0

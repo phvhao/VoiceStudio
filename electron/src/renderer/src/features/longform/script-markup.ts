@@ -49,6 +49,7 @@ export type MarkupKind =
   | 'volume'
   | 'expression'
   | 'pronunciation'
+  | 'image'
   | 'unknown';
 
 export interface MarkupSegment {
@@ -70,6 +71,10 @@ const SECTION_RE = /^([ \t]*(#{2,3})[ \t]+)(\S.*)$/gm;
 const VOICE_RE = /^\[voice:([^\][]*)\]$/;
 const PAUSE_RE = /^\[\s*pause(?:\s+(\d+(?:\.\d+)?)(?:\s*(ms|s))?)?\s*\]$/i;
 const DELIVERY_RE = /^\[\/?(?:slow|fast|emphasis|spell)\]$/i;
+// `[image: NAME]` (longform_parser._IMAGE_RE): a picture the slideshow and
+// the video show from where it stands; never spoken. Content: no brackets,
+// no line break.
+const IMAGE_RE = /^\[image:([^\][\n]*)\]$/i;
 const EXPRESSIONS = new Set(TAGS.map((tag) => tag.toLowerCase()));
 
 export function classifyToken(token: string): MarkupKind {
@@ -84,7 +89,94 @@ export function classifyToken(token: string): MarkupKind {
   if (DELIVERY_RE.test(token)) return 'delivery';
   if (VOLUME_TOKEN_RE.test(token)) return 'volume';
   if (EXPRESSIONS.has(token.toLowerCase())) return 'expression';
+  if (IMAGE_RE.test(token)) return 'image';
   return 'unknown';
+}
+
+/** How an `[image:]` picture meets the frame; `auto` (no word written) fills it when the shapes are close. */
+export const IMAGE_TAG_FITS = ['auto', 'cover', 'contain'] as const;
+export type ImageTagFit = (typeof IMAGE_TAG_FITS)[number];
+/** The name `[image: none]` uses: back to the book's own backdrop. */
+export const IMAGE_NONE = 'none';
+
+/**
+ * What an `[image: …]` tag shows, as the render reads it: its picture (the
+ * library's name, lower case; null for `none`) and how it fits. Null for
+ * any other token.
+ */
+export function imageTagParts(token: string): { name: string | null; fit: ImageTagFit } | null {
+  const match = IMAGE_RE.exec(token);
+  if (!match) return null;
+  const [name = '', fit = ''] = match[1].trim().split(/\s+/);
+  const picture = name.toLowerCase();
+  const how = fit.toLowerCase() as ImageTagFit;
+  return {
+    name: picture && picture !== IMAGE_NONE ? picture : null,
+    fit: IMAGE_TAG_FITS.includes(how) ? how : 'auto',
+  };
+}
+
+/** An `[image:]` tag for a library picture (null: back to the backdrop), its fit written only when chosen. */
+export function imageToken(name: string | null, fit: ImageTagFit = 'auto'): string {
+  return `[image: ${name ?? IMAGE_NONE}${fit === 'auto' ? '' : ` ${fit}`}]`;
+}
+
+const LEADING_IMAGES_RE = /^[ \t]*(?:\[image:[^\][\n]*\][ \t]*)+/i;
+const IMAGES_ONLY_RE = /^[ \t]*(?:\[image:[^\][\n]*\][ \t]*)+$/i;
+const IMAGE_TAGS_RE = /\[image:[^\][\n]*\]/gi;
+
+/**
+ * Where the tag of the picture already showing from the line that starts at
+ * `lineStart` is: the last of the tags its words start with, else the last
+ * tag of a pictures-only line just above it (those land where this line
+ * starts). Null when none is placed there. Two pictures at one point would
+ * show only the last, so a new one takes this one's place.
+ */
+function shownPictureAt(text: string, lineStart: number): [number, number] | null {
+  const lastTag = (from: number, to: number): [number, number] => {
+    let last: RegExpExecArray | null = null;
+    for (const match of text.slice(from, to).matchAll(IMAGE_TAGS_RE)) last = match;
+    return [from + last!.index, from + last!.index + last![0].length];
+  };
+  const newline = text.indexOf('\n', lineStart);
+  const lead = LEADING_IMAGES_RE.exec(text.slice(lineStart, newline < 0 ? text.length : newline));
+  if (lead) return lastTag(lineStart, lineStart + lead[0].length);
+  if (lineStart === 0) return null;
+  const aboveStart = text.lastIndexOf('\n', lineStart - 2) + 1;
+  return IMAGES_ONLY_RE.test(text.slice(aboveStart, lineStart - 1))
+    ? lastTag(aboveStart, lineStart - 1)
+    : null;
+}
+
+/**
+ * Put an `[image:]` tag on a line of its own where the caret's line starts,
+ * so the picture shows as that line is read; a picture already showing from
+ * there gives up its place. The render takes a tag alone on its line out with
+ * that line's own line break, so the voice reads exactly what it read before
+ * — a blank line keeps the paragraph break it makes.
+ */
+export function insertImageLine(text: string, caret: number, token: string): MarkupEdit {
+  const [at] = clampRange(text, caret, caret);
+  const lineStart = text.lastIndexOf('\n', at - 1) + 1;
+  const shown = shownPictureAt(text, lineStart);
+  if (shown) return edit(text, shown[0], shown[1], token, shown[0] + token.length);
+  return edit(text, lineStart, lineStart, `${token}\n`, lineStart + token.length);
+}
+
+/**
+ * Put an `[image:]` tag at the start of the caret's line, before its words
+ * (Stories: every line is a text of its own, so the picture shows as that
+ * line is read); a picture already showing from there gives up its place.
+ * The space after it goes with it when it is taken out.
+ */
+export function insertImageAtLineStart(text: string, caret: number, token: string): MarkupEdit {
+  const [at] = clampRange(text, caret, caret);
+  const lineStart = text.lastIndexOf('\n', at - 1) + 1;
+  const shown = shownPictureAt(text, lineStart);
+  if (shown) return edit(text, shown[0], shown[1], token, shown[0] + token.length);
+  const rest = text.slice(lineStart);
+  const insert = rest && !/^\s/.test(rest) ? `${token} ` : token;
+  return edit(text, lineStart, lineStart, insert, lineStart + insert.length);
 }
 
 /**
@@ -805,6 +897,17 @@ export function removeToken(text: string, token: MarkupToken): MarkupEdit {
     const inner = token.text.slice(2, -2);
     const word = inner.includes('|') ? inner.slice(0, inner.indexOf('|')) : inner;
     return replaceRange(text, token.start, token.end, word, { select: true });
+  }
+  if (token.kind === 'image') {
+    // A picture alone on its line goes with its line: a blank line left
+    // behind would start a new paragraph (a pause the book never had).
+    const lineStart = text.lastIndexOf('\n', token.start - 1) + 1;
+    const newline = text.indexOf('\n', token.end);
+    const lineEnd = newline < 0 ? text.length : newline;
+    if (!text.slice(lineStart, token.start).trim() && !text.slice(token.end, lineEnd).trim()) {
+      if (newline >= 0) return replaceRange(text, lineStart, lineEnd + 1, '');
+      return replaceRange(text, Math.max(0, lineStart - 1), lineEnd, '');
+    }
   }
   const after = text[token.end] === ' ' && (token.start === 0 || /\s/.test(text[token.start - 1]));
   return replaceRange(text, token.start, token.end + (after ? 1 : 0), '');

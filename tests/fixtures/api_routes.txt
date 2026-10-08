@@ -4,6 +4,7 @@ DELETE /api/auth/session
 DELETE /api/mcp/bindings/{client_id}
 DELETE /api/settings/hf-token
 DELETE /audiobook/export/html/{export_id}
+DELETE /audiobook/export/video/{export_id}
 DELETE /batch/jobs/{job_id}
 DELETE /calls/{call_id}
 DELETE /dub/history
@@ -16,6 +17,7 @@ DELETE /glossary/{project_id}
 DELETE /glossary/{project_id}/{term_id}
 DELETE /history
 DELETE /history/{history_id}
+DELETE /longform/images/{name}
 DELETE /longform/jobs/{job_id}
 DELETE /marketplace/{filename}
 DELETE /models/{repo_id:path}
@@ -62,6 +64,7 @@ GET /audio/{audio_id}.opus
 GET /audio/{audio_id}/quality
 GET /audiobook/export/html/templates
 GET /audiobook/export/html/{export_id}
+GET /audiobook/export/video/{export_id}
 GET /audiobook/jobs
 GET /audiobook/sampling
 GET /audiobook/timeline/{output}
@@ -133,6 +136,8 @@ GET /history
 GET /jobs
 GET /jobs/{job_id}
 GET /jobs/{job_id}/events
+GET /longform/images
+GET /longform/images/{name}
 GET /longform/jobs
 GET /marketplace/browse
 GET /media-tools/status
@@ -209,6 +214,7 @@ POST /audiobook
 POST /audiobook/cover
 POST /audiobook/export/html
 POST /audiobook/export/html/preview
+POST /audiobook/export/video
 POST /audiobook/import
 POST /audiobook/outline
 POST /audiobook/plan
@@ -268,6 +274,7 @@ POST /gallery/voices/{voice_id}/to-profile
 POST /generate
 POST /glossary/{project_id}
 POST /glossary/{project_id}/auto-extract
+POST /longform/images
 POST /longform/render
 POST /longform/retake
 POST /longform/takes

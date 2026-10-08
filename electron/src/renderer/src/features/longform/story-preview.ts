@@ -1,6 +1,7 @@
 import { apiFetch, apiJson } from '@/lib/api/client';
 import { queryClient } from '@/lib/query';
 import { exportStoryAudio, exportStems } from '@shared/utils/storyExport';
+import { extractImageMarks } from '@shared/utils/longformParser';
 import { overridesToRequest, readingToRequest } from '@shared/utils/longformOverrides';
 import { resolveStoryVoice } from './story-inputs';
 import type { Draft, Line } from './longform-session';
@@ -70,7 +71,8 @@ export function storyChunkBody(
  */
 export function linePreviewKey(draft: Draft, line: Line): string {
   return JSON.stringify([
-    line.text,
+    // As the render reads it: the line's pictures change no audio.
+    extractImageMarks(line.text)[0],
     line.character ?? null,
     line.profileId,
     line.speed ?? null,

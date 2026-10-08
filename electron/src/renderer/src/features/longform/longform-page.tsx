@@ -22,7 +22,8 @@ import { MarkupTextarea } from './markup-textarea';
 import { MarkupEditorTools } from './markup-editor-tools';
 import { measureWidth, useEditorMeasure } from './editor-measure';
 import { EditorStatusBar, MeasureToggle, createCaretSource } from './editor-status-bar';
-import { passageBounds, previewPassage } from './script-markup';
+import { insertImageLine, passageBounds, previewPassage } from './script-markup';
+import { useImagePicker } from './image-library';
 import { usePassagePreview } from './passage-preview';
 import { usePreviewLock, usePreviewSettings, useRetakeHearing } from './preview-run';
 import { TakeProgressText } from './generation-progress';
@@ -38,6 +39,7 @@ import { ContentsRail } from './contents-rail';
 import { outlineStats, scriptOutline } from './script-outline';
 import { useEditorZoom, useEditorZoomInput, zoomedText } from './editor-zoom';
 import { ExportHtmlButton } from './html-export-dialog';
+import { ExportVideoButton } from './video-export-dialog';
 import { castVoice } from './cast-map';
 import { CastSettings, showsCastPanel } from './cast-settings';
 import { bookAutoLevels } from './auto-levels';
@@ -61,6 +63,8 @@ import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { WaveformPlayer } from '@/components/waveform-player';
 import { SyncedAudiobookPlayer } from './synced-audiobook-player';
+import { StoryReaderButton } from './story-reader';
+import { coverUrl } from './slideshow';
 import { LongformGeneratePanel } from './generate-panel';
 import { generateBlockers } from './generate-blocker';
 import { LONGFORM_TARGET } from './generate-gates';
@@ -187,6 +191,8 @@ export function LongformPage({ mode }: { mode: Mode }) {
       },
     [set],
   );
+  // The book's pictures: each tag on a line of its own.
+  const imagePicker = useImagePicker(insertImageLine);
   const usable =
     mode === 'audiobook'
       ? draft.script.trim().length > 0
@@ -491,10 +497,12 @@ export function LongformPage({ mode }: { mode: Mode }) {
                 data-slot="audiobook-editor"
                 className="flex flex-1 flex-col overflow-clip rounded-xl border border-border/50 bg-background/30 focus-within:border-border"
               >
+                {imagePicker.dialog}
                 <MarkupToolbar
                   className="shrink-0 rounded-none border-0 border-b border-border/50"
                   getTarget={scriptTarget}
                   disabled={locked}
+                  images={imagePicker.tools}
                   profiles={profiles}
                   loading={profilesLoading}
                   scriptNames={names}
@@ -596,6 +604,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     className="flex min-h-96 min-w-0 flex-1 flex-col"
                     getTarget={scriptTarget}
                     disabled={locked}
+                    images={imagePicker.tools}
                     headings
                     profiles={profiles}
                     loading={profilesLoading}
@@ -737,6 +746,7 @@ export function LongformPage({ mode }: { mode: Mode }) {
                       </Button>
                     )}
                     <ExportHtmlButton draft={draft} mode={mode} disabled={exporting} />
+                    <ExportVideoButton draft={draft} mode={mode} disabled={exporting} />
                     <Button
                       variant="ghost"
                       size="sm"
@@ -755,13 +765,22 @@ export function LongformPage({ mode }: { mode: Mode }) {
                     chapters={draft.outputChapters}
                     output={draft.output}
                     lang={bookLanguageTag(draft.language)}
+                    cover={coverUrl(draft.cover)}
                   />
                 ) : (
-                  <WaveformPlayer
-                    showWaveform={false}
-                    src={apiPath('/audio/' + encodeURIComponent(draft.output))}
-                    source={'longform-' + mode}
-                  />
+                  <div className="space-y-2">
+                    <WaveformPlayer
+                      showWaveform={false}
+                      src={apiPath('/audio/' + encodeURIComponent(draft.output))}
+                      source={'longform-' + mode}
+                    />
+                    <StoryReaderButton
+                      src={apiPath('/audio/' + encodeURIComponent(draft.output))}
+                      output={draft.output}
+                      lang={bookLanguageTag(draft.language)}
+                      cover={coverUrl(draft.cover)}
+                    />
+                  </div>
                 )}
                 <SpeechCheckReport chapters={draft.outputChapters} />
               </section>

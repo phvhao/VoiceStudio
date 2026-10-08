@@ -63,6 +63,12 @@ dependencies = [
     # Directly used by video_context; 12.1 adds get_flattened_data(), the
     # replacement for getdata() ahead of its Pillow 14 removal.
     "pillow>=12.1.0",
+    # A book's video (services.book_video) burns its captions with libass,
+    # which cannot read the bundled WOFF2 reading fonts: fontTools writes them
+    # out as TTF, and needs brotli to read WOFF2. Both were already locked
+    # (via matplotlib and gradio); named here because the app uses them.
+    "fonttools>=4.60",
+    "brotli>=1.1",
     # 0.9.21+ Linux x86_64 wheels are built with -march=native
     # (spotify/pedalboard#454), so importing pedalboard SIGILLs on CPUs
     # that lack the builder's SIMD set. 0.9.20 is the last known-good

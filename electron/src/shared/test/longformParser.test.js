@@ -53,6 +53,10 @@ describe('parseScriptToSpans — guards & rounding', () => {
       '[volume 1'.repeat(5000),
       '[volume -1.5 '.repeat(5000),
       '[volume 3]'.repeat(5000),
+      '[image:'.repeat(5000),
+      '[image: a'.repeat(5000),
+      '[image: a]'.repeat(5000),
+      'x [image: a]\n'.repeat(5000),
     ]) {
       const t0 = Date.now();
       parseScriptToSpans(blob, { defaultVoice: 'v' });
