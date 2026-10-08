@@ -90,7 +90,7 @@ def load_audio(source: PathOrBuf) -> tuple[torch.Tensor, int]:
         except RuntimeError:
             # libsndfile does not support every accepted upload container (AAC,
             # M4A in particular). Decode with the already-installed ffmpeg.
-            from services.ffmpeg_utils import find_ffmpeg
+            from services.ffmpeg_utils import find_ffmpeg, local_inputs_only
 
             ffmpeg = find_ffmpeg()
             if not ffmpeg:
@@ -128,10 +128,13 @@ def load_audio(source: PathOrBuf) -> tuple[torch.Tensor, int]:
                     if limit <= 0:
                         raise ValueError("Audio exceeds the decoding size limit; free temporary storage or use a shorter clip.")
                     subprocess.run(
-                        [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-                         "-protocol_whitelist", "file,pipe", "-i", filename,
-                         "-map", "0:a:0", "-f", "wav", "-c:a", "pcm_f32le",
-                         "-fs", str(limit), "pipe:1"],
+                        local_inputs_only(
+                            [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+                             "-i", filename,
+                             "-map", "0:a:0", "-f", "wav", "-c:a", "pcm_f32le",
+                             "-fs", str(limit), "pipe:1"],
+                            tool="ffmpeg",
+                        ),
                         stdout=decoded, stderr=subprocess.PIPE, check=True, timeout=120,
                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                     )

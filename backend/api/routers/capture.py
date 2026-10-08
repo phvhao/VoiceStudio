@@ -23,6 +23,7 @@ import time
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from typing import Optional
+from core.path_security import upload_suffix
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.capture")
@@ -91,7 +92,7 @@ async def transcribe_audio(
     import asyncio
 
     # Save upload to a temp file (all backends need a file path)
-    ext = os.path.splitext(audio.filename or "audio.wav")[1] or ".wav"
+    ext = upload_suffix(audio.filename, ".wav") or ".wav"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
     try:
         content = await audio.read()

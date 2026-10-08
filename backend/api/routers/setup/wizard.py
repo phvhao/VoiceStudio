@@ -16,7 +16,7 @@ import os
 import platform as _platform
 import sys
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from api.schemas import SetupStatusResponse, PreflightResponse
 from core.device_caps import KERNEL_RISK_MARKER, is_windows_on_arm
@@ -24,6 +24,7 @@ from core.device_caps import KERNEL_RISK_MARKER, is_windows_on_arm
 # module in the setup import graph) so the wizard gate, the /models header, and
 # the per-install disk guard can't drift apart.
 from .models import REQUIRED_MODELS, hf_cache_dir, is_cached, MIN_FREE_GB, disk_free_bytes
+from core.browser_guard import reject_cross_site_get
 
 logger = logging.getLogger("omnivoice.setup.wizard")
 router = APIRouter()
@@ -385,7 +386,7 @@ def _ram_gb() -> float:
         return 0.0
 
 
-@router.get("/setup/preflight", response_model=PreflightResponse)
+@router.get("/setup/preflight", response_model=PreflightResponse, dependencies=[Depends(reject_cross_site_get)])
 def preflight():
     """One-shot system health check for the wizard."""
     checks: list[dict] = []

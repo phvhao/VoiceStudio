@@ -51,7 +51,7 @@ def _extract_keyframes(
     """
     import subprocess
 
-    from services.ffmpeg_utils import find_ffmpeg
+    from services.ffmpeg_utils import find_ffmpeg, local_inputs_only
 
     # Resolve ffmpeg the way every other call site does. `shutil.which("ffmpeg")`
     # only finds a system install: the binary imageio-ffmpeg ships — the app's
@@ -74,11 +74,11 @@ def _extract_keyframes(
         out_path = os.path.join(out_dir, f"frame_{i:04d}.jpg")
         try:
             subprocess.run(
-                [
+                local_inputs_only([
                     ffmpeg, "-ss", str(ts), "-i", video_path,
                     "-frames:v", "1", "-q:v", "3",
                     "-y", out_path,
-                ],
+                ], tool="ffmpeg"),
                 capture_output=True, timeout=10,
             )
             if os.path.exists(out_path) and os.path.getsize(out_path) > 0:

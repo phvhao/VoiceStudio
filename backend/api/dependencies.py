@@ -29,6 +29,7 @@ from core.auth import (
     principal_for,
     remote_api_key,
 )
+from core.browser_guard import reject_cross_site_get
 from core.csrf import SAFE_HTTP_METHODS, cookie_csrf_allowed
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -248,8 +249,10 @@ def require_admin_action(request: Request) -> None:
 
     A small number of legacy GET endpoints have real side effects. For example,
     an engine health check may spawn a sidecar process. Such routes cannot use
-    :func:`require_admin`'s bare-server discovery exception.
+    :func:`require_admin`'s bare-server discovery exception, and another
+    website must not be able to trigger them with a link or an image.
     """
+    reject_cross_site_get(request)
     host = request.client.host if request.client else None
     if is_loopback(host):
         return

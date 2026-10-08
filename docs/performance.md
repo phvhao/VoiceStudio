@@ -92,6 +92,8 @@ None of them are required — the defaults are chosen for the common case.
 | `OMNIVOICE_PROMPT_DISK_CACHE` | `1` | Persist encoded voice-clone references (`prompt_cache/` in the app data dir, ~10 KB per voice, 32 newest kept) so the first generation with a known voice after a restart skips the reference re-encode and any auto-transcription. Set `0` to keep the cache in memory only. |
 | `OMNIVOICE_LONGFORM_CACHE_MAX_GB` | `2` | Size of the Audiobook and Stories cache of rendered chapters, lines and sentences (`longform_cache` in the outputs folder), which lets a re-render after an edit synthesize only what changed. When it is full, the audio used least recently goes first, so a book you keep editing keeps the chapters it reuses. 2 GB holds about 6 hours of book; raise it if you edit longer books, or two long books in turn. |
 | `OMNIVOICE_IDLE_TIMEOUT_S` | `900` | Seconds of idle before the TTS model unloads to free memory. Raise it (e.g. `3600`) if you generate in bursts and dislike the ~8 s reload; lower it on tight-memory machines. An Audiobook or Stories render that reuses every chapter from the cache does not load the model, so re-exporting a finished book pays no reload. |
+| `OMNIVOICE_OFFLOAD_AFTER_GENERATION` | off | `1` moves the built-in TTS model to system RAM once generation finishes, and back on the next generation. Same toggle as **Settings → Performance & Device → Memory management** (the env var wins over the UI). See [Offload to RAM after generation](#offload-to-ram-after-generation). |
+| `OMNIVOICE_OFFLOAD_AFTER_GENERATION_GRACE_S` | `3` | How long the GPU must stay idle after a generation before that offload runs. |
 | `OMNIVOICE_SIDECAR_IDLE_TIMEOUT_S` | `300` | Same idea for sidecar engines (IndexTTS 2.5 etc.). |
 | `MIOPEN_FIND_MODE` | `FAST` | MIOpen (ROCm) algorithm search. The default exhaustive search costs ~18 s every time it sees a new convolution shape — shape-varying vocoders like IndexTTS's BigVGAN paid it on nearly every chunk. `FAST` finds a near-optimal kernel in well under a second; the backend sets it at startup, only MIOpen reads it (ROCm on Linux or Windows; inert on CUDA/MPS/CPU), and an exported value always wins over the default. |
 | `OMNIVOICE_LLM_CONCURRENCY` | `6` | Parallel LLM translation calls during a dub. Raise for a fast API endpoint, lower if your provider rate-limits. |
@@ -141,11 +143,12 @@ editor, profile previews, and streaming).
 | The host synthesizes on the CPU **and** the text is over 1200 characters | A heads-up that this generation may exceed the time budget |
 | The host synthesizes on Apple Silicon (MPS) **and** the text is over 1200 characters | The same heads-up — MPS gets the accelerated-host budget (`OMNIVOICE_GENERATE_TIMEOUT_S`), which a long render can still legitimately exceed |
 
-**Why 1200 characters:** it is the same figure the budget itself uses. The first
-1200 characters get the flat base budget, and only past that does the budget
-start growing (+1 s per 40 characters). Below the threshold you are inside a
-budget the backend already considers generous, so ordinary sentences on a CPU
-laptop stay quiet.
+**Why 1200 characters:** this advisory threshold matches the free allowance in
+the legacy accelerated/explicit-budget rule: the first 1200 characters get the
+flat base, then the budget grows by 1 s per 40 characters. Default CPU budgeting
+uses a separate rule: its 4 s per character exceeds the 600 s floor above 150
+characters, so a 400-character passage receives 1600 s even though no length
+warning appears. The warning threshold itself is unchanged.
 
 **Which base applies:**
 
@@ -158,16 +161,25 @@ laptop stay quiet.
 **CPU hosts scale much faster than the +1 s per 40 characters.** A CPU render is
 often 10-50x slower than on a GPU, so while `OMNIVOICE_CPU_GENERATE_TIMEOUT_S` is
 left at its default the budget grows at 4 s per input character (a 400-character
-passage gets about 27 minutes), up to a 2-hour ceiling that still catches a
-genuinely wedged engine. Each streamed chunk is budgeted from its own text, and
-loading the model is not part of this clock. Setting the CPU budget explicitly
-turns this scaling off and uses your value as the floor (plus the standard
-+1 s per 40 characters) — an explicit setting is always authoritative.
+passage gets about 27 minutes), capped at 2 hours of base compute allowance.
+Queueing, model loading and the existing progress-extension allowance are
+separate. Each streamed chunk is budgeted from its own text; a silent, wedged job
+exhausts its compute allowance. Setting the CPU budget explicitly turns this
+scaling off and uses your value as the floor (plus the standard +1 s per 40
+characters) — an explicit setting is always authoritative.
 
-The desktop app and MCP tools never wait less than the backend does: because the
-backend budgets the text *after* number normalization (a six-digit number grows
-about 11x), a CPU host on the default budget reports its 2-hour ceiling and
-clients wait for that rather than guessing from the typed length.
+The desktop backstop accounts for the reported automatic CPU ceiling on local
+CPU-routed jobs with the default budget. MCP tools conservatively allow that
+ceiling whenever the CPU budget is not explicitly set. Both waits also include
+model-load, queue, sidecar and progress-extension allowances. The ceiling avoids
+guessing the compute budget from typed text that number normalization or
+pronunciation rules can expand before synthesis.
+
+MCP generation also allows a separate reference-transcription job before
+synthesis for clone profiles without a cached transcript. That job uses the
+generation base budget, its own queue and progress extension; it does not use
+the standalone transcription timeout. MCP includes this allowance conservatively
+because it cannot inspect the backend's cached reference transcript.
 
 Both rows above can be overridden, and the two vars are independent:
 
@@ -270,6 +282,38 @@ component. Believe the message; Flush only fixes memory contention. Also
 note the app already frees memory on its own when idle
 (`OMNIVOICE_IDLE_TIMEOUT_S`) — Flush is for when you need the memory *now*,
 between jobs.
+
+## Offload to RAM after generation
+
+For machines that share the GPU with something else that needs a lot of VRAM,
+such as a local LLM, a game or an image model. **Settings → Performance &
+Device → Memory management → Move the voice model to system RAM after
+generation** (off by default; `OMNIVOICE_OFFLOAD_AFTER_GENERATION=1` does the
+same and wins over the toggle).
+
+- When a generation finishes and the GPU has been idle for
+  `OMNIVOICE_OFFLOAD_AFTER_GENERATION_GRACE_S` (3 s), the built-in OmniVoice
+  model moves from the GPU to system RAM. The next generation moves it back
+  first. That takes a few seconds, much less than the ~8 s reload after
+  **Unload**.
+- Nothing moves while another generation is running or queued, or while a
+  dub, batch or audiobook job is active; during such a job the check repeats
+  every 10 s, so the model still moves once the job finishes. A run of
+  back-to-back generations pays for one move at the end, not one per
+  generation.
+- With `OMNIVOICE_FLASHINFER` on, its fused weights and captured CUDA graphs
+  are released with the move and rebuilt when the model is back on the GPU.
+  The dub's transcription offload does the same.
+- NVIDIA (CUDA), AMD (ROCm), Intel XPU and Apple Silicon (MPS) are supported.
+  On Apple Silicon memory is unified: the move frees the GPU's working set for
+  other GPU apps, not total RAM. On CPU the model already lives in RAM, so the
+  setting does nothing.
+- If another app has taken the VRAM when the next generation starts, the move
+  back fails. That generation then runs on the CPU (slower, not an error), and
+  the next one tries again.
+- Engines that run in their own process (sidecars such as IndexTTS) are not
+  moved. They release their memory on their own idle timeout
+  (`OMNIVOICE_SIDECAR_IDLE_TIMEOUT_S`).
 
 If the timeout error keeps recurring even right after an unload, see
 [troubleshooting §14](install/troubleshooting.md#14-cant-reach-the-local-backend-during-generation--transcription--dubbing)

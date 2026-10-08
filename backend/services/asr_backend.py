@@ -350,7 +350,7 @@ def _decode_audio_16k_mono(audio_path: str):
     if not isinstance(audio_path, (str, os.PathLike)):
         return np.asarray(audio_path, dtype=np.float32).reshape(-1)
 
-    from services.ffmpeg_utils import MediaToolUnavailableError, find_ffmpeg
+    from services.ffmpeg_utils import MediaToolUnavailableError, find_ffmpeg, local_inputs_only
 
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -361,10 +361,10 @@ def _decode_audio_16k_mono(audio_path: str):
             "corrupt or the wrong architecture — reinstall it or clear the "
             "imageio-ffmpeg cache."
         )
-    cmd = [
+    cmd = local_inputs_only([
         ffmpeg, "-nostdin", "-threads", "0", "-i", audio_path,
         "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le", "-ar", "16000", "-",
-    ]
+    ], tool="ffmpeg")
     try:
         out = subprocess.run(cmd, capture_output=True, check=True).stdout
     except OSError as e:

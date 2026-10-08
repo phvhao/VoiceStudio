@@ -86,6 +86,35 @@ class StreamTTSRequest(BaseModel):
     engine: Optional[str] = None
 
 
+EMO_AUDIO_DETAIL = (
+    "emo_audio must name an audio clip stored in VoiceStudio's voices or "
+    "outputs folder."
+)
+
+
+def resolve_emotion_clip(value: object) -> str:
+    """Resolve an ``emo_audio`` reference to a file VoiceStudio owns.
+
+    Accepts a bare filename in the voices folder, or a path inside the voices
+    or outputs folders (voice-gallery imports live there). Anything else —
+    including arbitrary absolute paths — is refused, so a socket client can
+    never make the engine read an unrelated file from disk.
+    """
+    from core.config import OUTPUTS_DIR, VOICES_DIR
+    from core.path_security import UnsafePath, resolve_within
+
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(EMO_AUDIO_DETAIL)
+    for root in (VOICES_DIR, OUTPUTS_DIR):
+        try:
+            candidate = resolve_within(root, value.strip())
+        except (OSError, UnsafePath):
+            continue
+        if candidate.is_file() and not candidate.is_symlink():
+            return str(candidate)
+    raise ValueError(EMO_AUDIO_DETAIL)
+
+
 def build_stream_kwargs(data: dict) -> dict:
     """Generation kwargs for one streaming request, voice profile resolved.
 
@@ -104,7 +133,7 @@ def build_stream_kwargs(data: dict) -> dict:
     if data.get("emo_text"):
         kw["emo_text"] = data["emo_text"]
     if data.get("emo_audio"):
-        kw["emo_audio"] = data["emo_audio"]
+        kw["emo_audio"] = resolve_emotion_clip(data["emo_audio"])
     # Default 1.0 when absent: a missing key must not trip the
     # `!= 1.0` branch into a KeyError (any minimal request that
     # omitted emo_alpha got an error frame instead of audio).
@@ -117,6 +146,7 @@ def build_stream_kwargs(data: dict) -> dict:
         try:
             from core.db import db_conn
             from core.config import VOICES_DIR
+            from core.path_security import contained_join
             with db_conn() as conn:
                 row = conn.execute(
                     "SELECT * FROM voice_profiles WHERE id=?",
@@ -124,13 +154,9 @@ def build_stream_kwargs(data: dict) -> dict:
                 ).fetchone()
             if row:
                 if row["is_locked"] and row["locked_audio_path"]:
-                    kw["ref_audio"] = os.path.join(
-                        VOICES_DIR, row["locked_audio_path"]
-                    )
+                    kw["ref_audio"] = contained_join(VOICES_DIR, row["locked_audio_path"])
                 elif row["ref_audio_path"]:
-                    kw["ref_audio"] = os.path.join(
-                        VOICES_DIR, row["ref_audio_path"]
-                    )
+                    kw["ref_audio"] = contained_join(VOICES_DIR, row["ref_audio_path"])
                 if row["ref_text"]:
                     kw["ref_text"] = row["ref_text"]
                 if row["instruct"] and not data.get("instruct"):
@@ -373,8 +399,12 @@ async def ws_tts(websocket: WebSocket):
                     })
 
                 from services.engine_memory import evict_other_tts_engines
+                try:
+                    kw = build_stream_kwargs(data)
+                except ValueError as exc:
+                    await websocket.send_json({"type": "error", "detail": str(exc)})
+                    continue
                 await evict_other_tts_engines(backend.id)
-                kw = build_stream_kwargs(data)
 
                 # Normalized exactly once on the whole text, then chunked
                 # (see split_stream_sentences). The request's `language` is all

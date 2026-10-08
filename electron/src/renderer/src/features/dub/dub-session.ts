@@ -1581,8 +1581,9 @@ async function watchGeneration(taskId: string, signal: AbortSignal) {
         patch({
           tracks: Array.isArray(event.tracks) ? (event.tracks as string[]) : [],
           generatedTiming: dubSession.state.pendingTiming || 'strict_slot',
+          // QC marks measured the previous track; the new one is unchecked.
           segments: dubSession.state.segments.map((segment, index) => ({
-            ...segment,
+            ...invalidateQc(segment),
             sync_ratio:
               typeof syncScores[index] === 'number' ? (syncScores[index] as number) : undefined,
             fit_status:

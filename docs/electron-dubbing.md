@@ -61,6 +61,14 @@ TTS, fitting, mixing and export. Electron reuses Tauri's speaker binding and
 segment generation helpers. A stream close without a terminal event is a failure,
 not success. Cancellation aborts the HTTP stream and requests backend task/job
 cancellation. Edits, target language, track metadata and task IDs persist locally across reloads.
+A generation publishes its track only once it finishes: cancelling it, or importing or
+re-transcribing subtitles while it runs, keeps the previous track (the latter asks for a new
+generation). Fresh segment speech enters the cache behind segment previews and partial
+regeneration only when its track is published, together with its fingerprint; a new track starts
+without the previous track's QC marks, and a dub that finishes as cancellation arrives reports
+done. Subtitles imported, or a dub published, during transcription replace its result, and
+imported cues keep their matched voice references: each transcription writes its references to
+its own folder.
 Interrupted preparation/generation offers Resume, which reads the existing task
 and replays its stream; generation is never resubmitted just because the UI reloaded.
 Interrupted transcription offers an explicit Retry against the existing prepared
@@ -94,7 +102,14 @@ Malformed, overlapping, or duration-clamped cue counts remain visible in the sid
 Failed imports preserve the current edits. Generated track buttons clear on successful
 replacement to avoid presenting older audio as the new subtitles' output.
 URL import runs only after clicking Ingest; it uses the backend's existing yt-dlp
-pipeline. Explicit cookies.txt selection is available under URL sign-in options; optional caption downloads are available.
+pipeline. URL imports (here and in the voice gallery) accept only `http://` and
+`https://` links and refuse addresses on this computer or the local network,
+including redirects to them. Live streams and upcoming premieres can't be
+imported until the recording is available. Voice-gallery clips download the
+audio track and cut the clip on this computer. To import from a media server on your own network,
+set `OMNIVOICE_ALLOW_PRIVATE_URL_IMPORTS=1` for the backend (for example in
+`~/.config/omnivoice/env`) and restart. Uploads accept common audio and video
+file types only; a playlist or manifest renamed as a video is refused. Explicit cookies.txt selection is available under URL sign-in options; optional caption downloads are available.
 
 Translation quality uses the existing backend Fast, Autofit and Cinematic modes.
 The choice persists in the working draft and saved project (`translateQuality`),

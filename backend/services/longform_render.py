@@ -50,6 +50,8 @@ from typing import Iterable, Optional, Sequence
 from services.pronunciation import has_inline_overrides
 from services.text_normalization import changed_by_quote_and_caps_rules
 
+from services.ffmpeg_utils import local_inputs_only
+
 _BITRATE_RE = re.compile(r"^\d{2,3}k$")
 #: Default ceiling for the content-addressed chapter cache. Above this, the
 #: oldest cached chapter WAVs are evicted (LRU by mtime). Override via
@@ -1670,21 +1672,21 @@ def build_loudnorm_measure_cmd(ffmpeg: str, concat_list_path: str, filt: str) ->
     """Pure argv for the measure pass: decode the concat list, run the
     print_format=json loudnorm filter, discard audio to the portable null muxer.
     Input segment is byte-identical to build_render_cmd so measured == muxed."""
-    return [
+    return local_inputs_only([
         ffmpeg, "-y", "-hide_banner", "-loglevel", "info",
         "-f", "concat", "-safe", "0", "-i", str(concat_list_path),
         "-af", filt, "-f", "null", "-",
-    ]
+    ], tool="ffmpeg")
 
 
 def build_true_peak_cmd(ffmpeg: str, path: str) -> list[str]:
     """Pure argv that meters a finished file's true peak (EBU R128 ``ebur128``,
     oversampled) and discards the audio. ``framelog=verbose`` keeps the
     per-frame lines out of the captured log; only the summary is printed."""
-    return [
+    return local_inputs_only([
         ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(path),
         "-af", "ebur128=peak=true:framelog=verbose", "-f", "null", "-",
-    ]
+    ], tool="ffmpeg")
 
 
 def parse_true_peak(stderr_text: Optional[str]) -> Optional[float]:
@@ -1881,7 +1883,7 @@ def build_render_cmd(
         if embed_cover:
             cmd += ["-c:v", "copy"]
         cmd += ["-movflags", "+faststart", "-f", "mp4", str(out_path)]
-    return cmd
+    return local_inputs_only(cmd, tool="ffmpeg")
 
 
 # ── Render summary (what a finished render WAS) ─────────────────────────────

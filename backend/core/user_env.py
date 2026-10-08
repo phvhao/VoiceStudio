@@ -17,6 +17,14 @@ from typing import Optional
 
 USER_ENV_PATH = os.path.expanduser("~/.config/omnivoice/env")
 
+# Where a desktop user sets a backend variable by hand, for refusal messages
+# that name one (core.browser_guard, core.url_safety). Stdlib-only module, so
+# the guarded yt-dlp subprocess can import it too.
+DESKTOP_ENV_FILE_HINT = (
+    "for the desktop app, as a line in ~/.config/omnivoice/env on macOS and "
+    "Linux, or %USERPROFILE%\\.config\\omnivoice\\env on Windows"
+)
+
 
 def _read_lines(path: str) -> list[str]:
     try:

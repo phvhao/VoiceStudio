@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 
 from core import archetypes
@@ -43,6 +43,7 @@ from core.audio_validation import is_playable_wav, resolve_regular_file
 from core.config import OUTPUTS_DIR, VOICES_DIR
 from core.file_cleanup import FileCleanupError, unlink_if_present
 from services import gallery
+from core.browser_guard import reject_cross_site_get
 
 logger = logging.getLogger("omnivoice.archetypes")
 
@@ -553,7 +554,7 @@ def preview_archetype_state(archetype_id: str):
     return {"source": source, "message": message}
 
 
-@router.get("/archetypes/{archetype_id}/preview")
+@router.get("/archetypes/{archetype_id}/preview", dependencies=[Depends(reject_cross_site_get)])
 async def preview_archetype(
     archetype_id: str,
     local: bool = Query(False, description="Bypass gallery audio after a client decode failure"),

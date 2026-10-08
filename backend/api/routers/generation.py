@@ -16,13 +16,14 @@ import threading
 import traceback
 from pathlib import Path
 from typing import Optional, Literal
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Request
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 import sqlite3
 from core.db import db_conn, ensure_schema
 from core.config import OUTPUTS_DIR, VOICES_DIR
+from core.path_security import contained_join
 import functools
 from services.model_manager import (
     get_model, _gpu_pool, run_on_gpu_pool_guarded, GpuJobTimeoutError,
@@ -36,6 +37,7 @@ from core import event_bus
 from core.render_trace import call as trace_call
 from core.logging_utils import log_safe
 from omnivoice.utils.voice_design import heal_design_instruct
+from core.browser_guard import reject_cross_site_get
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.generate")
@@ -79,8 +81,8 @@ def _cached_ogg(key: tuple[str, int, int, int]) -> bytes | None:
         return encoded
 
 
-@router.get("/audio/{audio_id}.ogg")
-@router.get("/audio/{audio_id}.opus")
+@router.get("/audio/{audio_id}.ogg", dependencies=[Depends(reject_cross_site_get)])
+@router.get("/audio/{audio_id}.opus", dependencies=[Depends(reject_cross_site_get)])
 async def generated_ogg_opus(audio_id: str):
     """Serve the same render as /audio/<id>.wav, encoded as Ogg/Opus."""
     if not re.fullmatch(r"[0-9a-f]{8}", audio_id):
@@ -429,7 +431,7 @@ def _resolve_profile_conditioning(row, *, ref_text=None, instruct=None,
         if out["seed"] is None and row["seed"] is not None:
             out["seed"] = row["seed"]
     elif row["is_locked"] and row["locked_audio_path"]:
-        out["ref_audio_path"] = os.path.join(VOICES_DIR, row["locked_audio_path"])
+        out["ref_audio_path"] = contained_join(VOICES_DIR, row["locked_audio_path"])
         if not out["ref_text"]:
             out["ref_text"] = row["ref_text"]
         if not out["instruct"]:
@@ -439,9 +441,7 @@ def _resolve_profile_conditioning(row, *, ref_text=None, instruct=None,
     elif profile_kind == "design":
         # Rendered sample (if present) carries the voice identity; instruct
         # alone is the fallback for legacy archetype rows.
-        out["ref_audio_path"] = (
-            os.path.join(VOICES_DIR, row["ref_audio_path"]) if row["ref_audio_path"] else None
-        )
+        out["ref_audio_path"] = contained_join(VOICES_DIR, row["ref_audio_path"])
         if out["ref_audio_path"] and not out["ref_text"] and row["ref_text"]:
             out["ref_text"] = row["ref_text"]
         if not out["instruct"]:
@@ -456,9 +456,7 @@ def _resolve_profile_conditioning(row, *, ref_text=None, instruct=None,
         if out["seed"] is None and row["seed"] is not None:
             out["seed"] = row["seed"]
     else:
-        out["ref_audio_path"] = (
-            os.path.join(VOICES_DIR, row["ref_audio_path"]) if row["ref_audio_path"] else None
-        )
+        out["ref_audio_path"] = contained_join(VOICES_DIR, row["ref_audio_path"])
         if not out["ref_text"] and row["ref_text"]:
             out["ref_text"] = row["ref_text"]
         elif out["ref_audio_path"] and not out["ref_text"]:
@@ -3298,7 +3296,7 @@ def _prune_history_over_cap(*, keep_id: str | None = None) -> int:
     return len(victims)
 
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(reject_cross_site_get)])
 def list_history():
     """The newest 50 generations plus every starred take, newest first, kept to
     rows whose audio still exists on disk.

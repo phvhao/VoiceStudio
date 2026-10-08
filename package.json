@@ -37,11 +37,11 @@
   },
   "workspaces": ["electron"],
   "devDependencies": {
-    "concurrently": "^10",
+    "concurrently": "^10.0.5",
     "playwright": "^1.63.0",
-    "taze": "^21",
-    "turbo": "^2.10.12",
+    "taze": "^21.3.0",
+    "turbo": "^2.11.5",
     "typescript": "^7.0.2",
-    "wait-on": "^9.1.0"
+    "wait-on": "^9.5.1"
   }
 }

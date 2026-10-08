@@ -839,6 +839,7 @@ export function ModelLibrary({
             label: 'settings.storage',
           };
         case 'HF_MIRROR_UNREACHABLE':
+        case 'HF_MIRROR_GATED':
           return {
             to: '/settings/models' as const,
             label: 'models.mirror_title',
@@ -1030,7 +1031,9 @@ export function ModelLibrary({
               {t('modelMaintenance.failed')}
             </summary>
             <p role="alert" className="mt-2 break-words text-muted-foreground">
-              {job?.error || t('modelMaintenance.failed')}
+              {job?.docs_topic === 'HF_MIRROR_GATED'
+                ? t('modelMaintenance.mirrorGatedAccess')
+                : job?.error || t('modelMaintenance.failed')}
             </p>
             <div className="mt-2 flex flex-wrap gap-1">
               <Button

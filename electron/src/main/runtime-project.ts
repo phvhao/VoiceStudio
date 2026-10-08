@@ -3,22 +3,13 @@ export { nvidiaDriverPresent } from '../../scripts/torch-variant.mjs';
 import { clearCtranslate2ExecutableStack } from '../../scripts/native-compat.mjs';
 export { clearCtranslate2ExecutableStack } from '../../scripts/native-compat.mjs';
 import { downloadProxyEnv } from './proxy-env';
+import { DIRECTORY_RENAME, renameWithRetry } from './rename-retry';
 import { downloadRuntimeInstaller } from './runtime-download';
 import { asciiSafePthFiles } from './pth-ascii';
 import { scrubText } from '../shared/utils/scrub';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  cp,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  stat,
-  statfs,
-  writeFile,
-} from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // The web UI is not staged: the backend serves it straight from the app's
@@ -472,15 +463,15 @@ export async function stageRuntimeSources(bundle: string, project: string): Prom
     await rm(previous, { recursive: true, force: true });
     let moved = false;
     try {
-      await rename(target, previous);
+      await renameWithRetry(target, previous, DIRECTORY_RENAME);
       moved = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     try {
-      await rename(pending, target);
+      await renameWithRetry(pending, target, DIRECTORY_RENAME);
     } catch (error) {
-      if (moved) await rename(previous, target);
+      if (moved) await renameWithRetry(previous, target, DIRECTORY_RENAME);
       throw error;
     }
     await rm(previous, { recursive: true, force: true });
@@ -718,6 +709,6 @@ export async function promoteLegacyRuntimeCaches(project: string): Promise<void>
       stat(shared).catch(() => null),
     ]);
     if (!legacyInfo?.isDirectory() || sharedInfo) continue;
-    await rename(legacy, shared);
+    await renameWithRetry(legacy, shared, DIRECTORY_RENAME);
   }
 }

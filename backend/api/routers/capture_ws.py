@@ -1286,11 +1286,11 @@ def _chunks_to_wav(chunks: list[bytes]) -> str | None:
     tmp_out.close()
 
     try:
-        from services.ffmpeg_utils import find_ffmpeg
+        from services.ffmpeg_utils import find_ffmpeg, local_inputs_only
         import subprocess
         subprocess.run(
-            [find_ffmpeg(), "-y", "-i", tmp_in.name,
-             "-ar", "16000", "-ac", "1", "-f", "wav", tmp_out.name],
+            local_inputs_only([find_ffmpeg(), "-y", "-i", tmp_in.name,
+             "-ar", "16000", "-ac", "1", "-f", "wav", tmp_out.name]),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,

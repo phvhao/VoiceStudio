@@ -136,6 +136,12 @@ try:
 except ImportError:
     pass
 
+# A mirror in HF_ENDPOINT must never receive the Hugging Face token, here or in
+# engine processes that inherit this environment.
+from services.hf_auth import apply_process_token_policy as _apply_hf_token_policy  # noqa: E402
+
+_apply_hf_token_policy()
+
 # ── cuDNN 8 library preload ─────────────────────────────────────────────
 # Moved into _phase_a_build (`native_preload` step, early-bind refactor): the
 # native dlopen/LoadLibrary belongs to the deferred heavy phase, and its one
@@ -1444,7 +1450,12 @@ def _safe_validation_input(value):
     return value
 
 
-from core.failure import NoAudioTrackError, no_audio_track_detail  # noqa: E402
+from core.failure import (  # noqa: E402
+    InvalidMediaFileError,
+    NoAudioTrackError,
+    invalid_media_file_detail,
+    no_audio_track_detail,
+)
 
 
 @app.exception_handler(NoAudioTrackError)
@@ -1457,6 +1468,17 @@ async def no_audio_track_handler(request: Request, exc: NoAudioTrackError):
     return JSONResponse(
         status_code=422,
         content={"detail": no_audio_track_detail()},
+        headers=_cors_headers_for(request),
+    )
+
+
+@app.exception_handler(InvalidMediaFileError)
+async def invalid_media_file_handler(request: Request, exc: InvalidMediaFileError):
+    """422 for an upload that is unreadable or not media at all (a playlist or
+    manifest named like a video), on every route that checks its input."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": invalid_media_file_detail()},
         headers=_cors_headers_for(request),
     )
 
@@ -1582,6 +1604,18 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 _SHELL_PATHS = {"/", "/index.html", "/favicon.ico", "/early-error-capture.js", "/health"}
 
+
+def _is_public_path(path: str) -> bool:
+    """HTTP paths every gate leaves reachable: the SPA shell and its assets,
+    so a remote UI can load and say what is wrong, and the credential
+    exchange, which validates the presented key itself."""
+    return (
+        path in _SHELL_PATHS
+        or path.startswith("/assets/")
+        or path.startswith("/favicon")
+        or path == "/api/auth/session"
+    )
+
 # Paths that answer while deferred startup is still running. The shutdown
 # signal must exist before the ordinary system router so a bounded Windows
 # process-tree stop cannot leave a false crash sentinel.
@@ -1658,13 +1692,7 @@ class NetworkAccessMiddleware:
         client = scope["client"][0] if scope.get("client") else None
         if is_local_host(client):
             return await self.app(scope, receive, send)
-        path = scope["path"]
-        if (
-            path in _SHELL_PATHS
-            or path.startswith("/assets/")
-            or path.startswith("/favicon")
-            or path == "/api/auth/session"
-        ):
+        if _is_public_path(scope["path"]):
             return await self.app(scope, receive, send)
         supplied = (
             request.headers.get("x-omnivoice-pin")
@@ -1759,13 +1787,7 @@ class BearerKeyMiddleware:
         key = remote_api_key() or ""
         if not key:
             return await self.app(scope, receive, send)
-        path = scope.get("path", "")
-        if scope["type"] == "http" and (
-            path in _SHELL_PATHS
-            or path.startswith("/assets/")
-            or path.startswith("/favicon")
-            or path == "/api/auth/session"
-        ):
+        if scope["type"] == "http" and _is_public_path(scope.get("path", "")):
             return await self.app(scope, receive, send)
 
         from starlette.requests import HTTPConnection
@@ -1840,6 +1862,13 @@ app.add_middleware(NetworkAccessMiddleware)
 # carried its own loopback guard; remote mode is exactly the case where a
 # keyed non-loopback client must reach them.
 app.add_middleware(BearerKeyMiddleware)
+
+# Applies whatever the auth configuration: refuses state-changing requests and
+# WebSocket handshakes that another website's page sends, and requests that
+# address this backend by an unrecognized host name (DNS rebinding). Just
+# inside CORS so preflights reach CORS and refusals keep their CORS headers.
+from core.browser_guard import BrowserGuardMiddleware
+app.add_middleware(BrowserGuardMiddleware, is_public_path=_is_public_path)
 
 app.add_middleware(
     CORSMiddleware,

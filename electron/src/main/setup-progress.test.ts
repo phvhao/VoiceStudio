@@ -41,6 +41,28 @@ describe('SetupProgressTracker', () => {
     });
   });
 
+  it('matches one package across uv spellings of its name', () => {
+    const tracker = new SetupProgressTracker();
+    tracker.ingest('Downloading pydantic-core (2 MiB)');
+    tracker.ingest('Downloading ruamel.yaml (1 MiB)');
+
+    expect(tracker.ingest('pydantic_core 1 MiB/2 MiB')).toMatchObject({
+      activePackage: 'pydantic-core',
+      downloadedBytes: 1024 ** 2,
+      totalBytes: 3 * 1024 ** 2,
+    });
+    expect(tracker.ingest('Downloaded Pydantic_Core')).toMatchObject({
+      completedDownloads: 1,
+      activePackage: 'ruamel.yaml',
+      downloadsComplete: false,
+    });
+    expect(tracker.ingest('Downloaded ruamel_yaml')).toMatchObject({
+      completedDownloads: 2,
+      downloadedBytes: 3 * 1024 ** 2,
+      downloadsComplete: true,
+    });
+  });
+
   it('keeps the largest concurrent artifact visible while small downloads finish', () => {
     const tracker = new SetupProgressTracker();
     tracker.ingest('Downloading torch (3.2 GiB)');

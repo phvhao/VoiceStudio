@@ -39,9 +39,20 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * PEP 503 name normalization. uv may spell one distribution as
+ * `pydantic_core` on one line and `pydantic-core` on the next; both must
+ * land on the same planned entry.
+ */
+export function normalizePackageName(name: string): string {
+  return name.trim().toLowerCase().replace(/[-_.]+/g, '-');
+}
+
 /** Converts uv's human output into stable, renderer-safe progress data. */
 export class SetupProgressTracker {
+  /** Keyed by normalized package name; `labels` keeps the announced spelling. */
   private readonly planned = new Map<string, number>();
+  private readonly labels = new Map<string, string>();
   private readonly received = new Map<string, number>();
   private readonly completed = new Set<string>();
   private readonly samples: Array<{ at: number; bytes: number }> = [];
@@ -49,6 +60,7 @@ export class SetupProgressTracker {
 
   reset(): void {
     this.planned.clear();
+    this.labels.clear();
     this.received.clear();
     this.completed.clear();
     this.samples.length = 0;
@@ -77,7 +89,8 @@ export class SetupProgressTracker {
 
     const starting = line.match(new RegExp(`^Downloading\\s+(.+?)\\s+\\(${SIZE}\\)`, 'i'));
     if (starting) {
-      const name = starting[1].trim();
+      const name = normalizePackageName(starting[1]);
+      if (!this.labels.has(name)) this.labels.set(name, starting[1].trim());
       this.planned.set(name, parseByteSize(starting[2], starting[3]));
       this.completed.delete(name);
       this.progress.downloadsComplete = false;
@@ -87,7 +100,7 @@ export class SetupProgressTracker {
 
     const finished = line.match(/^Downloaded\s+(.+?)\s*$/i);
     if (finished) {
-      const name = finished[1].trim();
+      const name = normalizePackageName(finished[1]);
       this.completed.add(name);
       const size = this.planned.get(name);
       if (size !== undefined) this.received.set(name, size);
@@ -104,7 +117,7 @@ export class SetupProgressTracker {
       if (name) {
         this.planned.set(name, total);
         this.received.set(name, Math.min(received, total));
-        this.progress.activePackage = name;
+        this.progress.activePackage = this.labels.get(name) ?? name;
         changed = true;
       }
     }
@@ -132,7 +145,8 @@ export class SetupProgressTracker {
   private packageOnLine(line: string): string | undefined {
     let best: string | undefined;
     for (const candidate of this.planned.keys()) {
-      const token = new RegExp(`(?:^|\\s)${escapeRegExp(candidate)}(?=[\\s=@(]|$)`, 'i');
+      const spelling = candidate.split('-').map(escapeRegExp).join('[-_.]+');
+      const token = new RegExp(`(?:^|\\s)${spelling}(?=[\\s=@(]|$)`, 'i');
       if (token.test(line) && (!best || candidate.length > best.length)) best = candidate;
     }
     return best;
@@ -142,7 +156,7 @@ export class SetupProgressTracker {
     const pending = [...this.planned.entries()]
       .filter(([name]) => !this.completed.has(name))
       .sort((left, right) => right[1] - left[1]);
-    if (pending[0]) this.progress.activePackage = pending[0][0];
+    if (pending[0]) this.progress.activePackage = this.labels.get(pending[0][0]) ?? pending[0][0];
     else delete this.progress.activePackage;
     if (this.planned.size > 0) this.progress.downloadsComplete = pending.length === 0;
     else delete this.progress.downloadsComplete;

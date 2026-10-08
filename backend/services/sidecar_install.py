@@ -1422,7 +1422,7 @@ def _source_present(spec: SidecarSpec, checkout: Path) -> bool:
         return True
     try:
         marker = (checkout / _SOURCE_REVISION_MARKER).read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeError):
         return False
     return marker == spec.source_revision
 
@@ -1482,7 +1482,7 @@ def _extra_source_present(extra: ExtraSource, dest: Path) -> bool:
         return False
     try:
         marker = (dest / _SOURCE_REVISION_MARKER).read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeError):
         return False
     return marker == extra.revision
 
@@ -1727,7 +1727,7 @@ def _weights_present(spec: SidecarSpec) -> bool:
     wdir = managed_checkout(spec) / spec.weights_subdir
     try:
         marker = (wdir / _WEIGHTS_COMPLETE_MARKER).read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return False
     expected = [spec.weights_repo_id or "", spec.weights_revision or ""]
     actual = marker[:2] if len(marker) >= 2 else marker + [""]
@@ -1771,6 +1771,7 @@ def _step_fetch_weights(spec: SidecarSpec, job: dict) -> None:
 
     from huggingface_hub import snapshot_download
     from services import endpoint_race
+    from services.hf_auth import token_for_endpoint
     from services.token_resolver import resolve as resolve_token
     from utils import hf_progress
 
@@ -1803,16 +1804,17 @@ def _step_fetch_weights(spec: SidecarSpec, job: dict) -> None:
         # discovery, so gated engine weights 401 for a user whose token lives
         # in VoiceStudio's settings rather than HF's own cache (#2163).
         _resolved = resolve_token()
+        endpoint = endpoint_race.effective_endpoint()
         kwargs: dict = {
             "repo_id": spec.weights_repo_id,
             "local_dir": str(wdir),
-            "token": _resolved.token if _resolved else None,
+            # Hugging Face hosts only — a mirror never receives the token.
+            "token": token_for_endpoint(endpoint, _resolved.token if _resolved else None),
         }
         if spec.weights_revision:
             kwargs["revision"] = spec.weights_revision
         if spec.weights_allow_patterns:
             kwargs["allow_patterns"] = list(spec.weights_allow_patterns)
-        endpoint = endpoint_race.effective_endpoint()
         if endpoint:
             kwargs["endpoint"] = endpoint
         tqdm_cls = hf_progress.tracked_tqdm_class()

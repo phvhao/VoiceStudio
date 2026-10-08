@@ -45,6 +45,12 @@ if not os.environ.get("OMNIVOICE_ENV_FILE"):
 # need a different value monkeypatch it explicitly.
 os.environ["OMNIVOICE_MODEL"] = "test"
 
+# Starlette's TestClient addresses the app as "http://testserver". The backend
+# refuses unrecognized Host names (DNS-rebinding guard, core.browser_guard),
+# so the suite registers that name the way a deployment registers its own.
+# Tests of the host check itself clear this with monkeypatch.
+os.environ.setdefault("OMNIVOICE_ALLOWED_HOSTS", "testserver")
+
 # Background warm-ups must not fire mid-suite: many tests boot the app
 # lifespan via TestClient, and any that exits without a lifespan shutdown
 # leaves the deferred preload task pending — 35s later (mid-suite, in

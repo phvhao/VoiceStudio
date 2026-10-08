@@ -1312,11 +1312,15 @@ export class BackendSupervisor extends EventEmitter<{
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         redirect: this.remoteUrl ? 'follow' : 'error',
       });
-      // Fallback ports were not explicitly chosen by the user. A generic
-      // health JSON must never redirect renderer content to another service.
+      // Every local backend this shell can spawn or attach to stamps the
+      // marker on every response (BackendMarkerMiddleware, #1385). A generic
+      // health JSON on a loopback port, configured or fallback, must never
+      // redirect renderer content to another service; an unmarked listener
+      // is left alone and the launch reports the port as in use instead.
+      // Remote backends were chosen explicitly and may predate the marker.
       const marked = Boolean(res.headers.get('x-omnivoice-backend'));
       if (identityOnly) return marked;
-      if (!this.remoteUrl && this.port !== this.configuredPort && !marked) {
+      if (!this.remoteUrl && !marked) {
         this.lastProbeOutcome = 'refused';
         return false;
       }

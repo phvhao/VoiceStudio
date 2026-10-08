@@ -87,6 +87,9 @@ def test_cookie_export_is_forwarded_to_ytdlp(dub_pipeline, tmp_path, monkeypatch
         def __exit__(self, *_args):
             return False
 
+        def add_post_processor(self, *_args, **_kwargs):
+            pass  # the media-URL guard; not exercised by this fake
+
         def extract_info(self, _url, download=True):
             raise RuntimeError("stop after capturing options")
 

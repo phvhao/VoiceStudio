@@ -16,13 +16,14 @@ from core.http_headers import content_disposition
 from core.logging_utils import log_safe
 from core.path_security import UnsafePath, portable_filename, resolve_within
 from core.tasks import task_manager
-from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from services.ffmpeg_utils import (
     bed_mix_filter,
     explain_ffmpeg_failure,
     find_ffmpeg,
     probe_duration,
+    local_inputs_only,
     run_ffmpeg,
 )
 from services.karaoke_ass import build_ass, scale_words
@@ -35,8 +36,9 @@ from services.video_retime import (
     prepare_smart_fit_video,
 )
 
-from api.routers.dub_core import _get_job
+from api.routers.dub_core import _get_job, _safe_lang_or_400
 from schemas.requests import ProsodyMirrorRequest
+from core.browser_guard import reject_cross_site_get
 
 router = APIRouter()
 logger = logging.getLogger("omnivoice.api")
@@ -73,6 +75,9 @@ async def _preserved_background(job: dict, job_id: str, lang: str, *, prepare: b
     try:
         return await surgical_background(source, bed, directory, segments, plan, duration)
     except (ValueError, RuntimeError) as exc:
+        # The client shows localized recovery guidance for this code; keep the
+        # concrete cause in the log so a diagnostic bundle explains it.
+        logger.warning("Preserved background unavailable for job %s (%s): %s", log_safe(job_id), log_safe(lang), log_safe(str(exc)[-500:]))
         raise HTTPException(status_code=409, detail={"code": "dub_background_unavailable", "message": str(exc)}) from exc
 
 
@@ -98,8 +103,6 @@ def _unique_stamp() -> str:
     """Return a short unique suffix like '20260415T142301-ab12cd34' for export files."""
     return f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 
-
-_SAFE_LANG = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 #: Seconds of silence on a `/tasks/stream` before a keepalive comment goes out.
 #: A task that is busy but quiet — ffmpeg on a long video, a slow TTS segment,
@@ -227,12 +230,6 @@ def _optional_dub_artifact(value: object, job_id: str) -> str | None:
         raise HTTPException(status_code=400, detail="Invalid job artifact path") from exc
     path = _discover_job_artifact(resolved, job_id)
     return str(path) if path is not None else None
-
-
-def _safe_lang_or_400(lang: str | None) -> str | None:
-    if lang is not None and not _SAFE_LANG.fullmatch(lang):
-        raise HTTPException(status_code=400, detail="Invalid language code")
-    return lang
 
 
 def _consume_native_save(authorization: str) -> str | None:
@@ -693,11 +690,11 @@ def _build_audio_export_cmd(
                 "-map", "[aout]"]
     cmd += codec
     cmd.append(out_path)
-    return cmd
+    return local_inputs_only(cmd, tool="ffmpeg")
 
 
-@router.get("/dub/download/{job_id}")
-@router.get("/dub/download/{job_id}/{filename}")
+@router.get("/dub/download/{job_id}", dependencies=[Depends(reject_cross_site_get)])
+@router.get("/dub/download/{job_id}/{filename}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_download(
     job_id: str,
     preserve_bg: bool = Query(True, description="Mix background noise into dubbed tracks"),
@@ -1214,7 +1211,7 @@ def _preview_lock(path: str) -> asyncio.Lock:
     return lock
 
 
-@router.api_route("/dub/preview-video/{job_id}", methods=["GET", "HEAD"])
+@router.api_route("/dub/preview-video/{job_id}", methods=["GET", "HEAD"], dependencies=[Depends(reject_cross_site_get)])
 async def dub_preview_video(
     request: Request,
     job_id: str,
@@ -1490,7 +1487,7 @@ def _compute_timeline_sync(src_path: str) -> tuple[list[float], list[float]]:
     return onsets, [round(float(value), 5) for value in peaks]
 
 
-@router.get("/dub/onsets/{job_id}")
+@router.get("/dub/onsets/{job_id}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_get_onsets(job_id: str):
     """Speech-onset times for the timeline editor's snap-to-onset ticks (#280).
 
@@ -1661,7 +1658,7 @@ def _existing_segment_artifact(job_id: str, candidate_ids: list) -> str | None:
     return None
 
 
-@router.get("/dub/preview/{job_id}/{segment_index}")
+@router.get("/dub/preview/{job_id}/{segment_index}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_preview_segment(job_id: str, segment_index: int, lang: str = Query(None)):
     _job_dir_or_400(job_id)
     lang = _safe_lang_or_400(lang)
@@ -1921,8 +1918,8 @@ async def _mixed_dub_audio(exports_dir: str, lang: str, bg_audio: str, track_pat
     return target
 
 
-@router.get("/dub/download-audio/{job_id}")
-@router.get("/dub/download-audio/{job_id}/{filename}")
+@router.get("/dub/download-audio/{job_id}", dependencies=[Depends(reject_cross_site_get)])
+@router.get("/dub/download-audio/{job_id}/{filename}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_download_audio(
     job_id: str,
     lang: str = Query(None),
@@ -2176,7 +2173,7 @@ async def dub_export_ass(
     )
 
 
-@router.get("/dub/export-segments/{job_id}")
+@router.get("/dub/export-segments/{job_id}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_export_segments_zip(job_id: str, lang: str = Query(None)):
     import zipfile
     _job_dir_or_400(job_id)
@@ -2214,8 +2211,8 @@ async def dub_export_segments_zip(job_id: str, lang: str = Query(None)):
         headers={"Content-Disposition": content_disposition(f"segments_{safe_name}.zip")},
     )
 
-@router.get("/dub/download-mp3/{job_id}")
-@router.get("/dub/download-mp3/{job_id}/{filename}")
+@router.get("/dub/download-mp3/{job_id}", dependencies=[Depends(reject_cross_site_get)])
+@router.get("/dub/download-mp3/{job_id}/{filename}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_download_mp3(
     job_id: str,
     lang: str = Query(None),
@@ -2304,7 +2301,7 @@ async def dub_download_mp3(
         headers={"Content-Disposition": content_disposition(dl_name)},
     )
 
-@router.get("/dub/export-stems/{job_id}")
+@router.get("/dub/export-stems/{job_id}", dependencies=[Depends(reject_cross_site_get)])
 async def dub_export_stems(job_id: str, lang: str = Query(None)):
     import zipfile
     _job_dir_or_400(job_id)

@@ -51,9 +51,10 @@ from collections.abc import Awaitable, Callable
 
 from api.disconnect import DISCONNECT_POLL_S, cancel_on_disconnect, cancel_task, client_gone
 from core import render_trace, voice_leases
+from core.browser_guard import reject_cross_site_get
 from core.render_trace import call as trace_call, stage as trace_stage
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from typing import Annotated, Literal
@@ -397,6 +398,7 @@ def _resolve_voice(profile_id: str | None) -> dict:
         return out
     from core.config import VOICES_DIR
     from core.db import db_conn
+    from core.path_security import contained_join
 
     with db_conn() as conn:
         row = conn.execute("SELECT * FROM voice_profiles WHERE id=?", (profile_id,)).fetchone()
@@ -407,15 +409,15 @@ def _resolve_voice(profile_id: str | None) -> dict:
     except (KeyError, IndexError):
         kind = "clone"
     if row["is_locked"] and row["locked_audio_path"]:
-        out["ref_audio"] = os.path.join(VOICES_DIR, row["locked_audio_path"])
+        out["ref_audio"] = contained_join(VOICES_DIR, row["locked_audio_path"])
         out["ref_text"] = row["ref_text"]
         out["instruct"] = row["instruct"]
     elif kind == "design":
-        out["ref_audio"] = os.path.join(VOICES_DIR, row["ref_audio_path"]) if row["ref_audio_path"] else None
+        out["ref_audio"] = contained_join(VOICES_DIR, row["ref_audio_path"])
         out["ref_text"] = row["ref_text"] if out["ref_audio"] else None
         out["instruct"] = row["instruct"]
     else:
-        out["ref_audio"] = os.path.join(VOICES_DIR, row["ref_audio_path"]) if row["ref_audio_path"] else None
+        out["ref_audio"] = contained_join(VOICES_DIR, row["ref_audio_path"])
         out["ref_text"] = row["ref_text"]
         out["instruct"] = row["instruct"]
     try:
@@ -3347,7 +3349,8 @@ def audiobook_export_html_templates() -> dict:
             "numbering": list(book_templates.NUMBERING)}
 
 
-@router.get("/audiobook/export/html/{export_id}")
+# Sending removes the export, so another site must not be able to spend it.
+@router.get("/audiobook/export/html/{export_id}", dependencies=[Depends(reject_cross_site_get)])
 def audiobook_export_html_download(export_id: str) -> FileResponse:
     """Download an HTML export once: it is removed once it has been sent."""
     path = os.path.join(_html_export_dir(), f"{export_id}.zip")

@@ -535,7 +535,8 @@ URLs, which is wrong when the UI is reached from a different LAN host.
 **Fix:** the frontend derives its API/media base from the page's own origin.
 When running behind a reverse proxy where the UI and API are on different
 origins, set the runtime override `OMNIVOICE_PUBLIC_API_BASE` (works on the
-prebuilt image via `docker run -e`) — see
+prebuilt image via `docker run -e`) and list the UI's origin in
+`OMNIVOICE_ALLOWED_ORIGINS` — see
 [docker.md#lan-access](docker.md#lan-access).
 
 ## 9. Apple Silicon `mlx-whisper` unavailable on Intel mac

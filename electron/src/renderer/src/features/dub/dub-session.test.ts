@@ -357,6 +357,47 @@ it('resumes the existing generation task instead of generating duplicate audio',
   expect(dubSession.state).toMatchObject({ phase: 'done', tracks: ['fr'], recovery: null });
 });
 
+it('drops QC marks measured on the previous track when a generation completes', async () => {
+  vi.mocked(apiJson).mockClear().mockResolvedValueOnce({ status: 'done' });
+  vi.mocked(consumeTaskStream)
+    .mockClear()
+    .mockImplementationOnce(async (_path, emit) => {
+      emit({ type: 'done', tracks: ['fr'], sync_scores: [1] });
+    });
+  dubSession.setState((current) => ({
+    ...current,
+    jobId: 'qc-job',
+    taskId: 'qc-task',
+    phase: 'editing',
+    recovery: 'generating',
+    segments: [
+      {
+        id: '1',
+        start: 0,
+        end: 2,
+        text: 'Bonjour',
+        text_original: 'Hello',
+        qc_drift: 0.9,
+        qc_flagged: true,
+        qc_recognized: 'Bonsoir',
+        qc_measured_start: 0.2,
+        qc_measured_end: 1.7,
+      },
+    ],
+  }));
+  await resumeDub();
+  const [segment] = dubSession.state.segments;
+  expect(segment).toMatchObject({ id: '1', text: 'Bonjour', sync_ratio: 1 });
+  for (const field of [
+    'qc_drift',
+    'qc_flagged',
+    'qc_recognized',
+    'qc_measured_start',
+    'qc_measured_end',
+  ])
+    expect(segment).not.toHaveProperty(field);
+});
+
 it('preserves a disconnected generation and blocks edits and duplicate generation', async () => {
   dubSession.setState((current) => ({
     ...current,

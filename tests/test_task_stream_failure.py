@@ -82,3 +82,40 @@ def test_stream_is_closed_however_the_task_ends(outcome, monkeypatch):
 
     asyncio.run(run())
     assert closed == [True]
+
+
+def test_completion_after_a_late_cancel_is_reported_done(monkeypatch):
+    """A render that committed before seeing the cancel must not read as cancelled."""
+    job_store = TaskManager.worker.__globals__["job_store"]
+    run_sentinel = TaskManager.worker.__globals__["run_sentinel"]
+    states = []
+    for name in ['create', 'mark_running', 'append_event']:
+        monkeypatch.setattr(job_store, name, lambda *a, **kw: None)
+    monkeypatch.setattr(job_store, 'mark_cancelled', lambda *a: states.append('cancelled'))
+    monkeypatch.setattr(job_store, 'mark_done', lambda *a: states.append('done'))
+    monkeypatch.setattr(run_sentinel, 'touch_activity', lambda *a: None)
+
+    async def run():
+        manager = TaskManager()
+
+        async def stream():
+            yield 'data: {"type":"assembling"}\n\n'
+            manager.cancel_task('test')  # arrives while the result is committed
+            yield 'data: {"type":"done"}\n\n'
+
+        await manager.add_task('test', 'dub_generate', stream)
+        worker = asyncio.create_task(manager.worker())
+        try:
+            await asyncio.wait_for(manager.queue.join(), 2)
+            task = manager.active_tasks['test']
+            assert task['status'] == 'done'
+            assert task['history'][-1] == 'data: {"type":"done"}\n\n'
+        finally:
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(run())
+    assert states == ['done']

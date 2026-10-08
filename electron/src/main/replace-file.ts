@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { open, realpath, rename, rm, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { FILE_RENAME, renameWithRetry } from './rename-retry';
 
 /** Filesystem calls `replaceFile` makes; injectable so tests can simulate disk failures. */
 export interface ReplaceFileSystem {
@@ -9,12 +10,6 @@ export interface ReplaceFileSystem {
 }
 
 const NODE_FILE_SYSTEM: ReplaceFileSystem = { open, rename };
-
-/** Windows antivirus and indexers hold a just-closed file briefly; these codes are transient. */
-const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
-const RENAME_ATTEMPTS = 8;
-const RENAME_BACKOFF_MS = 25;
-const RENAME_BACKOFF_CAP_MS = 400;
 
 /** Timing and platform knobs for `replaceFile`; injectable so tests need no real waits or OS. */
 export interface ReplaceFileOptions {
@@ -26,32 +21,6 @@ export interface ReplaceFileOptions {
 
 /** Bytes in hand, or chunks written as they arrive, so a download never has to fit in memory. */
 export type ReplaceFileData = string | Uint8Array | AsyncIterable<Uint8Array>;
-
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/**
- * Rename over the destination. On Windows a scanner can hold either file for a
- * moment, so transient EPERM/EACCES/EBUSY is retried with capped exponential
- * backoff (~1.5 s total) and the last error is rethrown. Elsewhere it is one try.
- */
-async function renameWithRetry(
-  fs: ReplaceFileSystem,
-  from: string,
-  to: string,
-  { platform = process.platform, sleep = wait }: ReplaceFileOptions,
-): Promise<void> {
-  const attempts = platform === 'win32' ? RENAME_ATTEMPTS : 1;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await fs.rename(from, to);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt >= attempts || !code || !TRANSIENT_RENAME_CODES.has(code)) throw error;
-      await sleep(Math.min(RENAME_BACKOFF_MS * 2 ** (attempt - 1), RENAME_BACKOFF_CAP_MS));
-    }
-  }
-}
 
 /** Follow an existing symlink so the link keeps pointing at the replaced file. */
 async function resolveDestination(path: string): Promise<string> {
@@ -94,7 +63,11 @@ export async function replaceFile(
     } finally {
       await handle.close();
     }
-    await renameWithRetry(fs, temporary, destination, options);
+    await renameWithRetry(temporary, destination, {
+      ...FILE_RENAME,
+      ...options,
+      rename: (from, to) => fs.rename(from, to),
+    });
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => {});
     throw error;

@@ -187,7 +187,7 @@ it('uses the lightweight health contract for recurring liveness probes', async (
     async (_input: string | URL | Request) =>
       new Response(JSON.stringify({ status: 'ok', version: '0.5.2' }), {
         status: 200,
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-omnivoice-backend': '0.5.2' },
       }),
   );
   vi.stubGlobal('fetch', fetchMock);
@@ -210,7 +210,7 @@ it('attaches to a healthy replacement instead of reporting its exited child as c
     .mockResolvedValue(
       new Response(JSON.stringify({ status: 'ok', version: '0.5.2' }), {
         status: 200,
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-omnivoice-backend': '0.5.2' },
       }),
     );
   vi.stubGlobal('fetch', fetchMock);

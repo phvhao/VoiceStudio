@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch';
 import { getBridge } from '@/components/bridge';
 import { GatedAction, type ActionStep } from '@/components/gated-action';
 import { PipelineFailure } from '@/components/pipeline-failure';
-import { apiPath, describeError } from '@/lib/api/client';
+import { apiPath, describeError, errorFromResponse } from '@/lib/api/client';
 import { saveExport } from '@/lib/export-history';
 import { dubExportRequest, type DubExportFormat } from './dub-export';
 import { DUB_TARGET, describeDubBlockers, dubExportBlockers } from './dub-gates';
@@ -100,7 +100,7 @@ export function DubExportPanel({
       if (bridge) await saveExport(url, request.name);
       else {
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Export failed');
+        if (!response.ok) throw await errorFromResponse(response);
         const objectUrl = URL.createObjectURL(await response.blob());
         const anchor = document.createElement('a');
         anchor.href = objectUrl;

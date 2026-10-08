@@ -103,7 +103,7 @@ A route or a screenshot alone does not count as parity.
   their diagnostic detail; the focused backend status suite covers both transitions.
 
 - The Electron skeleton now resolves against the current published dependency set:
-  `cn` 0.3, PostHog 1.430.3, Remotion 4.0.524, JSDOM 30.0.1, TanStack Router
+  `cn` 0.3, PostHog 1.430.3, JSDOM 30.0.1, TanStack Router
   1.170.36 and React i18next 17.0.14, with Bun 1.4.2 recorded as the workspace
   package manager. `bun outdated --latest` reports only Node 26 typings; the
   project intentionally stays on the current Node 24 typings that match Electron
@@ -260,7 +260,7 @@ behavior-parity decision.
 - Window close, application quit and update installation now request a bounded renderer persistence flush before native teardown. Working Stories/Audiobook drafts drain synchronously and queued IndexedDB project mutations settle before acknowledgement; older live preload bridges remain safe during development HMR.
 - Electron startup and its managed backend were exercised together on Windows: the ESM main bundle now loads the CommonJS updater safely, the supervisor reaches `ready`, and the core model/profile/history/translation/dictation routes return 200 through the renderer proxy. Dictation warmup no longer overwrites the TTS model status; `/model/status` remains `Model ready` across the delayed ASR preload.
 - Vidstack owns all Electron playback; WaveSurfer renders waveforms only. The shared provider
-  selects native audio/video, HLS, DASH, YouTube and Vimeo sources, lazy-loading the
+  selects native audio/video, HLS, DASH, YouTube, and Vimeo sources, lazy-loading the
   streaming libraries. Gallery search results use the YouTube provider for in-place preview.
   The Remotion loader, never connected to a workflow, and its non-OSI-licensed package are
   no longer bundled.

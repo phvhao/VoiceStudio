@@ -11,7 +11,7 @@ For another device on the same network — e.g. opening the web UI on your phone
    - a **QR code** — scan it from a phone/tablet to open the UI pre-authenticated,
    - **copy** and **open-in-browser** buttons,
    - the **access PIN**.
-3. On the other device, scan the QR (or open the URL and enter the PIN when prompted).
+3. On the other device, scan the QR (or open the URL and enter the PIN when prompted). Use the IP address the panel shows: a router DNS name such as `mypc.lan` is refused unless it is listed in `OMNIVOICE_ALLOWED_HOSTS` (see [host names](api-auth.md#requests-from-other-websites-and-host-names)).
 4. Click **Stop sharing** (or flip back to **Local**) to close the network socket again.
 
 You can also drive this from **Settings → Sharing & Remote Access**.
@@ -54,4 +54,5 @@ Tailscale proxies the loopback backend directly, so — like LAN sharing — it 
 
 ## Notes
 - Both paths leave the running model and in-flight jobs **completely untouched**.
+- Open shared or remote VoiceStudio by IP address, `localhost`, this machine's host name, its Tailscale name or a container host alias such as `host.docker.internal`. Any other host name (for example a reverse proxy domain) needs a valid API key or admin session, or an `OMNIVOICE_ALLOWED_HOSTS` entry; see [API authentication](api-auth.md#requests-from-other-websites-and-host-names).
 - Server deployments (Docker, or a source backend started with `OMNIVOICE_BIND_HOST=0.0.0.0`) manage their own networking; the in-app toggle is for the desktop app and is unaffected by these flows.

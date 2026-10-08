@@ -7,7 +7,6 @@ import {
   readdir,
   readlink,
   realpath,
-  rename,
   rmdir,
   rm,
   statfs,
@@ -16,6 +15,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { DIRECTORY_RENAME, renameWithRetry } from './rename-retry';
 
 const DATA_KEY = 'OMNIVOICE_DATA_DIR';
 const MOVE_RESERVE_BYTES = 64 * 1024 * 1024;
@@ -175,7 +175,7 @@ export async function prepareDataRelocation(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
-    await rename(staging, plan.target);
+    await renameWithRetry(staging, plan.target, DIRECTORY_RENAME);
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined);
     throw error;
@@ -223,7 +223,7 @@ export async function recordPreviousVoicesRoot(source: string, target: string): 
   } finally {
     await handle.close();
   }
-  await rename(temporary, file);
+  await renameWithRetry(temporary, file);
   await syncDirectory(cacheDir);
 }
 
@@ -288,7 +288,7 @@ export async function writeDataDirectorySetting(
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporary, body, { encoding: 'utf8', mode: 0o600 });
   try {
-    await rename(temporary, path);
+    await renameWithRetry(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
