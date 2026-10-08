@@ -461,7 +461,9 @@ function childEnv(
   // environment still wins.
   if (!env.OMNIVOICE_BUNDLED_UV) {
     const uv = findUv();
+    // A blank value inherited from the environment names nothing; pass none.
     if (uv) env.OMNIVOICE_BUNDLED_UV = uv;
+    else delete env.OMNIVOICE_BUNDLED_UV;
   }
   // #2599: LAN devices load the web UI from this backend. Serve the build
   // shipped inside this app version's resources, never a copy beside the
