@@ -147,6 +147,7 @@ metadata and the backend fallback mirror it.
 - Script warnings follow the book you open or the script you replace at once, instead of showing the previous script's for half a second
 - Source Serif 4 ships whole, as its Reserved Font Name requires, like Lora and Playfair Display
 - The tray menu's Quit item says Quit in every language, not "exit code"; Vietnamese labels are in sentence case and no longer call speech synthesis "tổng hợp"
+- Settings forms no longer squeeze or clip: the Pronunciation dictionary and MCP voice binding forms use the full width, and Save buttons stay beside their field (proxy, translation keys, worker join codes)
 
 ## [0.5.7] — 2026-10-07
 

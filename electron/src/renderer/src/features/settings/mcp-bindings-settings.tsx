@@ -150,13 +150,16 @@ export function McpBindingsSettings() {
           <p className="px-4 py-3 text-sm text-muted-foreground">{t('settings.mcp_empty')}</p>
         )}
 
-        <SettingsRow id="sharing-mcp-add" title={t('settings.mcp_add_title')}>
-          <div className="grid w-full min-w-0 gap-2 @xl:grid-cols-2 @3xl:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)_minmax(11rem,1fr)_auto]">
+        <SettingsRow variant="stacked" id="sharing-mcp-add" title={t('settings.mcp_add_title')}>
+          {/* One line when it fits; fields wrap below each other before a placeholder would
+              clip. The client ID has the longest placeholder in every locale, so a double share. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Input
               value={clientId}
               maxLength={128}
               placeholder={t('settings.mcp_client_id_placeholder')}
               aria-label={t('settings.mcp_client_id')}
+              className="min-w-[min(100%,20rem)] flex-2"
               disabled={saving}
               onChange={(event) => setClientId(event.target.value)}
               onKeyDown={(event) => {
@@ -167,6 +170,7 @@ export function McpBindingsSettings() {
               value={label}
               placeholder={t('settings.mcp_label_placeholder')}
               aria-label={t('settings.mcp_label')}
+              className="min-w-[min(100%,12rem)] flex-1"
               disabled={saving}
               onChange={(event) => setLabel(event.target.value)}
               onKeyDown={(event) => {
@@ -181,7 +185,11 @@ export function McpBindingsSettings() {
                 if (typeof value === 'string') setProfileId(value);
               }}
             >
-              <SelectTrigger className="w-full" aria-label={t('settings.mcp_voice_profile')}>
+              {/* Sized by its share of the line, not the chosen name, so picking a voice shifts nothing. */}
+              <SelectTrigger
+                className="min-w-[min(100%,11rem)] flex-1"
+                aria-label={t('settings.mcp_voice_profile')}
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -192,7 +200,11 @@ export function McpBindingsSettings() {
                 ))}
               </SelectContent>
             </Select>
-            <Button disabled={!clientId.trim() || saving} onClick={() => void save()}>
+            <Button
+              className="ms-auto"
+              disabled={!clientId.trim() || saving}
+              onClick={() => void save()}
+            >
               {saving && <LoaderCircleIcon className="animate-spin" />}
               {t('settings.mcp_add')}
             </Button>

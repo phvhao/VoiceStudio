@@ -407,7 +407,9 @@ export function InboundWorkersSettings() {
           <Input
             value={connectionString}
             type="password"
-            className="min-w-72 font-mono"
+            // Beside Connect: 11rem next to the label (18rem in a wide row), the whole line
+            // once the row stacks.
+            className="min-w-44 flex-1 font-mono @4xl:min-w-72"
             name="inbound-connection-string"
             autoComplete="off"
             spellCheck={false}

@@ -43,6 +43,9 @@ interface ImportPayload {
 
 const TYPES: PronunciationType[] = ['respelling', 'ipa', 'cmu'];
 
+/** Shares its line with its neighbours, and wraps below them before its placeholder would clip. */
+const fieldClass = 'min-w-[min(100%,16rem)] flex-1';
+
 export function PronunciationSettings() {
   const { t } = useTranslation();
   const spellcheck = useScriptSpellcheck();
@@ -260,119 +263,132 @@ export function PronunciationSettings() {
         </SettingsRow>
       ))}
       <SettingsRow
+        variant="stacked"
         id="pronunciation-add"
         title={t('pronunciation.add')}
         description={t('pronunciation.lang_label')}
       >
-        <Input
-          value={term}
-          disabled={busy}
-          placeholder={t('pronunciation.term_placeholder')}
-          aria-label={t('pronunciation.term')}
-          className="min-w-36 flex-1 @2xl:max-w-52"
-          onChange={(event) => setTerm(event.target.value)}
-        />
-        <Input
-          value={replacement}
-          disabled={busy}
-          placeholder={t('pronunciation.replacement_placeholder')}
-          aria-label={t('pronunciation.replacement')}
-          className="min-w-36 flex-1 @2xl:max-w-52"
-          onChange={(event) => setReplacement(event.target.value)}
-        />
-        <Select
-          items={TYPES.map((value) => ({ value, label: t('pronunciation.type_' + value) }))}
-          value={type}
-          disabled={busy}
-          onValueChange={(value) => {
-            if (value === 'respelling' || value === 'ipa' || value === 'cmu') setType(value);
-          }}
-        >
-          <SelectTrigger aria-label={t('pronunciation.type')}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {TYPES.map((value) => (
-              <SelectItem key={value} value={value}>
-                {t('pronunciation.type_' + value)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          value={language}
-          disabled={busy}
-          placeholder={t('pronunciation.lang_placeholder')}
-          aria-label={t('pronunciation.lang_label')}
-          className="w-40"
-          onChange={(event) => setLanguage(event.target.value)}
-          onKeyDown={(event) => {
-            if (isImeComposing(event)) return;
-            if (event.key === 'Enter' && term.trim()) {
-              event.preventDefault();
-              void add();
-            }
-          }}
-        />
-        <Button disabled={busy || !term.trim()} onClick={() => void add()}>
-          <PlusIcon />
-          {t('pronunciation.add')}
-        </Button>
+        <div className="flex min-w-0 flex-wrap gap-2">
+          <Input
+            value={term}
+            disabled={busy}
+            placeholder={t('pronunciation.term_placeholder')}
+            aria-label={t('pronunciation.term')}
+            className={fieldClass}
+            onChange={(event) => setTerm(event.target.value)}
+          />
+          <Input
+            value={replacement}
+            disabled={busy}
+            placeholder={t('pronunciation.replacement_placeholder')}
+            aria-label={t('pronunciation.replacement')}
+            className={fieldClass}
+            onChange={(event) => setReplacement(event.target.value)}
+          />
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Select
+            items={TYPES.map((value) => ({ value, label: t('pronunciation.type_' + value) }))}
+            value={type}
+            disabled={busy}
+            onValueChange={(value) => {
+              if (value === 'respelling' || value === 'ipa' || value === 'cmu') setType(value);
+            }}
+          >
+            {/* A floor width, so picking a shorter type does not shift the fields beside it. */}
+            <SelectTrigger
+              aria-label={t('pronunciation.type')}
+              className="min-w-44 grow @xl:grow-0"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TYPES.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {t('pronunciation.type_' + value)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            value={language}
+            disabled={busy}
+            placeholder={t('pronunciation.lang_placeholder')}
+            aria-label={t('pronunciation.lang_label')}
+            className={fieldClass}
+            onChange={(event) => setLanguage(event.target.value)}
+            onKeyDown={(event) => {
+              if (isImeComposing(event)) return;
+              if (event.key === 'Enter' && term.trim()) {
+                event.preventDefault();
+                void add();
+              }
+            }}
+          />
+          <Button className="ms-auto" disabled={busy || !term.trim()} onClick={() => void add()}>
+            <PlusIcon />
+            {t('pronunciation.add')}
+          </Button>
+        </div>
       </SettingsRow>
       <SettingsRow
+        variant="stacked"
         id="pronunciation-test"
         title={t('pronunciation.test_label')}
         description={globalPreviewHidesScoped ? t('pronunciation.test_global_hint') : undefined}
       >
-        <Select
-          items={[
-            { value: '*', label: t('pronunciation.global') },
-            ...scopedLanguages.map((value) => ({ value, label: value })),
-          ]}
-          value={testLanguage}
-          onValueChange={(value) => value && setTestLanguage(value)}
-        >
-          <SelectTrigger aria-label={t('pronunciation.test_language')}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="*">{t('pronunciation.global')}</SelectItem>
-            {scopedLanguages.map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          value={testText}
-          spellCheck={spellcheck}
-          placeholder={t('pronunciation.test_placeholder')}
-          aria-label={t('pronunciation.test_label')}
-          className="min-w-64 flex-1 @2xl:max-w-xl"
-          onChange={(event) => setTestText(event.target.value)}
-        />
-      </SettingsRow>
-      {testResult && (
-        <p className="px-4 py-3 text-sm text-muted-foreground">
-          {testResult.changed ? (
-            <>
-              {t('pronunciation.test_result')}{' '}
-              <strong className="text-foreground">{testResult.substituted}</strong>
-            </>
-          ) : (
-            t('pronunciation.test_nochange')
-          )}
-        </p>
-      )}
-      {testError && (
-        <div className="p-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Select
+            items={[
+              { value: '*', label: t('pronunciation.global') },
+              ...scopedLanguages.map((value) => ({ value, label: value })),
+            ]}
+            value={testLanguage}
+            onValueChange={(value) => value && setTestLanguage(value)}
+          >
+            <SelectTrigger
+              aria-label={t('pronunciation.test_language')}
+              className="max-w-full grow @xl:grow-0"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="*">{t('pronunciation.global')}</SelectItem>
+              {scopedLanguages.map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            value={testText}
+            spellCheck={spellcheck}
+            placeholder={t('pronunciation.test_placeholder')}
+            aria-label={t('pronunciation.test_label')}
+            className="min-w-[min(100%,18rem)] flex-1"
+            onChange={(event) => setTestText(event.target.value)}
+          />
+        </div>
+        {testResult && (
+          <p className="rounded-lg bg-muted/35 px-3 py-2 text-sm break-words text-muted-foreground">
+            {testResult.changed ? (
+              <>
+                {t('pronunciation.test_result')}{' '}
+                <strong className="text-foreground">{testResult.substituted}</strong>
+              </>
+            ) : (
+              t('pronunciation.test_nochange')
+            )}
+          </p>
+        )}
+        {testError && (
           <PipelineFailure
             fallback={t('pronunciation.test_error') + ' ' + testError}
             onDismiss={() => setTestError('')}
           />
-        </div>
-      )}
+        )}
+      </SettingsRow>
       <SettingsRow
         id="pronunciation-backup"
         title={t('pronunciation.backup_title')}

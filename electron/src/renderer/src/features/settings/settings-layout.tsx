@@ -87,12 +87,20 @@ export function SettingsRow({
   titleHidden?: boolean;
   description?: ReactNode;
   children: ReactNode;
-  variant?: 'row' | 'card';
+  /**
+   * `row` puts the label beside its controls (above them below @2xl).
+   * `stacked` keeps the label and hint above controls that need the whole
+   * width — a multi-field form, a field and its preview — which beside the
+   * label would squeeze it to a sliver; each child gets a full-width line.
+   * `card` is a self-contained card for `contentVariant="cards"`.
+   */
+  variant?: 'row' | 'stacked' | 'card';
   active?: boolean;
 }) {
   return (
     <div
       data-slot="settings-row"
+      data-variant={variant}
       data-active={active || undefined}
       className={cn(
         'px-4 py-3',
@@ -104,10 +112,9 @@ export function SettingsRow({
       <div
         className={cn(
           'flex min-w-0 flex-col items-stretch gap-3',
-          variant === 'row'
-            ? '@2xl:flex-row @2xl:items-center @2xl:justify-between @2xl:gap-x-8'
-            : // Fills the card's minimum height, so the actions keep to its foot.
-              'flex-1',
+          variant === 'row' && '@2xl:flex-row @2xl:items-center @2xl:justify-between @2xl:gap-x-8',
+          // Fills the card's minimum height, so the actions keep to its foot.
+          variant === 'card' && 'flex-1',
         )}
       >
         <div className="min-w-0 flex-1 space-y-1">
@@ -133,12 +140,13 @@ export function SettingsRow({
           role="group"
           aria-labelledby={id}
           className={cn(
-            'flex min-w-0 max-w-full flex-wrap items-center gap-2 [&_input]:max-w-full [&_button]:max-w-full',
-            variant === 'row'
-              ? '@2xl:justify-end'
-              : // No child may be wider than the card. :where() keeps a
-                // child's own min-w-*/max-w-* in charge.
-                'mt-auto justify-start [:where(&>*)]:min-w-0 [:where(&>*)]:max-w-full',
+            'flex min-w-0 max-w-full gap-2 [&_input]:max-w-full [&_button]:max-w-full',
+            variant === 'stacked' ? 'flex-col' : 'flex-wrap items-center',
+            variant === 'row' && '@2xl:justify-end',
+            variant === 'card' &&
+              // No child may be wider than the card. :where() keeps a
+              // child's own min-w-*/max-w-* in charge.
+              'mt-auto justify-start [:where(&>*)]:min-w-0 [:where(&>*)]:max-w-full',
           )}
         >
           {children}

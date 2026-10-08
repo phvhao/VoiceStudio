@@ -215,8 +215,10 @@ function ProviderCredential({ field }: { field: (typeof PROVIDER_FIELDS)[number]
   return (
     <div>
       <SettingsRow id={'credential-' + field.key} title={label} description={t(field.helpKey)}>
+        {/* The field shares Save's line: 11rem beside the label (16rem in a wide row), the
+            whole line once the row stacks, and it wraps only below 11rem. */}
         <form
-          className="flex flex-wrap gap-2"
+          className="flex flex-1 flex-wrap items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (value.trim()) void save();
@@ -227,6 +229,7 @@ function ProviderCredential({ field }: { field: (typeof PROVIDER_FIELDS)[number]
             autoComplete="new-password"
             spellCheck={false}
             aria-label={label}
+            className="min-w-44 flex-1 @4xl:min-w-64"
             value={value}
             disabled={action.busy}
             onChange={(event) => {

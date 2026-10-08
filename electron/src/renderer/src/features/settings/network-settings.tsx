@@ -38,8 +38,10 @@ export function NetworkSettings() {
         title={t('settings.proxy')}
         description={t('settings.proxy_desc')}
       >
+        {/* The field shares the buttons' line: 11rem beside the label (16rem in a wide row),
+            the whole line once the row stacks, and it wraps only below 11rem. */}
         <form
-          className="flex flex-wrap gap-2"
+          className="flex flex-1 flex-wrap items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             if (value.trim()) void save(value);
@@ -47,6 +49,7 @@ export function NetworkSettings() {
         >
           <Input
             aria-label={t('settings.proxy')}
+            className="min-w-44 flex-1 @4xl:min-w-64"
             value={value}
             disabled={action.busy || query.isPending}
             autoComplete="off"

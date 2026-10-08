@@ -671,7 +671,9 @@ export function WorkersSettings() {
               translate="no"
               placeholder={t('settings.worker_join_placeholder')}
               aria-label={t('settings.worker_join_code')}
-              className="min-w-64 font-mono"
+              // Beside Join: 11rem next to the label (16rem in a wide row), the whole line
+              // once the row stacks.
+              className="min-w-44 flex-1 font-mono @4xl:min-w-64"
               disabled={Boolean(busy) || agent.data?.env_pinned}
               onChange={(event) => setJoinCode(event.target.value)}
               onKeyDown={(event) => {
