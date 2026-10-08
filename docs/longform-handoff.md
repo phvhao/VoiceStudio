@@ -1,13 +1,13 @@
 # Bàn giao: nâng cấp Sách nói / Truyện (fork phvhao)
 
-Cập nhật: 2026-10-08 · Nhánh `feat/longform-voice-preview-pronunciation`. Đã push đến merge 0.5.7;
-phần ảnh/trình chiếu/video và bố cục Cài đặt đã commit nhưng **chưa push**. Bản cài đặt Windows cuối:
-`electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `95cbf842`, chưa có phần ảnh/video).
+Cập nhật: 2026-10-08 · Nhánh `feat/longform-voice-preview-pronunciation` (đã push; `main` của
+`phvhao/VoiceStudio` trỏ cùng commit mới nhất). Bản cài đặt Windows cuối:
+`electron/release/VoiceStudio-Electron-0.5.7-win-x64.exe` (build từ `b36ef7b7`, có phần ảnh/video).
 Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
 
 ## Trạng thái nhanh
 
-- Toàn bộ tính năng được yêu cầu đã làm và commit; phần ảnh, trình chiếu, xuất video chưa push.
+- Toàn bộ tính năng được yêu cầu đã làm, commit và push.
 - Kiểm tra lần cuối (sau phần ảnh/video) đạt: typecheck, lint, locale (21 ngôn ngữ, 90 khóa mới),
   2205 test renderer, 3042 test shared, 10.770 test Python đạt (29 lỗi môi trường có sẵn, đều đỏ cả trên
   `HEAD` sạch hoặc do repo ở ổ D: còn thư mục tạm ở ổ C:). Đã chụp và xem: chèn ảnh, thẻ tag ảnh,
@@ -56,7 +56,7 @@ Chưa gửi PR lên repo gốc `debpalash/VoiceStudio`.
 | `e37f599b` | Thẻ tag giọng đổi được giọng của tag; editor giãn theo cửa sổ rộng (Khổ đọc / Vừa khung) |
 | merge `upstream/main` | Gộp repo gốc 0.5.7 chính thức (2026-10-08) |
 | `286b4ad4` | Cài đặt: form Từ điển phát âm, Liên kết giọng MCP trải đủ rộng; nút Lưu nằm cạnh ô nhập |
-| commit sau `286b4ad4` | Ảnh trong kịch bản, trình chiếu (app và HTML), xuất video MP4 |
+| `b36ef7b7` | Ảnh trong kịch bản, trình chiếu (app và HTML), xuất video MP4 |
 
 ## Đã làm
 
